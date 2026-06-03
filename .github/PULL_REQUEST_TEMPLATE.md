@@ -1,7 +1,3 @@
----
-title: "@coderabbitai"
----
-
 ## Issue Reference
 
 - Fixes #<!-- replace this comment with the issue number, e.g., 'Fixes #1234' -->
