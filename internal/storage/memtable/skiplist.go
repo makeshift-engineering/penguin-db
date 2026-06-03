@@ -3,7 +3,6 @@ package memtable
 import (
 	"bytes"
 	"sync"
-	"sync/atomic"
 )
 
 // MaxLevel is the maximum tower height allowed for any skip list node.
@@ -96,7 +95,7 @@ func (skipList *SkipList) Put(key, value []byte) error {
 		if skipList.currentSizeBytes+int64(sizeDifference) > skipList.maxSizeBytes {
 			return ErrMemTableFull
 		}
-		atomic.AddInt64(&skipList.currentSizeBytes, int64(sizeDifference))
+		skipList.currentSizeBytes += int64(sizeDifference)
 
 		currentNode.value = value
 		currentNode.isDeleted = false
@@ -121,7 +120,7 @@ func (skipList *SkipList) Put(key, value []byte) error {
 		predecessorNodes[levelIndex].next[levelIndex] = newNode
 	}
 
-	atomic.AddInt64(&skipList.currentSizeBytes, int64(len(key)+len(value)))
+	skipList.currentSizeBytes += int64(len(key) + len(value))
 	return nil
 }
 
@@ -158,7 +157,7 @@ func (skipList *SkipList) Delete(key []byte) error {
 
 	if currentNode != nil && bytes.Equal(currentNode.key, key) {
 		if !currentNode.isDeleted {
-			atomic.AddInt64(&skipList.currentSizeBytes, int64(-len(currentNode.value)))
+			skipList.currentSizeBytes -= int64(len(currentNode.value))
 			currentNode.isDeleted = true
 			currentNode.value = nil
 		}
@@ -185,6 +184,6 @@ func (skipList *SkipList) Delete(key []byte) error {
 		predecessorNodes[levelIndex].next[levelIndex] = newNode
 	}
 
-	atomic.AddInt64(&skipList.currentSizeBytes, int64(len(key)))
+	skipList.currentSizeBytes += int64(len(key))
 	return nil
 }
