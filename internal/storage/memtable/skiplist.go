@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"log/slog"
 	"sync"
 )
 
@@ -30,6 +31,7 @@ type SkipList struct {
 // is capped at maxSize. Writes that would cause the byte usage to exceed maxSize
 // are rejected with ErrMemTableFull.
 func NewSkipList(maxSize int64) *SkipList {
+	slog.Debug("initializing new skip list", "maxSizeBytes", maxSize)
 	return &SkipList{
 		headNode:           newNode(nil, nil, MaxLevel),
 		highestActiveLevel: 1,
@@ -42,6 +44,11 @@ func NewSkipList(maxSize int64) *SkipList {
 // is absent or if the key is present but marked as deleted by a tombstone. Get
 // acquires a shared read lock and is safe to call concurrently with other Gets.
 func (skipList *SkipList) Get(key []byte) ([]byte, error) {
+	if len(key) == 0 {
+		slog.Debug("get failed: empty key provided")
+		return nil, ErrEmptyKey
+	}
+
 	skipList.mutex.RLock()
 	defer skipList.mutex.RUnlock()
 
@@ -49,11 +56,14 @@ func (skipList *SkipList) Get(key []byte) ([]byte, error) {
 
 	if targetNode != nil && bytes.Equal(targetNode.key, key) {
 		if targetNode.isDeleted {
+			slog.Debug("get: key has tombstone marker (logically deleted)", "key", string(key))
 			return nil, ErrKeyNotFound
 		}
+		slog.Debug("get: key found", "key", string(key), "valueLength", len(targetNode.value))
 		return targetNode.value, nil
 	}
 
+	slog.Debug("get: key not found", "key", string(key))
 	return nil, ErrKeyNotFound
 }
 
@@ -69,6 +79,11 @@ func (skipList *SkipList) Get(key []byte) ([]byte, error) {
 // Put returns ErrMemTableFull if the write would exceed the configured capacity.
 // Put acquires an exclusive write lock.
 func (skipList *SkipList) Put(key, value []byte) error {
+	if len(key) == 0 {
+		slog.Debug("put failed: empty key provided")
+		return ErrEmptyKey
+	}
+
 	skipList.mutex.Lock()
 	defer skipList.mutex.Unlock()
 
@@ -77,20 +92,45 @@ func (skipList *SkipList) Put(key, value []byte) error {
 	if targetNode != nil && bytes.Equal(targetNode.key, key) {
 		sizeDifference := int64(len(value)) - int64(len(targetNode.value))
 		if skipList.currentSizeBytes+int64(sizeDifference) > skipList.maxSizeBytes {
+			slog.Debug("put failed: size limit exceeded on update",
+				"key", string(key),
+				"valueLength", len(value),
+				"currentSizeBytes", skipList.currentSizeBytes,
+				"sizeDifference", sizeDifference,
+				"maxSizeBytes", skipList.maxSizeBytes,
+			)
 			return ErrMemTableFull
 		}
 		skipList.currentSizeBytes += int64(sizeDifference)
 
 		targetNode.value = value
 		targetNode.isDeleted = false
+		slog.Debug("put: updated existing key",
+			"key", string(key),
+			"valueLength", len(value),
+			"sizeDifference", sizeDifference,
+			"currentSizeBytes", skipList.currentSizeBytes,
+		)
 		return nil
 	}
 
 	if err := skipList.ensureCapacity(int64(len(key)) + int64(len(value))); err != nil {
+		slog.Debug("put failed: size limit exceeded on insert",
+			"key", string(key),
+			"valueLength", len(value),
+			"currentSizeBytes", skipList.currentSizeBytes,
+			"requiredBytes", int64(len(key))+int64(len(value)),
+			"maxSizeBytes", skipList.maxSizeBytes,
+		)
 		return err
 	}
 
 	skipList.insertNode(key, value, false, predecessorNodes)
+	slog.Debug("put: inserted new key",
+		"key", string(key),
+		"valueLength", len(value),
+		"currentSizeBytes", skipList.currentSizeBytes,
+	)
 	return nil
 }
 
@@ -110,6 +150,11 @@ func (skipList *SkipList) Put(key, value []byte) error {
 // Delete returns ErrMemTableFull if inserting a new tombstone would exceed capacity.
 // Delete acquires an exclusive write lock.
 func (skipList *SkipList) Delete(key []byte) error {
+	if len(key) == 0 {
+		slog.Debug("delete failed: empty key provided")
+		return ErrEmptyKey
+	}
+
 	skipList.mutex.Lock()
 	defer skipList.mutex.Unlock()
 
@@ -120,15 +165,31 @@ func (skipList *SkipList) Delete(key []byte) error {
 			skipList.currentSizeBytes -= int64(len(targetNode.value))
 			targetNode.isDeleted = true
 			targetNode.value = nil
+			slog.Debug("delete: marked existing key as tombstone",
+				"key", string(key),
+				"currentSizeBytes", skipList.currentSizeBytes,
+			)
+		} else {
+			slog.Debug("delete: key already marked as tombstone (no-op)", "key", string(key))
 		}
 		return nil
 	}
 
 	if err := skipList.ensureCapacity(int64(len(key))); err != nil {
+		slog.Debug("delete failed: size limit exceeded for tombstone insert",
+			"key", string(key),
+			"currentSizeBytes", skipList.currentSizeBytes,
+			"requiredBytes", int64(len(key)),
+			"maxSizeBytes", skipList.maxSizeBytes,
+		)
 		return err
 	}
 
 	skipList.insertNode(key, nil, true, predecessorNodes)
+	slog.Debug("delete: inserted new tombstone node",
+		"key", string(key),
+		"currentSizeBytes", skipList.currentSizeBytes,
+	)
 	return nil
 }
 
@@ -181,4 +242,9 @@ func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predeces
 	}
 
 	skipList.currentSizeBytes += int64(len(key)) + int64(len(value))
+	slog.Debug("inserted skip list node internally",
+		"key", string(key),
+		"height", newNodeHeight,
+		"isDeleted", isDeleted,
+	)
 }

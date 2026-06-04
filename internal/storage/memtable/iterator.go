@@ -1,5 +1,9 @@
 package memtable
 
+import (
+	"log/slog"
+)
+
 // Iterator provides a forward-only, snapshot-style cursor over all nodes in the
 // skip list, including tombstone nodes. It is used by the flush mechanism to read
 // the complete contents of the memtable in sorted key order when writing an SSTable.
@@ -24,6 +28,7 @@ func (skipList *SkipList) NewIterator() *Iterator {
 
 	firstNode := skipList.headNode.next[0]
 
+	slog.Debug("created new iterator starting at first node", "hasNext", firstNode != nil)
 	return &Iterator{
 		skipList:    skipList,
 		currentNode: firstNode,
@@ -47,6 +52,7 @@ func (iterator *Iterator) Next() (key, value []byte, isDeleted bool) {
 	defer iterator.skipList.mutex.RUnlock()
 
 	if iterator.currentNode == nil {
+		slog.Debug("iterator: reached end of skip list")
 		return nil, nil, false
 	}
 
@@ -55,6 +61,13 @@ func (iterator *Iterator) Next() (key, value []byte, isDeleted bool) {
 	isDeleted = iterator.currentNode.isDeleted
 
 	iterator.currentNode = iterator.currentNode.next[0]
+
+	slog.Debug("iterator: advancing to next node",
+		"key", string(key),
+		"isDeleted", isDeleted,
+		"valueLength", len(value),
+		"hasNext", iterator.currentNode != nil,
+	)
 
 	return key, value, isDeleted
 }

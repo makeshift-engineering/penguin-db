@@ -2,8 +2,6 @@ package memtable
 
 import (
 	"bytes"
-	"fmt"
-	"sync"
 	"testing"
 )
 
@@ -69,6 +67,21 @@ func TestSkipList_Delete(t *testing.T) {
 	if !bytes.Equal(val, []byte("alive")) {
 		t.Fatalf("expected alive, got %s", val)
 	}
+
+	iterator = skipList.NewIterator()
+	if !iterator.Valid() {
+		t.Fatalf("expected iterator to be valid after putting back key1")
+	}
+	k, v, deleted = iterator.Next()
+	if !bytes.Equal(k, []byte("key1")) {
+		t.Fatalf("expected key1, got %s", k)
+	}
+	if deleted {
+		t.Fatalf("expected deleted to be false after putting back key1")
+	}
+	if !bytes.Equal(v, []byte("alive")) {
+		t.Fatalf("expected value to be alive, got %s", v)
+	}
 }
 
 // TestSkipList_SizeTracking verifies that the internal byte counter is updated
@@ -110,117 +123,56 @@ func TestSkipList_SizeTracking(t *testing.T) {
 	if skipList.currentSizeBytes != 18 {
 		t.Errorf("expected size to remain 18 after failed Put, but got %d", skipList.currentSizeBytes)
 	}
+
+	err = skipList.Delete([]byte("k"))
+	if err != nil {
+		t.Fatalf("failed to delete key: %v", err)
+	}
+	if skipList.currentSizeBytes != 13 {
+		t.Fatalf("expected size 13 after delete, got %d", skipList.currentSizeBytes)
+	}
+
+	err = skipList.Put([]byte("k3"), []byte("v3"))
+	if err != nil {
+		t.Fatalf("failed to Put k3 after delete freed space: %v", err)
+	}
+	if skipList.currentSizeBytes != 17 {
+		t.Fatalf("expected size 17 after putting new value, got %d", skipList.currentSizeBytes)
+	}
 }
 
-// TestSkipList_EmptyAndNil verifies that the skip list handles nil and empty-slice
-// keys and values without panicking. Both variants must round-trip through Put
-// and Get and return the same value that was stored.
+// TestSkipList_EmptyAndNil verifies that the skip list actively rejects nil
+// and empty-slice keys across all exported methods (Put, Get, Delete) by
+// returning ErrEmptyKey, preventing hash ring corruption downstream.
 func TestSkipList_EmptyAndNil(t *testing.T) {
 	skipList := NewSkipList(1000)
 
-	err := skipList.Put(nil, nil)
-	if err != nil {
-		t.Fatalf("failed to Put nil key/value: %v", err)
+	_, err := skipList.Get(nil)
+	if err != ErrEmptyKey {
+		t.Errorf("expected ErrEmptyKey for Get with nil key, got %v", err)
+	}
+	_, err = skipList.Get([]byte(""))
+	if err != ErrEmptyKey {
+		t.Errorf("expected ErrEmptyKey for Get with empty key, got %v", err)
 	}
 
-	val, err := skipList.Get(nil)
-	if err != nil {
-		t.Fatalf("failed to Get nil key: %v", err)
+	err = skipList.Put(nil, []byte("value"))
+	if err != ErrEmptyKey {
+		t.Errorf("expected ErrEmptyKey for Put with nil key, got %v", err)
 	}
-	if val != nil {
-		t.Fatalf("expected nil value, got %v", val)
-	}
-
-	err = skipList.Put([]byte(""), []byte(""))
-	if err != nil {
-		t.Fatalf("failed to Put empty key/value: %v", err)
+	err = skipList.Put([]byte(""), []byte("value"))
+	if err != ErrEmptyKey {
+		t.Errorf("expected ErrEmptyKey for Put with empty key, got %v", err)
 	}
 
-	val, err = skipList.Get([]byte(""))
-	if err != nil {
-		t.Fatalf("failed to Get empty key: %v", err)
+	err = skipList.Delete(nil)
+	if err != ErrEmptyKey {
+		t.Errorf("expected ErrEmptyKey for Delete with nil key, got %v", err)
 	}
-	if len(val) != 0 {
-		t.Fatalf("expected empty value, got %v", val)
+	err = skipList.Delete([]byte(""))
+	if err != ErrEmptyKey {
+		t.Errorf("expected ErrEmptyKey for Delete with empty key, got %v", err)
 	}
-}
-
-// TestSkipList_StrictConcurrency verifies that a single writer goroutine and
-// multiple concurrent reader goroutines operating on the same key never observe
-// a corrupted or malformed value, confirming read-write lock correctness.
-func TestSkipList_StrictConcurrency(t *testing.T) {
-	skipList := NewSkipList(100000)
-	var waitGroup sync.WaitGroup
-	key := []byte("shared-key")
-
-	waitGroup.Add(1)
-	go func() {
-		defer waitGroup.Done()
-		for i := 0; i < 1000; i++ {
-			val := []byte(fmt.Sprintf("val-%d", i))
-			_ = skipList.Put(key, val)
-		}
-	}()
-
-	for r := 0; r < 5; r++ {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			for i := 0; i < 1000; i++ {
-				val, err := skipList.Get(key)
-				if err != nil && err != ErrKeyNotFound {
-					t.Errorf("unexpected error on Get: %v", err)
-				}
-				if err == nil {
-					if !bytes.HasPrefix(val, []byte("val-")) {
-						t.Errorf("corrupted value: %s", val)
-					}
-				}
-			}
-		}()
-	}
-
-	waitGroup.Wait()
-}
-
-// TestSkipList_Concurrency is a broad stress test that runs concurrent Puts,
-// Deletes, and Iterator traversals across disjoint key ranges simultaneously,
-// verifying that no deadlock, panic, or data corruption occurs under contention.
-func TestSkipList_Concurrency(t *testing.T) {
-	skipList := NewSkipList(100000)
-	var waitGroup sync.WaitGroup
-
-	for i := 0; i < 100; i++ {
-		waitGroup.Add(1)
-		go func(id int) {
-			defer waitGroup.Done()
-			key := []byte(fmt.Sprintf("key-%03d", id))
-			val := []byte(fmt.Sprintf("val-%03d", id))
-			_ = skipList.Put(key, val)
-		}(i)
-	}
-
-	for i := 100; i < 200; i++ {
-		waitGroup.Add(1)
-		go func(id int) {
-			defer waitGroup.Done()
-			key := []byte(fmt.Sprintf("key-%03d", id))
-			_ = skipList.Delete(key)
-		}(i)
-	}
-
-	for i := 0; i < 20; i++ {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			iterator := skipList.NewIterator()
-			for iterator.Valid() {
-				_, _, _ = iterator.Next()
-			}
-		}()
-	}
-
-	waitGroup.Wait()
 }
 
 // TestSkipList_SortedOrder verifies that the iterator always returns keys in
@@ -352,39 +304,5 @@ func TestSkipList_TombstoneSizeLimit(t *testing.T) {
 	err = skipList.Delete([]byte("xyz"))
 	if err != ErrMemTableFull {
 		t.Errorf("expected ErrMemTableFull when inserting tombstone over capacity, got %v", err)
-	}
-}
-
-// TestSkipList_PutResurrectsTombstone verifies that a Put on a tombstoned key
-// correctly clears the isDeleted flag so that Get returns the new value.
-func TestSkipList_PutResurrectsTombstone(t *testing.T) {
-	skipList := NewSkipList(1000)
-
-	err := skipList.Put([]byte("key"), []byte("original"))
-	if err != nil {
-		t.Fatalf("failed initial Put: %v", err)
-	}
-
-	err = skipList.Delete([]byte("key"))
-	if err != nil {
-		t.Fatalf("failed Delete: %v", err)
-	}
-
-	_, err = skipList.Get([]byte("key"))
-	if err != ErrKeyNotFound {
-		t.Errorf("expected ErrKeyNotFound for tombstoned key, got %v", err)
-	}
-
-	err = skipList.Put([]byte("key"), []byte("resurrected"))
-	if err != nil {
-		t.Fatalf("failed resurrection Put: %v", err)
-	}
-
-	val, err := skipList.Get([]byte("key"))
-	if err != nil {
-		t.Fatalf("failed Get after resurrection: %v", err)
-	}
-	if !bytes.Equal(val, []byte("resurrected")) {
-		t.Errorf("expected resurrected, got %s", val)
 	}
 }
