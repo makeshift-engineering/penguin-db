@@ -45,19 +45,13 @@ func (skipList *SkipList) Get(key []byte) ([]byte, error) {
 	skipList.mutex.RLock()
 	defer skipList.mutex.RUnlock()
 
-	currentNode := skipList.headNode
-	for levelIndex := skipList.highestActiveLevel - 1; levelIndex >= 0; levelIndex-- {
-		for currentNode.next[levelIndex] != nil && bytes.Compare(currentNode.next[levelIndex].key, key) < 0 {
-			currentNode = currentNode.next[levelIndex]
-		}
-	}
+	_, targetNode := skipList.findPredecessors(key)
 
-	currentNode = currentNode.next[0]
-	if currentNode != nil && bytes.Equal(currentNode.key, key) {
-		if currentNode.isDeleted {
+	if targetNode != nil && bytes.Equal(targetNode.key, key) {
+		if targetNode.isDeleted {
 			return nil, ErrKeyNotFound
 		}
-		return currentNode.value, nil
+		return targetNode.value, nil
 	}
 
 	return nil, ErrKeyNotFound
@@ -78,49 +72,25 @@ func (skipList *SkipList) Put(key, value []byte) error {
 	skipList.mutex.Lock()
 	defer skipList.mutex.Unlock()
 
-	var predecessorNodes [MaxLevel]*node
-	currentNode := skipList.headNode
+	predecessorNodes, targetNode := skipList.findPredecessors(key)
 
-	for levelIndex := skipList.highestActiveLevel - 1; levelIndex >= 0; levelIndex-- {
-		for currentNode.next[levelIndex] != nil && bytes.Compare(currentNode.next[levelIndex].key, key) < 0 {
-			currentNode = currentNode.next[levelIndex]
-		}
-		predecessorNodes[levelIndex] = currentNode
-	}
-
-	currentNode = currentNode.next[0]
-
-	if currentNode != nil && bytes.Equal(currentNode.key, key) {
-		sizeDifference := len(value) - len(currentNode.value)
+	if targetNode != nil && bytes.Equal(targetNode.key, key) {
+		sizeDifference := int64(len(value)) - int64(len(targetNode.value))
 		if skipList.currentSizeBytes+int64(sizeDifference) > skipList.maxSizeBytes {
 			return ErrMemTableFull
 		}
 		skipList.currentSizeBytes += int64(sizeDifference)
 
-		currentNode.value = value
-		currentNode.isDeleted = false
+		targetNode.value = value
+		targetNode.isDeleted = false
 		return nil
 	}
 
-	if skipList.currentSizeBytes+int64(len(key)+len(value)) > skipList.maxSizeBytes {
-		return ErrMemTableFull
+	if err := skipList.ensureCapacity(int64(len(key)) + int64(len(value))); err != nil {
+		return err
 	}
 
-	newNodeHeight := randomLevel()
-	if newNodeHeight > skipList.highestActiveLevel {
-		for levelIndex := skipList.highestActiveLevel; levelIndex < newNodeHeight; levelIndex++ {
-			predecessorNodes[levelIndex] = skipList.headNode
-		}
-		skipList.highestActiveLevel = newNodeHeight
-	}
-
-	newNode := newNode(key, value, newNodeHeight)
-	for levelIndex := 0; levelIndex < newNodeHeight; levelIndex++ {
-		newNode.next[levelIndex] = predecessorNodes[levelIndex].next[levelIndex]
-		predecessorNodes[levelIndex].next[levelIndex] = newNode
-	}
-
-	skipList.currentSizeBytes += int64(len(key) + len(value))
+	skipList.insertNode(key, value, false, predecessorNodes)
 	return nil
 }
 
@@ -143,31 +113,57 @@ func (skipList *SkipList) Delete(key []byte) error {
 	skipList.mutex.Lock()
 	defer skipList.mutex.Unlock()
 
-	var predecessorNodes [MaxLevel]*node
-	currentNode := skipList.headNode
+	predecessorNodes, targetNode := skipList.findPredecessors(key)
 
-	for levelIndex := skipList.highestActiveLevel - 1; levelIndex >= 0; levelIndex-- {
-		for currentNode.next[levelIndex] != nil && bytes.Compare(currentNode.next[levelIndex].key, key) < 0 {
-			currentNode = currentNode.next[levelIndex]
-		}
-		predecessorNodes[levelIndex] = currentNode
-	}
-
-	currentNode = currentNode.next[0]
-
-	if currentNode != nil && bytes.Equal(currentNode.key, key) {
-		if !currentNode.isDeleted {
-			skipList.currentSizeBytes -= int64(len(currentNode.value))
-			currentNode.isDeleted = true
-			currentNode.value = nil
+	if targetNode != nil && bytes.Equal(targetNode.key, key) {
+		if !targetNode.isDeleted {
+			skipList.currentSizeBytes -= int64(len(targetNode.value))
+			targetNode.isDeleted = true
+			targetNode.value = nil
 		}
 		return nil
 	}
 
-	if skipList.currentSizeBytes+int64(len(key)) > skipList.maxSizeBytes {
-		return ErrMemTableFull
+	if err := skipList.ensureCapacity(int64(len(key))); err != nil {
+		return err
 	}
 
+	skipList.insertNode(key, nil, true, predecessorNodes)
+	return nil
+}
+
+// ensureCapacity verifies if the skip list can accommodate the additional bytes.
+// This method does not acquire locks; the caller must hold the appropriate write mutex.
+func (skipList *SkipList) ensureCapacity(addedBytes int64) error {
+	if skipList.currentSizeBytes+addedBytes > skipList.maxSizeBytes {
+		return ErrMemTableFull
+	}
+	return nil
+}
+
+// findPredecessors traverses the skip list to find the insertion/deletion path for a key.
+// It returns an array of the right-most nodes traversed at each level, and the node
+// immediately following the search path at level 0 (which may or may not match the target key).
+// This method does not acquire locks; the caller must hold the appropriate mutex.
+func (skipList *SkipList) findPredecessors(key []byte) ([MaxLevel]*node, *node) {
+	var predecessorNodes [MaxLevel]*node
+	currentNode := skipList.headNode
+
+	for levelIndex := skipList.highestActiveLevel - 1; levelIndex >= 0; levelIndex-- {
+		nextNode := currentNode.next[levelIndex]
+		for currentNode.next[levelIndex] != nil && bytes.Compare(nextNode.key, key) < 0 {
+			currentNode = nextNode
+			nextNode = currentNode.next[levelIndex]
+		}
+		predecessorNodes[levelIndex] = currentNode
+	}
+
+	return predecessorNodes, currentNode.next[0]
+}
+
+// insertNode handles the common pointer wiring and level generation for brand new keys and tombstones.
+// This method does not acquire locks; the caller must hold the appropriate write mutex.
+func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predecessorNodes [MaxLevel]*node) {
 	newNodeHeight := randomLevel()
 	if newNodeHeight > skipList.highestActiveLevel {
 		for levelIndex := skipList.highestActiveLevel; levelIndex < newNodeHeight; levelIndex++ {
@@ -176,14 +172,13 @@ func (skipList *SkipList) Delete(key []byte) error {
 		skipList.highestActiveLevel = newNodeHeight
 	}
 
-	newNode := newNode(key, nil, newNodeHeight)
-	newNode.isDeleted = true
+	newNode := newNode(key, value, newNodeHeight)
+	newNode.isDeleted = isDeleted
 
 	for levelIndex := 0; levelIndex < newNodeHeight; levelIndex++ {
 		newNode.next[levelIndex] = predecessorNodes[levelIndex].next[levelIndex]
 		predecessorNodes[levelIndex].next[levelIndex] = newNode
 	}
 
-	skipList.currentSizeBytes += int64(len(key))
-	return nil
+	skipList.currentSizeBytes += int64(len(key)) + int64(len(value))
 }
