@@ -9,7 +9,7 @@ import (
 // list. It ensures that a Get on a missing key returns ErrKeyNotFound and that a
 // subsequent Put followed by Get returns the correct stored value.
 func TestSkipList_Basic(t *testing.T) {
-	skipList := NewSkipList(1000)
+	skipList := NewSkipList(1000, 12)
 
 	_, err := skipList.Get([]byte("key1"))
 	if err != ErrKeyNotFound {
@@ -34,7 +34,7 @@ func TestSkipList_Basic(t *testing.T) {
 // deleting a non-existent key inserts a visible tombstone node and that a
 // subsequent Put on the same key clears the tombstone and restores visibility.
 func TestSkipList_Delete(t *testing.T) {
-	skipList := NewSkipList(1000)
+	skipList := NewSkipList(1000, 12)
 
 	err := skipList.Delete([]byte("key1"))
 	if err != nil {
@@ -89,7 +89,7 @@ func TestSkipList_Delete(t *testing.T) {
 // exceed capacity, ensuring no size leakage occurs on a rejected Put.
 func TestSkipList_SizeTracking(t *testing.T) {
 	maxSize := int64(20)
-	skipList := NewSkipList(maxSize)
+	skipList := NewSkipList(maxSize, 12)
 
 	err := skipList.Put([]byte("k"), []byte("v"))
 	if err != nil {
@@ -145,7 +145,7 @@ func TestSkipList_SizeTracking(t *testing.T) {
 // and empty-slice keys across all exported methods (Put, Get, Delete) by
 // returning ErrEmptyKey, preventing hash ring corruption downstream.
 func TestSkipList_EmptyAndNil(t *testing.T) {
-	skipList := NewSkipList(1000)
+	skipList := NewSkipList(1000, 12)
 
 	_, err := skipList.Get(nil)
 	if err != ErrEmptyKey {
@@ -178,7 +178,7 @@ func TestSkipList_EmptyAndNil(t *testing.T) {
 // TestSkipList_SortedOrder verifies that the iterator always returns keys in
 // ascending lexicographic order, regardless of insertion order.
 func TestSkipList_SortedOrder(t *testing.T) {
-	skipList := NewSkipList(10000)
+	skipList := NewSkipList(10000, 12)
 
 	keys := []string{"zebra", "apple", "mango", "banana", "cherry"}
 	for _, key := range keys {
@@ -208,7 +208,7 @@ func TestSkipList_SortedOrder(t *testing.T) {
 // correctly subtracts the value length from the size counter while retaining
 // the key length, since the tombstone node must be preserved.
 func TestSkipList_DeleteSizeAccounting(t *testing.T) {
-	skipList := NewSkipList(1000)
+	skipList := NewSkipList(1000, 12)
 
 	err := skipList.Put([]byte("key"), []byte("value"))
 	if err != nil {
@@ -230,7 +230,7 @@ func TestSkipList_DeleteSizeAccounting(t *testing.T) {
 // TestSkipList_DuplicateDelete verifies that deleting the same key twice is
 // idempotent and does not corrupt the size counter or return an error.
 func TestSkipList_DuplicateDelete(t *testing.T) {
-	skipList := NewSkipList(1000)
+	skipList := NewSkipList(1000, 12)
 
 	err := skipList.Put([]byte("key"), []byte("value"))
 	if err != nil {
@@ -261,7 +261,7 @@ func TestSkipList_DuplicateDelete(t *testing.T) {
 // TestSkipList_IteratorExhaustion verifies that calling Next on an exhausted
 // iterator returns nil sentinel values and does not panic.
 func TestSkipList_IteratorExhaustion(t *testing.T) {
-	skipList := NewSkipList(1000)
+	skipList := NewSkipList(1000, 12)
 
 	err := skipList.Put([]byte("only-key"), []byte("val"))
 	if err != nil {
@@ -294,7 +294,7 @@ func TestSkipList_IteratorExhaustion(t *testing.T) {
 // TestSkipList_TombstoneSizeLimit verifies that inserting a tombstone for a
 // non-existent key is correctly rejected when the memtable is at capacity.
 func TestSkipList_TombstoneSizeLimit(t *testing.T) {
-	skipList := NewSkipList(4)
+	skipList := NewSkipList(4, 12)
 
 	err := skipList.Put([]byte("ab"), []byte("cd"))
 	if err != nil {
@@ -304,5 +304,27 @@ func TestSkipList_TombstoneSizeLimit(t *testing.T) {
 	err = skipList.Delete([]byte("xyz"))
 	if err != ErrMemTableFull {
 		t.Errorf("expected ErrMemTableFull when inserting tombstone over capacity, got %v", err)
+	}
+}
+
+// TestSkipList_ConfigurableMaxLevel verifies that configuring a custom maxLevel
+// works properly and that the skip list operates normally with different heights.
+func TestSkipList_ConfigurableMaxLevel(t *testing.T) {
+	skipList := NewSkipList(1000, 4)
+	if skipList.maxLevel != 4 {
+		t.Fatalf("expected maxLevel 4, got %d", skipList.maxLevel)
+	}
+
+	err := skipList.Put([]byte("key"), []byte("value"))
+	if err != nil {
+		t.Fatalf("failed to Put with custom maxLevel: %v", err)
+	}
+
+	val, err := skipList.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("failed to Get with custom maxLevel: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) {
+		t.Fatalf("expected value, got %s", val)
 	}
 }

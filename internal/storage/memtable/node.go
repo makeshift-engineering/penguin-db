@@ -1,9 +1,5 @@
 package memtable
 
-import (
-	"math/rand"
-)
-
 // node is an internal element of the skip list. Each node stores a key-value pair
 // along with a deletion marker and a tower of forward pointers, one per level the
 // node participates in. The height of the tower is determined at insertion time by
@@ -27,15 +23,4 @@ func newNode(key, value []byte, level int) *node {
 		value: value,
 		next:  make([]*node, level),
 	}
-}
-
-// randomLevel determines the height of a newly inserted node's tower using a
-// geometric distribution with a promotion probability of 0.5. The returned level
-// is always in the range [1, MaxLevel].
-func randomLevel() int {
-	level := 1
-	for rand.Float32() < 0.5 && level < MaxLevel {
-		level++
-	}
-	return level
 }

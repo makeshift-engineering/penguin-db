@@ -3,13 +3,13 @@ package memtable
 import (
 	"bytes"
 	"log/slog"
+	"math/rand"
 	"sync"
 )
 
-// MaxLevel is the maximum tower height allowed for any skip list node.
-// A value of 12 supports roughly 4096 elements at the ideal 50 % promotion
-// probability before the extra levels start providing diminishing returns.
-const MaxLevel = 12
+// maxAllowedLevel is the maximum tower height allowed for any skip list node.
+// This restricts the size of stack-allocated predecessor arrays to prevent stack overflow.
+const maxAllowedLevel = 32
 
 // SkipList is a concurrent, size-bounded in-memory ordered map backed by a
 // probabilistic skip list. It is the primary data structure used by the memtable.
@@ -24,19 +24,24 @@ type SkipList struct {
 	highestActiveLevel int
 	currentSizeBytes   int64
 	maxSizeBytes       int64
+	maxLevel           int
 	mutex              sync.RWMutex
 }
 
 // NewSkipList allocates and returns an empty SkipList whose total byte capacity
-// is capped at maxSize. Writes that would cause the byte usage to exceed maxSize
-// are rejected with ErrMemTableFull.
-func NewSkipList(maxSize int64) *SkipList {
-	slog.Debug("initializing new skip list", "maxSizeBytes", maxSize)
+// is capped at maxSize and whose tower height is configured by maxLevel. Writes
+// that would cause the byte usage to exceed maxSize are rejected with ErrMemTableFull.
+func NewSkipList(maxSize int64, maxLevel int) *SkipList {
+	if maxLevel < 1 || maxLevel > maxAllowedLevel {
+		maxLevel = 12
+	}
+	slog.Debug("initializing new skip list", "maxSizeBytes", maxSize, "maxLevel", maxLevel)
 	return &SkipList{
-		headNode:           newNode(nil, nil, MaxLevel),
+		headNode:           newNode(nil, nil, maxLevel),
 		highestActiveLevel: 1,
 		currentSizeBytes:   0,
 		maxSizeBytes:       maxSize,
+		maxLevel:           maxLevel,
 	}
 }
 
@@ -206,13 +211,13 @@ func (skipList *SkipList) ensureCapacity(addedBytes int64) error {
 // It returns an array of the right-most nodes traversed at each level, and the node
 // immediately following the search path at level 0 (which may or may not match the target key).
 // This method does not acquire locks; the caller must hold the appropriate mutex.
-func (skipList *SkipList) findPredecessors(key []byte) ([MaxLevel]*node, *node) {
-	var predecessorNodes [MaxLevel]*node
+func (skipList *SkipList) findPredecessors(key []byte) ([maxAllowedLevel]*node, *node) {
+	var predecessorNodes [maxAllowedLevel]*node
 	currentNode := skipList.headNode
 
 	for levelIndex := skipList.highestActiveLevel - 1; levelIndex >= 0; levelIndex-- {
 		nextNode := currentNode.next[levelIndex]
-		for currentNode.next[levelIndex] != nil && bytes.Compare(nextNode.key, key) < 0 {
+		for nextNode != nil && bytes.Compare(nextNode.key, key) < 0 {
 			currentNode = nextNode
 			nextNode = currentNode.next[levelIndex]
 		}
@@ -224,8 +229,8 @@ func (skipList *SkipList) findPredecessors(key []byte) ([MaxLevel]*node, *node) 
 
 // insertNode handles the common pointer wiring and level generation for brand new keys and tombstones.
 // This method does not acquire locks; the caller must hold the appropriate write mutex.
-func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predecessorNodes [MaxLevel]*node) {
-	newNodeHeight := randomLevel()
+func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predecessorNodes [maxAllowedLevel]*node) {
+	newNodeHeight := skipList.randomLevel()
 	if newNodeHeight > skipList.highestActiveLevel {
 		for levelIndex := skipList.highestActiveLevel; levelIndex < newNodeHeight; levelIndex++ {
 			predecessorNodes[levelIndex] = skipList.headNode
@@ -247,4 +252,15 @@ func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predeces
 		"height", newNodeHeight,
 		"isDeleted", isDeleted,
 	)
+}
+
+// randomLevel determines the height of a newly inserted node's tower using a
+// geometric distribution with a promotion probability of 0.5. The returned level
+// is always in the range [1, skipList.maxLevel].
+func (skipList *SkipList) randomLevel() int {
+	level := 1
+	for rand.Float32() < 0.5 && level < skipList.maxLevel {
+		level++
+	}
+	return level
 }
