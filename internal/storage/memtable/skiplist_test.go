@@ -142,7 +142,7 @@ func TestSkipList_SizeTracking(t *testing.T) {
 }
 
 // TestSkipList_EmptyAndNil verifies that the skip list actively rejects nil
-// and empty-skiplistice keys across all exported methods (Put, Get, Delete) by
+// and empty-slice keys across all exported methods (Put, Get, Delete) by
 // returning ErrEmptyKey, preventing hash ring corruption downstream.
 func TestSkipList_EmptyAndNil(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
