@@ -1,0 +1,63 @@
+version: "2"
+
+run:
+  timeout: 5m
+  relative-path-mode: cfg
+
+linters:
+  default: standard
+  enable:
+    - errcheck        # unchecked errors
+    - govet           # suspicious constructs (shadows, printf args, etc.)
+    - staticcheck     # advanced static analysis
+    - unused          # unused code
+    - ineffassign     # useless assignments
+    - gosimple        # simplifiable code
+    - typecheck       # type-checking errors
+    - misspell        # common typos in comments/strings
+    - unconvert       # unnecessary type conversions
+    - gocritic        # opinionated but useful diagnostics
+    - revive          # extensible replacement for golint
+    - prealloc        # slice preallocation suggestions
+    - nilerr          # returning nil instead of the error
+    - errorlint       # error wrapping compliance (Go 1.13+)
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: indent-error-flow
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/makeshift-engineering/penguin-db
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
