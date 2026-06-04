@@ -1,0 +1,96 @@
+Statement             ::= ManipulationStatement ';'
+
+ManipulationStatement ::= DbManipulationStatement
+                        | TableManipulationStatement
+                        | DataManipulationStatement
+
+DbManipulationStatement    ::= ( 'CREATE' | 'DROP' ) 'DATABASE' Identifier | 'USE' Identifier
+TableManipulationStatement ::= CreateTableStatement | AlterTableStatement | DropTableStatement
+DataManipulationStatement  ::= InsertStatement | SelectStatement | UpdateStatement | DeleteStatement
+
+CreateTableStatement ::= 'CREATE' 'TABLE' Identifier '(' ColumnDefinition ( ',' ColumnDefinition )* ')'
+
+AlterTableStatement  ::= 'ALTER' 'TABLE' Identifier AlterAction
+AlterAction          ::= ( 'ADD' | 'MODIFY' ) 'COLUMN'? ColumnDefinition
+                       | 'RENAME' ( 'TO' Identifier | 'COLUMN' Identifier 'TO' Identifier )
+                       | 'DROP' 'COLUMN' Identifier
+
+DropTableStatement   ::= 'DROP' 'TABLE' Identifier
+
+ColumnDefinition     ::= Identifier DataType ColumnConstraints?
+ColumnConstraints    ::= KeyConstraint
+                       | NullConstraint
+                       | DefaultConstraint
+                       | KeyConstraint     NullConstraint    DefaultConstraint
+                       | KeyConstraint     DefaultConstraint NullConstraint
+                       | NullConstraint    KeyConstraint     DefaultConstraint
+                       | NullConstraint    DefaultConstraint KeyConstraint
+                       | DefaultConstraint KeyConstraint     NullConstraint
+                       | DefaultConstraint NullConstraint    KeyConstraint
+                       | KeyConstraint     NullConstraint
+                       | NullConstraint    KeyConstraint
+                       | KeyConstraint     DefaultConstraint
+                       | DefaultConstraint KeyConstraint
+                       | NullConstraint    DefaultConstraint
+                       | DefaultConstraint NullConstraint
+
+KeyConstraint        ::= 'PRIMARY' 'KEY' | 'UNIQUE'
+NullConstraint       ::= 'NOT' 'NULL'
+DefaultConstraint    ::= 'DEFAULT' SignedLiteral
+
+SignedLiteral        ::= Literal | '-' NumericLiteral
+
+SelectStatement      ::= 'SELECT' SelectList 'FROM' Identifier WhereClause? LimitClause?
+SelectList           ::= '*' | SelectColumn ( ',' SelectColumn )*
+SelectColumn         ::= Expression ( 'AS' Identifier )?
+
+InsertStatement      ::= 'INSERT' 'INTO' Identifier
+                         ( '(' Identifier ( ',' Identifier )* ')' )?
+                         'VALUES' ValueRow ( ',' ValueRow )*
+
+ValueRow             ::= '(' Expression ( ',' Expression )* ')'
+
+UpdateStatement      ::= 'UPDATE' Identifier 'SET' SetItem ( ',' SetItem )* WhereClause?
+SetItem              ::= Identifier '=' Expression
+
+DeleteStatement      ::= 'DELETE' 'FROM' Identifier WhereClause?
+
+WhereClause          ::= 'WHERE' Condition
+Condition            ::= OrCondition
+OrCondition          ::= AndCondition ( 'OR' AndCondition )*
+AndCondition         ::= NotCondition ( 'AND' NotCondition )*
+NotCondition         ::= ConditionPrimary | 'NOT' NotCondition
+ConditionPrimary     ::= Predicate | '(' Condition ')'
+Predicate            ::= Expression ComparisonOperator Expression
+ComparisonOperator   ::= '=' | '!=' | '<>' | '<' | '>' | '<=' | '>='
+
+LimitClause          ::= 'LIMIT' IntegerLiteral
+
+Expression           ::= Term ( ( '+' | '-' ) Term )*
+Term                 ::= Factor ( ( '*' | '/' | '%' ) Factor )*
+Factor               ::= Literal | Identifier | '(' Expression ')' | '-' Factor
+
+DataType             ::= 'INT'
+                       | 'BIGINT'
+                       | 'VARCHAR' '(' IntegerLiteral ')'
+                       | 'BOOLEAN'
+                       | 'TEXT'
+                       | 'TIMESTAMP'
+
+Identifier           ::= Letter ( Letter | Digit | '_' )*
+
+Literal              ::= NumericLiteral | StringLiteral | BooleanLiteral | NullLiteral
+NullLiteral          ::= 'NULL'
+BooleanLiteral       ::= 'TRUE' | 'FALSE'
+NumericLiteral       ::= IntegerLiteral | FloatLiteral
+IntegerLiteral       ::= Digit+
+FloatLiteral         ::= Digit+ '.' Digit+
+StringLiteral        ::= "'" Character+ "'"
+
+Letter               ::= LowercaseLetter | UppercaseLetter
+LowercaseLetter      ::= 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm'
+                       | 'n' | 'o' | 'p' | 'q' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'y' | 'z'
+UppercaseLetter      ::= 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M'
+                       | 'N' | 'O' | 'P' | 'Q' | 'R' | 'S' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z'
+Digit                ::= '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
+Character            ::= Letter | Digit | '_' | ' ' | '-' | '@' | '.'
