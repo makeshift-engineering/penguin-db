@@ -142,7 +142,7 @@ func TestSkipList_SizeTracking(t *testing.T) {
 }
 
 // TestSkipList_EmptyAndNil verifies that the skip list actively rejects nil
-// and empty-slice keys across all exported methods (Put, Get, Delete) by
+// and empty-skiplistice keys across all exported methods (Put, Get, Delete) by
 // returning ErrEmptyKey, preventing hash ring corruption downstream.
 func TestSkipList_EmptyAndNil(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
@@ -310,6 +310,25 @@ func TestSkipList_TombstoneSizeLimit(t *testing.T) {
 // TestSkipList_ConfigurableMaxLevel verifies that configuring a custom maxLevel
 // works properly and that the skip list operates normally with different heights.
 func TestSkipList_ConfigurableMaxLevel(t *testing.T) {
+	skiplist := NewSkipList(1000, 0)
+	if skiplist.maxLevel != 12 {
+		t.Errorf("expected maxLevel to default to 12 for invalid value 0, got %d", skiplist.maxLevel)
+	}
+
+	skiplist = NewSkipList(1000, 33)
+	if skiplist.maxLevel != 12 {
+		t.Errorf("expected maxLevel to default to 12 for invalid value 33, got %d", skiplist.maxLevel)
+	}
+
+	skiplist = NewSkipList(1000, 1)
+	if skiplist.maxLevel != 1 {
+		t.Errorf("expected maxLevel 1, got %d", skiplist.maxLevel)
+	}
+
+	skiplist = NewSkipList(1000, 32)
+	if skiplist.maxLevel != 32 {
+		t.Errorf("expected maxLevel 32, got %d", skiplist.maxLevel)
+	}
 	skipList := NewSkipList(1000, 4)
 	if skipList.maxLevel != 4 {
 		t.Fatalf("expected maxLevel 4, got %d", skipList.maxLevel)
