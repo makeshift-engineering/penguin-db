@@ -2,6 +2,8 @@ package memtable
 
 import (
 	"bytes"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -173,6 +175,84 @@ func TestSkipList_EmptyAndNil(t *testing.T) {
 	if err != ErrEmptyKey {
 		t.Errorf("expected ErrEmptyKey for Delete with empty key, got %v", err)
 	}
+}
+
+// TestSkipList_StrictConcurrency verifies that a single writer goroutine and
+// multiple concurrent reader goroutines operating on the same key never observe
+// a corrupted or malformed value, confirming read-write lock correctness.
+func TestSkipList_StrictConcurrency(t *testing.T) {
+	skipList := NewSkipList(100000, 12)
+	var waitGroup sync.WaitGroup
+	key := []byte("shared-key")
+
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		for i := 0; i < 1000; i++ {
+			val := []byte(fmt.Sprintf("val-%d", i))
+			_ = skipList.Put(key, val)
+		}
+	}()
+
+	for r := 0; r < 5; r++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for i := 0; i < 1000; i++ {
+				val, err := skipList.Get(key)
+				if err != nil && err != ErrKeyNotFound {
+					t.Errorf("unexpected error on Get: %v", err)
+				}
+				if err == nil {
+					if !bytes.HasPrefix(val, []byte("val-")) {
+						t.Errorf("corrupted value: %s", val)
+					}
+				}
+			}
+		}()
+	}
+
+	waitGroup.Wait()
+}
+
+// TestSkipList_Concurrency is a broad stress test that runs concurrent Puts,
+// Deletes, and Iterator traversals across disjoint key ranges simultaneously,
+// verifying that no deadlock, panic, or data corruption occurs under contention.
+func TestSkipList_Concurrency(t *testing.T) {
+	skipList := NewSkipList(100000, 12)
+	var waitGroup sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		waitGroup.Add(1)
+		go func(id int) {
+			defer waitGroup.Done()
+			key := []byte(fmt.Sprintf("key-%03d", id))
+			val := []byte(fmt.Sprintf("val-%03d", id))
+			_ = skipList.Put(key, val)
+		}(i)
+	}
+
+	for i := 100; i < 200; i++ {
+		waitGroup.Add(1)
+		go func(id int) {
+			defer waitGroup.Done()
+			key := []byte(fmt.Sprintf("key-%03d", id))
+			_ = skipList.Delete(key)
+		}(i)
+	}
+
+	for i := 0; i < 20; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			iterator := skipList.NewIterator()
+			for iterator.Valid() {
+				_, _, _ = iterator.Next()
+			}
+		}()
+	}
+
+	waitGroup.Wait()
 }
 
 // TestSkipList_SortedOrder verifies that the iterator always returns keys in

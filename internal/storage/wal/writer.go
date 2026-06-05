@@ -24,6 +24,7 @@ type LogWriter struct {
 	ingestionChannel chan *commitTicket
 	shutdownSignal   chan struct{}
 	workerWaitGroup  sync.WaitGroup
+	closeOnce        sync.Once
 }
 
 func NewLogWriter(directory string, nextSegmentID int) (*LogWriter, error) {
@@ -71,6 +72,10 @@ func (writer *LogWriter) rotateActiveFile() error {
 }
 
 func (writer *LogWriter) Append(record *Record) error {
+	if len(record.Key) == 0 {
+		return ErrEmptyKey
+	}
+
 	frame := record.Marshal()
 
 	ticket := &commitTicket{
@@ -143,11 +148,14 @@ func (writer *LogWriter) batchWorker() {
 }
 
 func (writer *LogWriter) Close() error {
-	close(writer.shutdownSignal)
-	writer.workerWaitGroup.Wait()
-	if writer.activeFile != nil {
-		_ = writer.activeFile.Sync()
-		return writer.activeFile.Close()
-	}
-	return nil
+	var closeErr error
+	writer.closeOnce.Do(func() {
+		close(writer.shutdownSignal)
+		writer.workerWaitGroup.Wait()
+		if writer.activeFile != nil {
+			_ = writer.activeFile.Sync()
+			closeErr = writer.activeFile.Close()
+		}
+	})
+	return closeErr
 }

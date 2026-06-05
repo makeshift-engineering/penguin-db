@@ -50,14 +50,14 @@ func UnmarshalRecord(frameData []byte) (*Record, error) {
 	extractedOpcode := frameData[8]
 	extractedKeyLength := binary.LittleEndian.Uint16(frameData[9:11])
 
-	if len(frameData) < int(11+extractedKeyLength) {
+	if len(frameData) < 11+int(extractedKeyLength) {
 		return nil, ErrTruncated
 	}
 
 	extractedKey := make([]byte, extractedKeyLength)
-	copy(extractedKey, frameData[11:11+extractedKeyLength])
+	copy(extractedKey, frameData[11:11+int(extractedKeyLength)])
 
-	extractedValueLength := len(frameData) - int(11+extractedKeyLength)
+	extractedValueLength := len(frameData) - (11 + int(extractedKeyLength))
 	var extractedValue []byte
 	if extractedValueLength > 0 {
 		extractedValue = make([]byte, extractedValueLength)
