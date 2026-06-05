@@ -3,6 +3,7 @@ package wal
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"testing"
 )
@@ -182,7 +183,7 @@ func TestUnmarshal_TruncatedFrame_TooShort(t *testing.T) {
 	}
 	for _, data := range cases {
 		_, err := UnmarshalRecord(data)
-		if err != ErrTruncated {
+		if !errors.Is(err, ErrTruncated) {
 			t.Errorf("input len=%d: expected ErrTruncated, got %v", len(data), err)
 		}
 	}
@@ -215,7 +216,7 @@ func TestUnmarshal_CRCCorruption(t *testing.T) {
 			frame := r.Marshal()
 			tc.corruptFn(frame)
 			_, err := UnmarshalRecord(frame)
-			if err != ErrInvalidCRC {
+			if !errors.Is(err, ErrInvalidCRC) {
 				t.Errorf("expected ErrInvalidCRC, got %v", err)
 			}
 		})
@@ -231,7 +232,7 @@ func TestUnmarshal_KeyLengthExceedsFrame(t *testing.T) {
 	binary.LittleEndian.PutUint32(frame[0:4], newCRC)
 
 	_, err := UnmarshalRecord(frame)
-	if err != ErrTruncated {
+	if !errors.Is(err, ErrTruncated) {
 		t.Errorf("expected ErrTruncated when keyLen > frame size, got %v", err)
 	}
 }

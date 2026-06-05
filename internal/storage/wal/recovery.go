@@ -42,7 +42,9 @@ func Replay(directory string, engine MemTable) (int, error) {
 
 	for _, fileName := range walFiles {
 		var segmentID int
-		fmt.Sscanf(fileName, "%d.wal", &segmentID)
+		if _, scanErr := fmt.Sscanf(fileName, "%d.wal", &segmentID); scanErr != nil {
+			return 0, fmt.Errorf("invalid WAL filename %s: %w", fileName, scanErr)
+		}
 		if segmentID > highestSegmentID {
 			highestSegmentID = segmentID
 		}
@@ -64,7 +66,7 @@ func Replay(directory string, engine MemTable) (int, error) {
 }
 
 func replayFile(filePath string, engine MemTable) (err error) {
-	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("unable to open WAL segment for reading: %w", err)
 	}
@@ -115,7 +117,9 @@ func replayFile(filePath string, engine MemTable) (err error) {
 			return file.Truncate(validBytes)
 		}
 
-		fullFrame := append(headerBuffer, payloadBuffer...)
+		fullFrame := make([]byte, 8+payloadSizeBytes)
+		copy(fullFrame[:8], headerBuffer)
+		copy(fullFrame[8:], payloadBuffer)
 
 		record, err := UnmarshalRecord(fullFrame)
 		if err != nil {

@@ -28,7 +28,7 @@ type LogWriter struct {
 }
 
 func NewLogWriter(directory string, nextSegmentID int) (*LogWriter, error) {
-	if err := os.MkdirAll(directory, 0755); err != nil {
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to initialize WAL directory structure at %s: %w", directory, err)
 	}
 
@@ -61,7 +61,7 @@ func (writer *LogWriter) rotateActiveFile() error {
 	}
 
 	segmentPath := filepath.Join(writer.directory, fmt.Sprintf("%06d.wal", writer.currentSegmentID))
-	file, err := os.OpenFile(segmentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(segmentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open new WAL segment %s: %w", segmentPath, err)
 	}

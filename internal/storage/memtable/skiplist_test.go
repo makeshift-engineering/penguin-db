@@ -201,7 +201,7 @@ func TestSkipList_StrictConcurrency(t *testing.T) {
 			defer waitGroup.Done()
 			for i := 0; i < 1000; i++ {
 				val, err := skipList.Get(key)
-				if err != nil && err != ErrKeyNotFound {
+				if err != nil && !errors.Is(err, ErrKeyNotFound) {
 					t.Errorf("unexpected error on Get: %v", err)
 				}
 				if err == nil {

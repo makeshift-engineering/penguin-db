@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -170,7 +171,7 @@ func TestAppend_EmptyKey_Rejected(t *testing.T) {
 	defer w.Close()
 
 	r := &Record{Opcode: OpcodePut, Key: []byte{}, Value: []byte("v")}
-	if err = w.Append(r); err != ErrEmptyKey {
+	if err = w.Append(r); !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for empty key, got %v", err)
 	}
 }
@@ -184,7 +185,7 @@ func TestAppend_NilKey_Rejected(t *testing.T) {
 	defer w.Close()
 
 	r := &Record{Opcode: OpcodePut, Key: nil, Value: []byte("v")}
-	if err = w.Append(r); err != ErrEmptyKey {
+	if err = w.Append(r); !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for nil key, got %v", err)
 	}
 }
