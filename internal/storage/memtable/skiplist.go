@@ -96,7 +96,7 @@ func (skipList *SkipList) Put(key, value []byte) error {
 
 	if targetNode != nil && bytes.Equal(targetNode.key, key) {
 		sizeDifference := int64(len(value)) - int64(len(targetNode.value))
-		if skipList.currentSizeBytes+int64(sizeDifference) > skipList.maxSizeBytes {
+		if skipList.currentSizeBytes+sizeDifference > skipList.maxSizeBytes {
 			slog.Debug("put failed: size limit exceeded on update",
 				"key", string(key),
 				"valueLength", len(value),
@@ -106,7 +106,7 @@ func (skipList *SkipList) Put(key, value []byte) error {
 			)
 			return ErrMemTableFull
 		}
-		skipList.currentSizeBytes += int64(sizeDifference)
+		skipList.currentSizeBytes += sizeDifference
 
 		targetNode.value = value
 		targetNode.isDeleted = false
@@ -130,7 +130,7 @@ func (skipList *SkipList) Put(key, value []byte) error {
 		return err
 	}
 
-	skipList.insertNode(key, value, false, predecessorNodes)
+	skipList.insertNode(key, value, false, &predecessorNodes)
 	slog.Debug("put: inserted new key",
 		"key", string(key),
 		"valueLength", len(value),
@@ -190,7 +190,7 @@ func (skipList *SkipList) Delete(key []byte) error {
 		return err
 	}
 
-	skipList.insertNode(key, nil, true, predecessorNodes)
+	skipList.insertNode(key, nil, true, &predecessorNodes)
 	slog.Debug("delete: inserted new tombstone node",
 		"key", string(key),
 		"currentSizeBytes", skipList.currentSizeBytes,
@@ -211,7 +211,7 @@ func (skipList *SkipList) ensureCapacity(addedBytes int64) error {
 // It returns an array of the right-most nodes traversed at each level, and the node
 // immediately following the search path at level 0 (which may or may not match the target key).
 // This method does not acquire locks; the caller must hold the appropriate mutex.
-func (skipList *SkipList) findPredecessors(key []byte) ([maxAllowedLevel]*node, *node) {
+func (skipList *SkipList) findPredecessors(key []byte) (predecessors [maxAllowedLevel]*node, next *node) {
 	var predecessorNodes [maxAllowedLevel]*node
 	currentNode := skipList.headNode
 
@@ -229,7 +229,7 @@ func (skipList *SkipList) findPredecessors(key []byte) ([maxAllowedLevel]*node, 
 
 // insertNode handles the common pointer wiring and level generation for brand new keys and tombstones.
 // This method does not acquire locks; the caller must hold the appropriate write mutex.
-func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predecessorNodes [maxAllowedLevel]*node) {
+func (skipList *SkipList) insertNode(key, value []byte, isDeleted bool, predecessorNodes *[maxAllowedLevel]*node) {
 	newNodeHeight := skipList.randomLevel()
 	if newNodeHeight > skipList.highestActiveLevel {
 		for levelIndex := skipList.highestActiveLevel; levelIndex < newNodeHeight; levelIndex++ {
