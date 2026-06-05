@@ -2,7 +2,6 @@ version: "2"
 
 run:
   timeout: 5m
-  relative-path-mode: cfg
 
 linters:
   default: standard
@@ -42,6 +41,16 @@ linters:
       errorf: true
       asserts: true
       comparison: true
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
 
 formatters:
   enable:
