@@ -69,9 +69,8 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
                      | <keyword_select> <select_list> <keyword_from> <identifier> <limit_clause>
                      | <keyword_select> <select_list> <keyword_from> <identifier> <where_clause> <limit_clause>
 
-<select_list>       ::= <symbol_star> | <select_columns>
-<select_columns>    ::= <select_column> | <select_column> <symbol_comma> <select_columns>
-<select_column>     ::= <select_expression> | <select_expression> <keyword_as> <identifier>
+<select_list>       ::= <select_column> | <select_column> <symbol_comma> <select_list>
+<select_column>     ::= <symbol_star> | <select_expression> | <select_expression> <keyword_as> <identifier>
 <select_expression> ::= <expression> | <condition>
 
 <insert_statement> ::= <keyword_insert> <keyword_into> <identifier> <keyword_values> <value_rows>
@@ -128,7 +127,7 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <boolean_literal> ::= <keyword_true> | <keyword_false>
 <numeric_literal> ::= <integer_literal> | <float_literal>
 <integer_literal> ::= <digits>
-<float_literal>   ::= <digits> <symbol_dot> <digits> | <symbol_dot> <digits>
+<float_literal>   ::= <digits> <symbol_dot> <digits> | <digits> <symbol_dot> | <symbol_dot> <digits>
 <digits>          ::= <digit> | <digit> <digits>
 <string_literal>  ::= <symbol_single_quote> <symbol_single_quote>
                     | <symbol_single_quote> <string_content> <symbol_single_quote>
@@ -255,8 +254,8 @@ ForeignConstraint    ::= 'REFERENCES' Identifier '(' Identifier ')'
 SignedLiteral        ::= Literal | '-' NumericLiteral
 
 SelectStatement     ::= 'SELECT' SelectList 'FROM' Identifier WhereClause? LimitClause?
-SelectList          ::= '*' | SelectColumn ( ',' SelectColumn )*
-SelectColumn        ::= SelectExpression ( 'AS' Identifier )?
+SelectList          ::= SelectColumn ( ',' SelectColumn )*
+SelectColumn        ::= '*' | SelectExpression ( 'AS' Identifier )?
 SelectExpression    ::= Expression | Condition
 
 InsertStatement      ::= 'INSERT' 'INTO' Identifier
@@ -299,7 +298,7 @@ NullLiteral          ::= 'NULL'
 BooleanLiteral       ::= 'TRUE' | 'FALSE'
 NumericLiteral       ::= IntegerLiteral | FloatLiteral
 IntegerLiteral       ::= Digit+
-FloatLiteral         ::= Digit+ '.' Digit+ | '.' Digit+
+FloatLiteral         ::= Digit+ '.' Digit+ | Digit+ '.' | '.' Digit+
 StringLiteral        ::= "'" StringChar* "'"
 StringChar           ::= Character | "''"
 
@@ -319,9 +318,9 @@ Character            ::= Letter | Digit | '_' | ' ' | '-' | '@' | '.'
 - **Identifier**: Governs database, table, and column names. Must begin with a letter and may include letters, digits, and underscores.
 - **Literal**: Denotes fixed data values.
 - **NullLiteral / BooleanLiteral**: Captures SQL boolean flags (`TRUE`/`FALSE`) and the missing-data marker (`NULL`).
-- **NumericLiteral / IntegerLiteral / FloatLiteral**: Governs integer and fractional digits. `FloatLiteral` accepts both `3.14` and `.14`; a leading digit is not required.
+- **NumericLiteral / IntegerLiteral / FloatLiteral**: Governs integer and fractional digits. `FloatLiteral` accepts all three forms SQL allows: standard (`3.14`), leading-dot (`.14`), and trailing-dot (`10.`). Only `IntegerLiteral` is accepted by `LIMIT` and `VARCHAR`.
 - **StringLiteral**: Resolves single-quoted text values. An empty string `''` is valid. To embed a literal single quote inside a string, double it: `'it''s'` represents `it's`. In the grammar this is expressed via `StringChar ::= Character | "''"`, where `''` is treated as a single escaped-quote unit by the lexer using a greedy longest-match rule.
-- **SelectExpression**: A select item may be either an arithmetic `Expression` or a boolean `Condition` (predicate). The two are disjoint at the grammar level — expressions contain no comparison operators, conditions always do — so no ambiguity arises. Conditions used as select items should be enclosed in parentheses for readability and to avoid parser conflicts with the comma separating select columns: `SELECT age, (age < 18) AS is_minor FROM users`.
+- **SelectList / SelectColumn / SelectExpression**: Each item in a select list is independently a `SelectColumn`, which can be a bare `*` or any `SelectExpression` with an optional `AS` alias. This means `*` and other expressions are not disjoint — they can be freely mixed: `SELECT *, price, (price * tax) AS total FROM items` is valid. A `SelectExpression` may be an arithmetic `Expression` or a boolean `Condition`. The two are grammatically disjoint (expressions never contain comparison operators; conditions always do), so no ambiguity arises. Conditions used as select items should be parenthesised to avoid confusion with the column-separating comma: `SELECT age, (age < 18) AS is_minor FROM users`.
 - **ColumnConstraints**: Supports four constraint types — key, null, default, and foreign — each of which may appear at most once per column. Constraints must be written in canonical order: `KeyConstraint` → `NullConstraint` → `DefaultConstraint` → `ForeignConstraint`. The grammar encodes all 15 valid non-empty subsets of these four types in that fixed order. **Parser note**: the parser must verify at semantic analysis time that no constraint type is duplicated; the grammar structure alone enforces canonical ordering but does not prevent a user from writing the same constraint twice if the grammar were extended permissively.
 - **ForeignConstraint**: Column-level referential constraint. Syntax: `REFERENCES table_name (column_name)`, pointing to exactly one column in another table.
 - **Letter / Digit / Character**: Fundamental character classes for identifiers and string body characters.
