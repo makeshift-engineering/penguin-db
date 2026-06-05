@@ -63,12 +63,16 @@ func Replay(directory string, engine MemTable) (int, error) {
 	return highestSegmentID, nil
 }
 
-func replayFile(filePath string, engine MemTable) error {
+func replayFile(filePath string, engine MemTable) (err error) {
 	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
 	if err != nil {
 		return fmt.Errorf("unable to open WAL segment for reading: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close WAL segment %s: %w", filePath, closeErr)
+		}
+	}()
 
 	var validBytes int64 = 0
 	var recordsRecovered int
@@ -93,6 +97,13 @@ func replayFile(filePath string, engine MemTable) error {
 		}
 
 		totalFrameSizeBytes := binary.LittleEndian.Uint32(headerBuffer[4:8])
+		if totalFrameSizeBytes < 8 || totalFrameSizeBytes > 128*1024*1024 {
+			slog.Debug("invalid frame size in header, truncating segment",
+				"file", filepath.Base(filePath),
+				"frame_size", totalFrameSizeBytes,
+				"valid_bytes", validBytes)
+			return file.Truncate(validBytes)
+		}
 		payloadSizeBytes := totalFrameSizeBytes - 8
 
 		payloadBuffer := make([]byte, payloadSizeBytes)

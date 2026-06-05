@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -228,7 +229,9 @@ func TestSkipList_Concurrency(t *testing.T) {
 			defer waitGroup.Done()
 			key := []byte(fmt.Sprintf("key-%03d", id))
 			val := []byte(fmt.Sprintf("val-%03d", id))
-			_ = skipList.Put(key, val)
+			if err := skipList.Put(key, val); err != nil {
+				t.Errorf("put failed for %s: %v", key, err)
+			}
 		}(i)
 	}
 
@@ -237,7 +240,9 @@ func TestSkipList_Concurrency(t *testing.T) {
 		go func(id int) {
 			defer waitGroup.Done()
 			key := []byte(fmt.Sprintf("key-%03d", id))
-			_ = skipList.Delete(key)
+			if err := skipList.Delete(key); err != nil {
+				t.Errorf("delete failed for %s: %v", key, err)
+			}
 		}(i)
 	}
 
@@ -253,6 +258,22 @@ func TestSkipList_Concurrency(t *testing.T) {
 	}
 
 	waitGroup.Wait()
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		expected := []byte(fmt.Sprintf("val-%03d", i))
+		got, err := skipList.Get(key)
+		if err != nil || !bytes.Equal(got, expected) {
+			t.Fatalf("unexpected state for %s: got (%q, %v), want (%q, nil)", key, got, err, expected)
+		}
+	}
+
+	for i := 100; i < 200; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		if _, err := skipList.Get(key); !errors.Is(err, ErrKeyNotFound) {
+			t.Fatalf("expected ErrKeyNotFound for deleted/tombstoned key %s, got %v", key, err)
+		}
+	}
 }
 
 // TestSkipList_SortedOrder verifies that the iterator always returns keys in

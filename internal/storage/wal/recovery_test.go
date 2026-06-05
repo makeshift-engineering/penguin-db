@@ -398,3 +398,69 @@ func TestReplay_SubdirectoriesAreIgnored(t *testing.T) {
 		t.Errorf("nextID = %d, want 1", nextID)
 	}
 }
+
+func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := segmentPath(dir, 1)
+
+	good := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
+	validBytes := good.Marshal()
+	writeRecordsToFile(t, path, []*Record{good})
+
+	hdr := make([]byte, 8)
+	binary.LittleEndian.PutUint32(hdr[4:8], 7)
+	binary.LittleEndian.PutUint32(hdr[0:4], crc32.ChecksumIEEE(hdr[4:]))
+
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f.Write(hdr)
+	f.Close()
+
+	mem := newMockMemTable()
+	if _, err := Replay(dir, mem); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := mem.puts["good"]; !ok {
+		t.Error("good record was not applied")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() != int64(len(validBytes)) {
+		t.Errorf("file size after truncate = %d, want %d", info.Size(), len(validBytes))
+	}
+}
+
+func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := segmentPath(dir, 1)
+
+	good := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
+	validBytes := good.Marshal()
+	writeRecordsToFile(t, path, []*Record{good})
+
+	hdr := make([]byte, 8)
+	binary.LittleEndian.PutUint32(hdr[4:8], 129*1024*1024)
+	binary.LittleEndian.PutUint32(hdr[0:4], crc32.ChecksumIEEE(hdr[4:]))
+
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f.Write(hdr)
+	f.Close()
+
+	mem := newMockMemTable()
+	if _, err := Replay(dir, mem); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := mem.puts["good"]; !ok {
+		t.Error("good record was not applied")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() != int64(len(validBytes)) {
+		t.Errorf("file size after truncate = %d, want %d", info.Size(), len(validBytes))
+	}
+}

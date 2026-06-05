@@ -87,7 +87,12 @@ func (writer *LogWriter) Append(record *Record) error {
 
 	select {
 	case writer.ingestionChannel <- ticket:
-		return <-ticket.resultChan
+		select {
+		case err := <-ticket.resultChan:
+			return err
+		case <-writer.shutdownSignal:
+			return fmt.Errorf("database engine is currently shutting down, write rejected")
+		}
 	case <-writer.shutdownSignal:
 		return fmt.Errorf("database engine is currently shutting down, write rejected")
 	}
@@ -131,6 +136,8 @@ func (writer *LogWriter) batchWorker() {
 			_, err := writer.activeFile.Write(writeBuffer)
 			if err == nil {
 				err = writer.activeFile.Sync()
+			}
+			if err == nil {
 				writer.currentSizeBytes += int64(len(writeBuffer))
 			}
 
@@ -153,8 +160,12 @@ func (writer *LogWriter) Close() error {
 		close(writer.shutdownSignal)
 		writer.workerWaitGroup.Wait()
 		if writer.activeFile != nil {
-			_ = writer.activeFile.Sync()
-			closeErr = writer.activeFile.Close()
+			if syncErr := writer.activeFile.Sync(); syncErr != nil {
+				closeErr = syncErr
+			}
+			if err := writer.activeFile.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
 		}
 	})
 	return closeErr
