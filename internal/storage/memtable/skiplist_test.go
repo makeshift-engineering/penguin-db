@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestSkipList_Basic(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
 
 	_, err := skipList.Get([]byte("key1"))
-	if err != ErrKeyNotFound {
+	if !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("expected ErrKeyNotFound, got %v", err)
 	}
 
@@ -117,7 +118,7 @@ func TestSkipList_SizeTracking(t *testing.T) {
 	}
 
 	err = skipList.Put([]byte("k"), []byte("vOverTheLimit"))
-	if err != ErrMemTableFull {
+	if !errors.Is(err, ErrMemTableFull) {
 		t.Errorf("expected ErrMemTableFull on limit overrun, got %v", err)
 	}
 	if skipList.currentSizeBytes != 18 {
@@ -148,29 +149,29 @@ func TestSkipList_EmptyAndNil(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
 
 	_, err := skipList.Get(nil)
-	if err != ErrEmptyKey {
+	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Get with nil key, got %v", err)
 	}
 	_, err = skipList.Get([]byte(""))
-	if err != ErrEmptyKey {
+	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Get with empty key, got %v", err)
 	}
 
 	err = skipList.Put(nil, []byte("value"))
-	if err != ErrEmptyKey {
+	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Put with nil key, got %v", err)
 	}
 	err = skipList.Put([]byte(""), []byte("value"))
-	if err != ErrEmptyKey {
+	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Put with empty key, got %v", err)
 	}
 
 	err = skipList.Delete(nil)
-	if err != ErrEmptyKey {
+	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Delete with nil key, got %v", err)
 	}
 	err = skipList.Delete([]byte(""))
-	if err != ErrEmptyKey {
+	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Delete with empty key, got %v", err)
 	}
 }
@@ -253,7 +254,7 @@ func TestSkipList_DuplicateDelete(t *testing.T) {
 	}
 
 	_, err = skipList.Get([]byte("key"))
-	if err != ErrKeyNotFound {
+	if !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("expected ErrKeyNotFound after duplicate Delete, got %v", err)
 	}
 }
@@ -302,7 +303,7 @@ func TestSkipList_TombstoneSizeLimit(t *testing.T) {
 	}
 
 	err = skipList.Delete([]byte("xyz"))
-	if err != ErrMemTableFull {
+	if !errors.Is(err, ErrMemTableFull) {
 		t.Errorf("expected ErrMemTableFull when inserting tombstone over capacity, got %v", err)
 	}
 }
