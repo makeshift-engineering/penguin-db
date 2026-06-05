@@ -9,16 +9,18 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 ## BNF Grammar
 
 ```bnf
+<program>   ::= <statement> | <statement> <program>
 <statement> ::= <manipulation_statement> <terminator>
+
 <manipulation_statement> ::= <db_manipulation_statement> | <table_manipulation_statement> | <data_manipulation_statement>
 
-<db_manipulation_statement> ::= <create_db_statement> | <use_db_statement> | <drop_db_statement>
+<db_manipulation_statement>    ::= <create_db_statement> | <use_db_statement> | <drop_db_statement>
 <table_manipulation_statement> ::= <create_table_statement> | <alter_table_statement> | <drop_table_statement>
-<data_manipulation_statement> ::= <insert_statement> | <select_statement> | <update_statement> | <delete_statement>
+<data_manipulation_statement>  ::= <insert_statement> | <select_statement> | <update_statement> | <delete_statement>
 
 <create_db_statement> ::= <keyword_create> <keyword_database> <identifier>
-<use_db_statement> ::= <keyword_use> <identifier>
-<drop_db_statement> ::= <keyword_drop> <keyword_database> <identifier>
+<use_db_statement>    ::= <keyword_use> <identifier>
+<drop_db_statement>   ::= <keyword_drop> <keyword_database> <identifier>
 
 <create_table_statement> ::= <keyword_create> <keyword_table> <identifier> <symbol_lparen> <column_definitions> <symbol_rparen>
 <column_definitions>     ::= <column_definition> | <column_definition> <symbol_comma> <column_definitions>
@@ -33,27 +35,32 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 
 <drop_table_statement> ::= <keyword_drop> <keyword_table> <identifier>
 
-<column_definition>  ::= <identifier> <data_type> | <identifier> <data_type> <column_constraints>
+<column_definition> ::= <identifier> <data_type> | <identifier> <data_type> <column_constraints>
 
-<column_constraints> ::= <key_constraint>
-                       | <null_constraint>
-                       | <default_constraint>
-                       | <key_constraint>     <null_constraint>    <default_constraint>
-                       | <key_constraint>     <default_constraint> <null_constraint>
-                       | <null_constraint>    <key_constraint>     <default_constraint>
-                       | <null_constraint>    <default_constraint> <key_constraint>
-                       | <default_constraint> <key_constraint>     <null_constraint>
-                       | <default_constraint> <null_constraint>    <key_constraint>
-                       | <key_constraint>     <null_constraint>
-                       | <null_constraint>    <key_constraint>
-                       | <key_constraint>     <default_constraint>
-                       | <default_constraint> <key_constraint>
-                       | <null_constraint>    <default_constraint>
-                       | <default_constraint> <null_constraint>
+<column_constraints>       ::= <key_constraint>
+                              | <key_constraint>     <after_key_constraint>
+                              | <null_constraint>
+                              | <null_constraint>    <after_null_constraint>
+                              | <default_constraint>
+                              | <default_constraint> <after_default_constraint>
+                              | <foreign_constraint>
+
+<after_key_constraint>     ::= <null_constraint>
+                              | <null_constraint>    <after_null_constraint>
+                              | <default_constraint>
+                              | <default_constraint> <after_default_constraint>
+                              | <foreign_constraint>
+
+<after_null_constraint>    ::= <default_constraint>
+                              | <default_constraint> <after_default_constraint>
+                              | <foreign_constraint>
+
+<after_default_constraint> ::= <foreign_constraint>
 
 <key_constraint>     ::= <keyword_primary> <keyword_key> | <keyword_unique>
 <null_constraint>    ::= <keyword_not> <keyword_null>
 <default_constraint> ::= <keyword_default> <signed_literal>
+<foreign_constraint> ::= <keyword_references> <identifier> <symbol_lparen> <identifier> <symbol_rparen>
 
 <signed_literal> ::= <literal> | <symbol_minus> <numeric_literal>
 
@@ -62,9 +69,10 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
                      | <keyword_select> <select_list> <keyword_from> <identifier> <limit_clause>
                      | <keyword_select> <select_list> <keyword_from> <identifier> <where_clause> <limit_clause>
 
-<select_list>    ::= <symbol_star> | <select_columns>
-<select_columns> ::= <select_column> | <select_column> <symbol_comma> <select_columns>
-<select_column>  ::= <expression> | <expression> <keyword_as> <identifier>
+<select_list>       ::= <symbol_star> | <select_columns>
+<select_columns>    ::= <select_column> | <select_column> <symbol_comma> <select_columns>
+<select_column>     ::= <select_expression> | <select_expression> <keyword_as> <identifier>
+<select_expression> ::= <expression> | <condition>
 
 <insert_statement> ::= <keyword_insert> <keyword_into> <identifier> <keyword_values> <value_rows>
                      | <keyword_insert> <keyword_into> <identifier> <symbol_lparen> <column_list> <symbol_rparen> <keyword_values> <value_rows>
@@ -120,10 +128,13 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <boolean_literal> ::= <keyword_true> | <keyword_false>
 <numeric_literal> ::= <integer_literal> | <float_literal>
 <integer_literal> ::= <digits>
-<float_literal>   ::= <digits> <symbol_dot> <digits>
+<float_literal>   ::= <digits> <symbol_dot> <digits> | <symbol_dot> <digits>
 <digits>          ::= <digit> | <digit> <digits>
-<string_literal>  ::= <symbol_single_quote> <characters> <symbol_single_quote>
-<characters>      ::= <character> | <character> <characters>
+<string_literal>  ::= <symbol_single_quote> <symbol_single_quote>
+                    | <symbol_single_quote> <string_content> <symbol_single_quote>
+<string_content>  ::= <string_char> | <string_char> <string_content>
+<string_char>     ::= <character> | <symbol_single_quote> <symbol_single_quote>
+<character>       ::= <letter> | <digit> | "_" | " " | "-" | "@" | "."
 
 <letter>           ::= <lowercase_letter> | <uppercase_letter>
 <lowercase_letter> ::= "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
@@ -131,52 +142,51 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <uppercase_letter> ::= "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
                      | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z"
 <digit>            ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
-<character>        ::= <letter> | <digit> | "_" | " " | "-" | "@" | "."
 
-<keyword_create>    ::= "CREATE"
-<keyword_database>  ::= "DATABASE"
-<keyword_schema>    ::= "SCHEMA"
-<keyword_use>       ::= "USE"
-<keyword_drop>      ::= "DROP"
+<keyword_create>     ::= "CREATE"
+<keyword_database>   ::= "DATABASE"
+<keyword_use>        ::= "USE"
+<keyword_drop>       ::= "DROP"
 
-<keyword_table>     ::= "TABLE"
-<keyword_alter>     ::= "ALTER"
-<keyword_add>       ::= "ADD"
-<keyword_column>    ::= "COLUMN"
-<keyword_modify>    ::= "MODIFY"
-<keyword_rename>    ::= "RENAME"
-<keyword_to>        ::= "TO"
+<keyword_table>      ::= "TABLE"
+<keyword_alter>      ::= "ALTER"
+<keyword_add>        ::= "ADD"
+<keyword_column>     ::= "COLUMN"
+<keyword_modify>     ::= "MODIFY"
+<keyword_rename>     ::= "RENAME"
+<keyword_to>         ::= "TO"
 
-<keyword_select>    ::= "SELECT"
-<keyword_from>      ::= "FROM"
-<keyword_where>     ::= "WHERE"
-<keyword_limit>     ::= "LIMIT"
-<keyword_as>        ::= "AS"
-<keyword_insert>    ::= "INSERT"
-<keyword_into>      ::= "INTO"
-<keyword_values>    ::= "VALUES"
-<keyword_update>    ::= "UPDATE"
-<keyword_set>       ::= "SET"
-<keyword_delete>    ::= "DELETE"
+<keyword_select>     ::= "SELECT"
+<keyword_from>       ::= "FROM"
+<keyword_where>      ::= "WHERE"
+<keyword_limit>      ::= "LIMIT"
+<keyword_as>         ::= "AS"
+<keyword_insert>     ::= "INSERT"
+<keyword_into>       ::= "INTO"
+<keyword_values>     ::= "VALUES"
+<keyword_update>     ::= "UPDATE"
+<keyword_set>        ::= "SET"
+<keyword_delete>     ::= "DELETE"
 
-<keyword_primary>   ::= "PRIMARY"
-<keyword_key>       ::= "KEY"
-<keyword_not>       ::= "NOT"
-<keyword_null>      ::= "NULL"
-<keyword_default>   ::= "DEFAULT"
-<keyword_unique>    ::= "UNIQUE"
+<keyword_primary>    ::= "PRIMARY"
+<keyword_key>        ::= "KEY"
+<keyword_not>        ::= "NOT"
+<keyword_null>       ::= "NULL"
+<keyword_default>    ::= "DEFAULT"
+<keyword_unique>     ::= "UNIQUE"
+<keyword_references> ::= "REFERENCES"
 
-<keyword_and>       ::= "AND"
-<keyword_or>        ::= "OR"
-<keyword_true>      ::= "TRUE"
-<keyword_false>     ::= "FALSE"
+<keyword_and>        ::= "AND"
+<keyword_or>         ::= "OR"
+<keyword_true>       ::= "TRUE"
+<keyword_false>      ::= "FALSE"
 
-<keyword_int>       ::= "INT"
-<keyword_bigint>    ::= "BIGINT"
-<keyword_varchar>   ::= "VARCHAR"
-<keyword_boolean>   ::= "BOOLEAN"
-<keyword_text>      ::= "TEXT"
-<keyword_timestamp> ::= "TIMESTAMP"
+<keyword_int>        ::= "INT"
+<keyword_bigint>     ::= "BIGINT"
+<keyword_varchar>    ::= "VARCHAR"
+<keyword_boolean>    ::= "BOOLEAN"
+<keyword_text>       ::= "TEXT"
+<keyword_timestamp>  ::= "TIMESTAMP"
 
 <symbol_lparen>                ::= "("
 <symbol_rparen>                ::= ")"
@@ -193,13 +203,13 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <symbol_less_than_or_equal>    ::= "<="
 <symbol_greater_than_or_equal> ::= ">="
 
-<symbol_plus>       ::= "+"
-<symbol_minus>      ::= "-"
-<symbol_star>       ::= "*"
-<symbol_slash>      ::= "/"
-<symbol_percent>    ::= "%"
+<symbol_plus>        ::= "+"
+<symbol_minus>       ::= "-"
+<symbol_star>        ::= "*"
+<symbol_slash>       ::= "/"
+<symbol_percent>     ::= "%"
 
-<symbol_underscore> ::= "_"
+<symbol_underscore>  ::= "_"
 
 <terminator> ::= ";"
 
@@ -210,7 +220,8 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 A more readable EBNF form of the grammar is given below:
 
 ```ebnf
-Statement             ::= ManipulationStatement ';'
+Program   ::= Statement+
+Statement ::= ManipulationStatement ';'
 
 ManipulationStatement ::= DbManipulationStatement
                         | TableManipulationStatement
@@ -229,32 +240,24 @@ AlterAction          ::= ( 'ADD' | 'MODIFY' ) 'COLUMN'? ColumnDefinition
 
 DropTableStatement   ::= 'DROP' 'TABLE' Identifier
 
-ColumnDefinition     ::= Identifier DataType ColumnConstraints?
-ColumnConstraints    ::= KeyConstraint
-                       | NullConstraint
-                       | DefaultConstraint
-                       | KeyConstraint     NullConstraint    DefaultConstraint
-                       | KeyConstraint     DefaultConstraint NullConstraint
-                       | NullConstraint    KeyConstraint     DefaultConstraint
-                       | NullConstraint    DefaultConstraint KeyConstraint
-                       | DefaultConstraint KeyConstraint     NullConstraint
-                       | DefaultConstraint NullConstraint    KeyConstraint
-                       | KeyConstraint     NullConstraint
-                       | NullConstraint    KeyConstraint
-                       | KeyConstraint     DefaultConstraint
-                       | DefaultConstraint KeyConstraint
-                       | NullConstraint    DefaultConstraint
-                       | DefaultConstraint NullConstraint
+ColumnDefinition  ::= Identifier DataType ColumnConstraints?
+
+ColumnConstraints ::= KeyConstraint     NullConstraint? DefaultConstraint? ForeignConstraint?
+                    | NullConstraint    DefaultConstraint? ForeignConstraint?
+                    | DefaultConstraint ForeignConstraint?
+                    | ForeignConstraint
 
 KeyConstraint        ::= 'PRIMARY' 'KEY' | 'UNIQUE'
 NullConstraint       ::= 'NOT' 'NULL'
 DefaultConstraint    ::= 'DEFAULT' SignedLiteral
+ForeignConstraint    ::= 'REFERENCES' Identifier '(' Identifier ')'
 
 SignedLiteral        ::= Literal | '-' NumericLiteral
 
-SelectStatement      ::= 'SELECT' SelectList 'FROM' Identifier WhereClause? LimitClause?
-SelectList           ::= '*' | SelectColumn ( ',' SelectColumn )*
-SelectColumn         ::= Expression ( 'AS' Identifier )?
+SelectStatement     ::= 'SELECT' SelectList 'FROM' Identifier WhereClause? LimitClause?
+SelectList          ::= '*' | SelectColumn ( ',' SelectColumn )*
+SelectColumn        ::= SelectExpression ( 'AS' Identifier )?
+SelectExpression    ::= Expression | Condition
 
 InsertStatement      ::= 'INSERT' 'INTO' Identifier
                          ( '(' Identifier ( ',' Identifier )* ')' )?
@@ -296,8 +299,9 @@ NullLiteral          ::= 'NULL'
 BooleanLiteral       ::= 'TRUE' | 'FALSE'
 NumericLiteral       ::= IntegerLiteral | FloatLiteral
 IntegerLiteral       ::= Digit+
-FloatLiteral         ::= Digit+ '.' Digit+
-StringLiteral        ::= "'" Character+ "'"
+FloatLiteral         ::= Digit+ '.' Digit+ | '.' Digit+
+StringLiteral        ::= "'" StringChar* "'"
+StringChar           ::= Character | "''"
 
 Letter               ::= LowercaseLetter | UppercaseLetter
 LowercaseLetter      ::= 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm'
@@ -311,9 +315,13 @@ Character            ::= Letter | Digit | '_' | ' ' | '-' | '@' | '.'
 
 ### Notes
 
-- **Identifier**: Governs database, table, and column names. They must begin with a letter and can include letters, digits, and underscores.
+- **Program**: The top-level rule. A program is one or more semicolon-terminated statements, enabling scripts with multiple SQL statements separated by `;`.
+- **Identifier**: Governs database, table, and column names. Must begin with a letter and may include letters, digits, and underscores.
 - **Literal**: Denotes fixed data values.
-- **NullLiteral / BooleanLiteral**: Captures SQL boolean flags (`TRUE`/`FALSE`) and the missing data flag (`NULL`).
-- **NumericLiteral / IntegerLiteral / FloatLiteral**: Governs integer and fractional digits.
-- **StringLiteral**: Resolves single-quoted character sequences representing raw text values.
-- **Letter / Digit / Character**: Fundamental character sets allowed within identifiers and string values.
+- **NullLiteral / BooleanLiteral**: Captures SQL boolean flags (`TRUE`/`FALSE`) and the missing-data marker (`NULL`).
+- **NumericLiteral / IntegerLiteral / FloatLiteral**: Governs integer and fractional digits. `FloatLiteral` accepts both `3.14` and `.14`; a leading digit is not required.
+- **StringLiteral**: Resolves single-quoted text values. An empty string `''` is valid. To embed a literal single quote inside a string, double it: `'it''s'` represents `it's`. In the grammar this is expressed via `StringChar ::= Character | "''"`, where `''` is treated as a single escaped-quote unit by the lexer using a greedy longest-match rule.
+- **SelectExpression**: A select item may be either an arithmetic `Expression` or a boolean `Condition` (predicate). The two are disjoint at the grammar level — expressions contain no comparison operators, conditions always do — so no ambiguity arises. Conditions used as select items should be enclosed in parentheses for readability and to avoid parser conflicts with the comma separating select columns: `SELECT age, (age < 18) AS is_minor FROM users`.
+- **ColumnConstraints**: Supports four constraint types — key, null, default, and foreign — each of which may appear at most once per column. Constraints must be written in canonical order: `KeyConstraint` → `NullConstraint` → `DefaultConstraint` → `ForeignConstraint`. The grammar encodes all 15 valid non-empty subsets of these four types in that fixed order. **Parser note**: the parser must verify at semantic analysis time that no constraint type is duplicated; the grammar structure alone enforces canonical ordering but does not prevent a user from writing the same constraint twice if the grammar were extended permissively.
+- **ForeignConstraint**: Column-level referential constraint. Syntax: `REFERENCES table_name (column_name)`, pointing to exactly one column in another table.
+- **Letter / Digit / Character**: Fundamental character classes for identifiers and string body characters.
