@@ -41,7 +41,7 @@ func (m *mockMemTable) Delete(key []byte) error {
 	return nil
 }
 
-// writeRecordsToFile serialized and appends a list of Records to a segment file.
+// writeRecordsToFile serializes and appends a list of Records to a segment file.
 func writeRecordsToFile(t *testing.T, path string, records []*Record) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -225,7 +225,10 @@ func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 
 	badFrame := (&Record{Opcode: OpcodePut, Key: []byte("bad"), Value: []byte("x")}).Marshal()
 	badFrame[12] ^= 0xFF
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.Write(badFrame)
 	f.Close()
 
@@ -437,7 +440,10 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	binary.LittleEndian.PutUint32(hdr[4:8], 7)
 	binary.LittleEndian.PutUint32(hdr[0:4], crc32.ChecksumIEEE(hdr[4:]))
 
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.Write(hdr)
 	f.Close()
 
@@ -489,5 +495,38 @@ func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
 	}
 	if info.Size() != int64(len(validBytes)) {
 		t.Errorf("file size after truncate = %d, want %d", info.Size(), len(validBytes))
+	}
+}
+
+// TestReplay_MalformedWALFilename_Skipped verifies that files ending in .wal but not starting with a number are skipped during replay.
+func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
+	dir := t.TempDir()
+
+	goodPath := segmentPath(dir, 1)
+	good := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
+	writeRecordsToFile(t, goodPath, []*Record{good})
+
+	badPath := filepath.Join(dir, "malformed.wal")
+	bad := &Record{Opcode: OpcodePut, Key: []byte("bad"), Value: []byte("val")}
+	f, err := os.Create(badPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(bad.Marshal())
+	f.Close()
+
+	mem := newMockMemTable()
+	nextID, err := Replay(dir, mem)
+	if err != nil {
+		t.Fatalf("unexpected error replaying: %v", err)
+	}
+	if nextID != 1 {
+		t.Errorf("nextID = %d, want 1", nextID)
+	}
+	if _, ok := mem.puts["good"]; !ok {
+		t.Error("good record was not applied")
+	}
+	if _, ok := mem.puts["bad"]; ok {
+		t.Error("bad record in malformed file was replayed, but should have been skipped")
 	}
 }

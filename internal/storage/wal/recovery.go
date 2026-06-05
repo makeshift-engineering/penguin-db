@@ -47,8 +47,9 @@ func Replay(directory string, engine MemTable) (int, error) {
 
 	for _, fileName := range walFiles {
 		var segmentID int
-		if _, scanErr := fmt.Sscanf(fileName, "%d.wal", &segmentID); scanErr != nil {
-			return 0, fmt.Errorf("invalid WAL filename %s: %w", fileName, scanErr)
+		if n, _ := fmt.Sscanf(fileName, "%d.wal", &segmentID); n != 1 {
+			slog.Debug("skipping WAL file with unexpected name format", "file", fileName)
+			continue
 		}
 		if segmentID > highestSegmentID {
 			highestSegmentID = segmentID
