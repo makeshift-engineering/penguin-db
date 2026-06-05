@@ -84,7 +84,7 @@ func replayFile(filePath string, engine MemTable) (err error) {
 		}
 	}()
 
-	var validBytes int64 = 0
+	var validBytes int64
 	var recordsRecovered int
 	headerBuffer := make([]byte, 8)
 

@@ -7,7 +7,7 @@ import (
 
 const (
 	// OpcodePut represents a put/insert operation in the WAL.
-	OpcodePut    uint8 = 0
+	OpcodePut uint8 = 0
 	// OpcodeDelete represents a delete operation in the WAL.
 	OpcodeDelete uint8 = 1
 )
