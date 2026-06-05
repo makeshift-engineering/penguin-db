@@ -11,11 +11,16 @@ import (
 	"sort"
 )
 
+// MemTable defines the minimal interface for in-memory storage engine components
+// that can consume replayed WAL records during recovery.
 type MemTable interface {
 	Put(key, value []byte) error
 	Delete(key []byte) error
 }
 
+// Replay scans the specified WAL directory, identifies all segment files
+// matching the *.wal pattern, and replays their logged operations onto the
+// target MemTable. It returns the highest segment ID found or 1 if fresh.
 func Replay(directory string, engine MemTable) (int, error) {
 	slog.Debug("starting WAL recovery sequence", "directory", directory)
 
@@ -65,6 +70,9 @@ func Replay(directory string, engine MemTable) (int, error) {
 	return highestSegmentID, nil
 }
 
+// replayFile opens a single WAL segment, reads it frame-by-frame, validates
+// check-sums and frame sizes, and applies the operations onto the MemTable.
+// If it encounters corruption or a partial write, it truncates the segment.
 func replayFile(filePath string, engine MemTable) (err error) {
 	file, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
 	if err != nil {

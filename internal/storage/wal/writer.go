@@ -10,11 +10,16 @@ import (
 
 const MaxSegmentSizeBytes int64 = 32 * 1024 * 1024
 
+// commitTicket represents an ingestion task containing serialized record data
+// and a channel to communicate the result of the log write and fsync.
 type commitTicket struct {
 	frameData  []byte
 	resultChan chan error
 }
 
+// LogWriter manages sequential appending to WAL segment files. It coordinates
+// concurrent appends, runs a batching background worker to flush writes, and
+// handles file rotation when a segment exceeds its capacity.
 type LogWriter struct {
 	directory        string
 	activeFile       *os.File
@@ -27,6 +32,8 @@ type LogWriter struct {
 	closeOnce        sync.Once
 }
 
+// NewLogWriter creates a new LogWriter instance, initializing the WAL directory,
+// creating the initial active segment, and launching the background batch worker.
 func NewLogWriter(directory string, nextSegmentID int) (*LogWriter, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to initialize WAL directory structure at %s: %w", directory, err)
@@ -49,6 +56,8 @@ func NewLogWriter(directory string, nextSegmentID int) (*LogWriter, error) {
 	return writer, nil
 }
 
+// rotateActiveFile closes the current active segment file after fsyncing its data,
+// increments the segment ID, and opens a new segment file for write access.
 func (writer *LogWriter) rotateActiveFile() error {
 	if writer.activeFile != nil {
 		if err := writer.activeFile.Sync(); err != nil {
@@ -71,6 +80,8 @@ func (writer *LogWriter) rotateActiveFile() error {
 	return nil
 }
 
+// Append writes a single Record into the Write-Ahead Log. It blocks until the
+// record is durably persisted (written and synced) or the log is closed.
 func (writer *LogWriter) Append(record *Record) error {
 	if len(record.Key) == 0 {
 		return ErrEmptyKey
@@ -98,6 +109,8 @@ func (writer *LogWriter) Append(record *Record) error {
 	}
 }
 
+// batchWorker runs in a background goroutine, receiving commit tickets from the
+// ingestion channel, batching them, writing to the active file, and syncing them.
 func (writer *LogWriter) batchWorker() {
 	defer writer.workerWaitGroup.Done()
 
@@ -154,6 +167,8 @@ func (writer *LogWriter) batchWorker() {
 	}
 }
 
+// Close closes the active WAL segment file, terminates the background worker,
+// and ensures all pending writes have been durably synced to disk.
 func (writer *LogWriter) Close() error {
 	var closeErr error
 	writer.closeOnce.Do(func() {

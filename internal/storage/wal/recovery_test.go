@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// mockMemTable implements the MemTable interface for tracking replayed actions
+// and simulating write failures during recovery tests.
 type mockMemTable struct {
 	puts    map[string][]byte
 	deletes []string
@@ -16,10 +18,12 @@ type mockMemTable struct {
 	delErr  error
 }
 
+// newMockMemTable constructs an empty mockMemTable.
 func newMockMemTable() *mockMemTable {
 	return &mockMemTable{puts: make(map[string][]byte)}
 }
 
+// Put records a put operation or returns an injected failure error.
 func (m *mockMemTable) Put(key, value []byte) error {
 	if m.putErr != nil {
 		return m.putErr
@@ -28,6 +32,7 @@ func (m *mockMemTable) Put(key, value []byte) error {
 	return nil
 }
 
+// Delete records a delete operation or returns an injected failure error.
 func (m *mockMemTable) Delete(key []byte) error {
 	if m.delErr != nil {
 		return m.delErr
@@ -36,6 +41,7 @@ func (m *mockMemTable) Delete(key []byte) error {
 	return nil
 }
 
+// writeRecordsToFile serialized and appends a list of Records to a segment file.
 func writeRecordsToFile(t *testing.T, path string, records []*Record) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -50,10 +56,13 @@ func writeRecordsToFile(t *testing.T, path string, records []*Record) {
 	}
 }
 
+// segmentPath constructs the absolute filepath for a given segment ID.
 func segmentPath(dir string, id int) string {
 	return filepath.Join(dir, fmt.Sprintf("%06d.wal", id))
 }
 
+// TestReplay_NonExistentDirectory_ReturnsFreshSegmentID verifies recovery behaves
+// correctly if the WAL directory does not exist.
 func TestReplay_NonExistentDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "no-such-wal")
 	mem := newMockMemTable()
@@ -70,6 +79,7 @@ func TestReplay_NonExistentDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	}
 }
 
+// TestReplay_EmptyDirectory_ReturnsFreshSegmentID checks recovery on an empty directory.
 func TestReplay_EmptyDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	dir := t.TempDir()
 	mem := newMockMemTable()
@@ -83,6 +93,7 @@ func TestReplay_EmptyDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	}
 }
 
+// TestReplay_NonWALFilesIgnored checks that recovery ignores files without .wal extensions.
 func TestReplay_NonWALFilesIgnored(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"data.sst", "manifest", "000001.log", "LOCK"} {
@@ -100,6 +111,7 @@ func TestReplay_NonWALFilesIgnored(t *testing.T) {
 	}
 }
 
+// TestReplay_SingleSegment_AllPuts checks that a simple segment with Put operations is fully replayed.
 func TestReplay_SingleSegment_AllPuts(t *testing.T) {
 	dir := t.TempDir()
 	records := []*Record{
@@ -124,6 +136,7 @@ func TestReplay_SingleSegment_AllPuts(t *testing.T) {
 	}
 }
 
+// TestReplay_SingleSegment_Deletes checks that Delete operations are replayed.
 func TestReplay_SingleSegment_Deletes(t *testing.T) {
 	dir := t.TempDir()
 	writeRecordsToFile(t, segmentPath(dir, 1), []*Record{
@@ -140,6 +153,7 @@ func TestReplay_SingleSegment_Deletes(t *testing.T) {
 	}
 }
 
+// TestReplay_MultipleSegments_ReplayedInOrder verifies segment logs are recovered in sequential order.
 func TestReplay_MultipleSegments_ReplayedInOrder(t *testing.T) {
 	dir := t.TempDir()
 
@@ -166,6 +180,7 @@ func TestReplay_MultipleSegments_ReplayedInOrder(t *testing.T) {
 	}
 }
 
+// TestReplay_ReturnsHighestSegmentID verifies recovery identifies and returns the highest active segment ID.
 func TestReplay_ReturnsHighestSegmentID(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []int{1, 5, 10} {
@@ -183,6 +198,7 @@ func TestReplay_ReturnsHighestSegmentID(t *testing.T) {
 	}
 }
 
+// TestReplay_UnknownOpcode_Ignored verifies that records with invalid opcodes are ignored during replay.
 func TestReplay_UnknownOpcode_Ignored(t *testing.T) {
 	dir := t.TempDir()
 	writeRecordsToFile(t, segmentPath(dir, 1), []*Record{
@@ -198,6 +214,7 @@ func TestReplay_UnknownOpcode_Ignored(t *testing.T) {
 	}
 }
 
+// TestReplay_CorruptedCRC_TruncatesFile checks that recovery detects CRC mismatches and truncates.
 func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)
@@ -233,6 +250,7 @@ func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 	}
 }
 
+// TestReplay_TruncatedHeader_TruncatesFile checks truncation when the frame header is truncated.
 func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)
@@ -254,6 +272,7 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	}
 }
 
+// TestReplay_TruncatedPayload_TruncatesFile checks truncation when the frame payload is truncated.
 func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)
@@ -282,6 +301,7 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	}
 }
 
+// TestReplay_EmptySegmentFile_NoError checks that an empty WAL segment is handled gracefully.
 func TestReplay_EmptySegmentFile_NoError(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(segmentPath(dir, 1), []byte{}, 0644)
@@ -296,6 +316,7 @@ func TestReplay_EmptySegmentFile_NoError(t *testing.T) {
 	}
 }
 
+// TestReplay_MemTablePutError_PropagatesError checks failure propagation on MemTable Put errors.
 func TestReplay_MemTablePutError_PropagatesError(t *testing.T) {
 	dir := t.TempDir()
 	writeRecordsToFile(t, segmentPath(dir, 1), []*Record{
@@ -310,6 +331,7 @@ func TestReplay_MemTablePutError_PropagatesError(t *testing.T) {
 	}
 }
 
+// TestReplay_MemTableDeleteError_PropagatesError checks failure propagation on MemTable Delete errors.
 func TestReplay_MemTableDeleteError_PropagatesError(t *testing.T) {
 	dir := t.TempDir()
 	writeRecordsToFile(t, segmentPath(dir, 1), []*Record{
@@ -324,6 +346,7 @@ func TestReplay_MemTableDeleteError_PropagatesError(t *testing.T) {
 	}
 }
 
+// TestReplay_MixedPutsAndDeletes_CorrectOrder verifies interleaved Puts/Deletes replay in correct order.
 func TestReplay_MixedPutsAndDeletes_CorrectOrder(t *testing.T) {
 	dir := t.TempDir()
 	mem := newMockMemTable()
@@ -357,6 +380,7 @@ func TestReplay_MixedPutsAndDeletes_CorrectOrder(t *testing.T) {
 	}
 }
 
+// TestReplay_SegmentsSortedNumerically checks sorting logic on WAL segments with double digits.
 func TestReplay_SegmentsSortedNumerically(t *testing.T) {
 	dir := t.TempDir()
 
@@ -379,6 +403,7 @@ func TestReplay_SegmentsSortedNumerically(t *testing.T) {
 	}
 }
 
+// TestReplay_SubdirectoriesAreIgnored verifies subdirectories inside the WAL directory are skipped.
 func TestReplay_SubdirectoriesAreIgnored(t *testing.T) {
 	dir := t.TempDir()
 	subDir := filepath.Join(dir, "archive.wal")
@@ -399,6 +424,7 @@ func TestReplay_SubdirectoriesAreIgnored(t *testing.T) {
 	}
 }
 
+// TestReplay_InvalidFrameSize_TooSmall_TruncatesFile verifies truncation on underflowing frame sizes.
 func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)
@@ -432,6 +458,7 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	}
 }
 
+// TestReplay_InvalidFrameSize_TooLarge_TruncatesFile verifies truncation on excessively large frame sizes.
 func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)

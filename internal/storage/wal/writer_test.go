@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// TestNewLogWriter_CreatesDirectory checks that initializing LogWriter creates the target directory.
 func TestNewLogWriter_CreatesDirectory(t *testing.T) {
 	base := t.TempDir()
 	dir := fmt.Sprintf("%s/nested/wal", base)
@@ -25,6 +26,7 @@ func TestNewLogWriter_CreatesDirectory(t *testing.T) {
 	}
 }
 
+// TestNewLogWriter_CreatesFirstSegmentFile checks that the first log segment is created upon initialization.
 func TestNewLogWriter_CreatesFirstSegmentFile(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -38,6 +40,7 @@ func TestNewLogWriter_CreatesFirstSegmentFile(t *testing.T) {
 	}
 }
 
+// TestNewLogWriter_RespectsStartSegmentID verifies that the writer uses the provided initial segment ID.
 func TestNewLogWriter_RespectsStartSegmentID(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 7)
@@ -51,6 +54,7 @@ func TestNewLogWriter_RespectsStartSegmentID(t *testing.T) {
 	}
 }
 
+// TestNewLogWriter_InvalidDirectory_ReturnsError checks that invalid directories return initialization errors.
 func TestNewLogWriter_InvalidDirectory_ReturnsError(t *testing.T) {
 	tmpFile, err := os.CreateTemp(t.TempDir(), "not-a-dir")
 	if err != nil {
@@ -64,6 +68,7 @@ func TestNewLogWriter_InvalidDirectory_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestAppend_SingleRecord_WrittenToDisk checks that a single record write changes the file size on disk.
 func TestAppend_SingleRecord_WrittenToDisk(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -86,6 +91,7 @@ func TestAppend_SingleRecord_WrittenToDisk(t *testing.T) {
 	}
 }
 
+// TestAppend_MultipleRecords_AllWritten checks that multiple sequential records are successfully appended.
 func TestAppend_MultipleRecords_AllWritten(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -126,6 +132,7 @@ func TestAppend_MultipleRecords_AllWritten(t *testing.T) {
 	}
 }
 
+// TestAppend_RecordRoundtrip_ViaReplay verifies that written records are completely recoverable.
 func TestAppend_RecordRoundtrip_ViaReplay(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -148,6 +155,7 @@ func TestAppend_RecordRoundtrip_ViaReplay(t *testing.T) {
 	}
 }
 
+// TestAppend_AfterClose_ReturnsError checks that writes are rejected after Close is called.
 func TestAppend_AfterClose_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -162,6 +170,7 @@ func TestAppend_AfterClose_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestAppend_EmptyKey_Rejected verifies empty key appends are rejected with ErrEmptyKey.
 func TestAppend_EmptyKey_Rejected(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -176,6 +185,7 @@ func TestAppend_EmptyKey_Rejected(t *testing.T) {
 	}
 }
 
+// TestAppend_NilKey_Rejected verifies nil key appends are rejected with ErrEmptyKey.
 func TestAppend_NilKey_Rejected(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -190,6 +200,7 @@ func TestAppend_NilKey_Rejected(t *testing.T) {
 	}
 }
 
+// TestAppend_EmptyValue_Allowed checks that empty/nil values are allowed in WAL entries.
 func TestAppend_EmptyValue_Allowed(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -204,6 +215,7 @@ func TestAppend_EmptyValue_Allowed(t *testing.T) {
 	}
 }
 
+// TestRotation_NewSegmentCreatedAfterSizeExceeded checks that segment file rotates on limit overrun.
 func TestRotation_NewSegmentCreatedAfterSizeExceeded(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -224,6 +236,7 @@ func TestRotation_NewSegmentCreatedAfterSizeExceeded(t *testing.T) {
 	}
 }
 
+// TestRotation_OldSegmentSyncedOnRotation verifies old segment files are synced upon rotation.
 func TestRotation_OldSegmentSyncedOnRotation(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -257,6 +270,7 @@ func TestRotation_OldSegmentSyncedOnRotation(t *testing.T) {
 	}
 }
 
+// TestRotation_SizeResetAfterRotation verifies that segment size tracking resets after file rotation.
 func TestRotation_SizeResetAfterRotation(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -277,6 +291,7 @@ func TestRotation_SizeResetAfterRotation(t *testing.T) {
 	}
 }
 
+// TestAppend_ConcurrentWrites_NoDataRace validates concurrent WAL writes do not cause data races.
 func TestAppend_ConcurrentWrites_NoDataRace(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -315,6 +330,7 @@ func TestAppend_ConcurrentWrites_NoDataRace(t *testing.T) {
 	}
 }
 
+// TestAppend_ConcurrentWrites_AllRecordsRecoverable verifies all concurrent writes are cleanly replayed.
 func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -355,6 +371,7 @@ func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 	}
 }
 
+// TestClose_IsIdempotent validates that closing multiple times behaves correctly.
 func TestClose_IsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -370,6 +387,7 @@ func TestClose_IsIdempotent(t *testing.T) {
 	}
 }
 
+// TestClose_BlocksUntilWorkerDone checks that Close blocks until background activities terminate.
 func TestClose_BlocksUntilWorkerDone(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -390,6 +408,7 @@ func TestClose_BlocksUntilWorkerDone(t *testing.T) {
 	}
 }
 
+// TestClose_SyncsDataToDisk verifies that closing the log writer flushes in-flight data.
 func TestClose_SyncsDataToDisk(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -414,6 +433,7 @@ func TestClose_SyncsDataToDisk(t *testing.T) {
 	}
 }
 
+// TestMaxSegmentSizeBytes_Is32MB checks the segment size boundary constant.
 func TestMaxSegmentSizeBytes_Is32MB(t *testing.T) {
 	expected := int64(32 * 1024 * 1024)
 	if MaxSegmentSizeBytes != expected {
@@ -421,6 +441,7 @@ func TestMaxSegmentSizeBytes_Is32MB(t *testing.T) {
 	}
 }
 
+// TestBatchWorker_GroupCommit_AllTicketsSignalled verifies that all concurrent ticket requests receive replies.
 func TestBatchWorker_GroupCommit_AllTicketsSignalled(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)

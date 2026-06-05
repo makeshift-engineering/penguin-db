@@ -8,10 +8,13 @@ import (
 	"testing"
 )
 
+// buildValidFrame is a helper that constructs a valid binary frame from a Record.
 func buildValidFrame(r *Record) []byte {
 	return r.Marshal()
 }
 
+// TestMarshal_FrameLayout tests that the layout of the marshaled frame meets
+// specification requirements (proper size, opcode location, and key/value placement).
 func TestMarshal_FrameLayout(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("hello"), Value: []byte("world")}
 	frame := r.Marshal()
@@ -44,6 +47,8 @@ func TestMarshal_FrameLayout(t *testing.T) {
 	}
 }
 
+// TestMarshal_CRCCoversPayload verifies that the CRC-32 checksum is calculated
+// correctly over the rest of the frame payload.
 func TestMarshal_CRCCoversPayload(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("k"), Value: nil}
 	frame := r.Marshal()
@@ -54,6 +59,7 @@ func TestMarshal_CRCCoversPayload(t *testing.T) {
 	}
 }
 
+// TestMarshal_OpcodeDelete verifies that deletion records marshal with OpcodeDelete.
 func TestMarshal_OpcodeDelete(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("mykey"), Value: nil}
 	frame := r.Marshal()
@@ -62,6 +68,7 @@ func TestMarshal_OpcodeDelete(t *testing.T) {
 	}
 }
 
+// TestMarshal_ZeroLengthKey tests marshaling records with empty or nil keys.
 func TestMarshal_ZeroLengthKey(t *testing.T) {
 	cases := []struct {
 		name string
@@ -80,6 +87,7 @@ func TestMarshal_ZeroLengthKey(t *testing.T) {
 	}
 }
 
+// TestMarshal_ZeroLengthValue tests marshaling records with empty or nil values.
 func TestMarshal_ZeroLengthValue(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -100,6 +108,7 @@ func TestMarshal_ZeroLengthValue(t *testing.T) {
 	}
 }
 
+// TestMarshal_LargePayload tests marshalling records with large keys and values.
 func TestMarshal_LargePayload(t *testing.T) {
 	key := bytes.Repeat([]byte("k"), 1024)
 	value := bytes.Repeat([]byte("v"), 4096)
@@ -115,6 +124,8 @@ func TestMarshal_LargePayload(t *testing.T) {
 	}
 }
 
+// TestMarshal_BinaryKeyAndValue ensures that arbitrary binary data is preserved
+// during marshalling and unmarshalling.
 func TestMarshal_BinaryKeyAndValue(t *testing.T) {
 	key := []byte{0x00, 0xFF, 0x7F, 0x80}
 	value := []byte{0x01, 0x02, 0x03}
@@ -133,6 +144,7 @@ func TestMarshal_BinaryKeyAndValue(t *testing.T) {
 	}
 }
 
+// TestMarshal_Idempotent verifies that Marshal output is identical for successive calls.
 func TestMarshal_Idempotent(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("idempotent"), Value: []byte("yes")}
 	if !bytes.Equal(r.Marshal(), r.Marshal()) {
@@ -140,6 +152,7 @@ func TestMarshal_Idempotent(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_RoundTrip_Put checks that a serialized Put record can be accurately reconstructed.
 func TestUnmarshal_RoundTrip_Put(t *testing.T) {
 	original := &Record{Opcode: OpcodePut, Key: []byte("name"), Value: []byte("penguin")}
 	frame := buildValidFrame(original)
@@ -159,6 +172,7 @@ func TestUnmarshal_RoundTrip_Put(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_RoundTrip_Delete checks that a serialized Delete record can be accurately reconstructed.
 func TestUnmarshal_RoundTrip_Delete(t *testing.T) {
 	original := &Record{Opcode: OpcodeDelete, Key: []byte("to-remove"), Value: nil}
 	frame := buildValidFrame(original)
@@ -175,6 +189,7 @@ func TestUnmarshal_RoundTrip_Delete(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_TruncatedFrame_TooShort verifies that short inputs return ErrTruncated.
 func TestUnmarshal_TruncatedFrame_TooShort(t *testing.T) {
 	cases := [][]byte{
 		{},
@@ -189,6 +204,7 @@ func TestUnmarshal_TruncatedFrame_TooShort(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_MinimalFrame_EmptyKeyNoValue verifies parsing of minimally sized frames.
 func TestUnmarshal_MinimalFrame_EmptyKeyNoValue(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte{}, Value: nil}
 	frame := r.Marshal()
@@ -201,6 +217,7 @@ func TestUnmarshal_MinimalFrame_EmptyKeyNoValue(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_CRCCorruption tests that altered headers or payloads result in checksum errors.
 func TestUnmarshal_CRCCorruption(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -223,6 +240,7 @@ func TestUnmarshal_CRCCorruption(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_KeyLengthExceedsFrame checks that key lengths exceeding frame limits are rejected.
 func TestUnmarshal_KeyLengthExceedsFrame(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("ab"), Value: []byte("v")}
 	frame := r.Marshal()
@@ -237,6 +255,7 @@ func TestUnmarshal_KeyLengthExceedsFrame(t *testing.T) {
 	}
 }
 
+// TestUnmarshal_NilValueForDeleteRecord checks that deleted records correctly parse nil values.
 func TestUnmarshal_NilValueForDeleteRecord(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("mykey"), Value: nil}
 	frame := r.Marshal()
@@ -250,6 +269,7 @@ func TestUnmarshal_NilValueForDeleteRecord(t *testing.T) {
 	}
 }
 
+// TestOpcodeValues validates correctness of package opcode constants.
 func TestOpcodeValues(t *testing.T) {
 	if OpcodePut != 0 {
 		t.Errorf("OpcodePut = %d, want 0", OpcodePut)
