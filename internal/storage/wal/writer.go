@@ -145,5 +145,9 @@ func (writer *LogWriter) batchWorker() {
 func (writer *LogWriter) Close() error {
 	close(writer.shutdownSignal)
 	writer.workerWaitGroup.Wait()
-	return writer.activeFile.Close()
+	if writer.activeFile != nil {
+		_ = writer.activeFile.Sync()
+		return writer.activeFile.Close()
+	}
+	return nil
 }
