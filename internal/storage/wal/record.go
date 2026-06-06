@@ -20,24 +20,53 @@ type Record struct {
 	Value  []byte
 }
 
-// Marshal serializes the Record into a binary frame with a 4-byte CRC checksum,
-// a 4-byte frame size header, a 1-byte opcode, a 2-byte key length, and the
-// raw key and value bytes.
+// Define sizes for each field in the frame
+const (
+	checksumSize  = 4
+	frameSizeSize = 4
+	opcodeSize    = 1
+	keyLengthSize = 2
+
+	// Fixed header size is the sum of all fixed-length fields
+	fixedHeaderSize = checksumSize + frameSizeSize + opcodeSize + keyLengthSize
+)
+
+// Define offsets for each field to eliminate magic slice indices
+const (
+	checksumOffset  = 0
+	frameSizeOffset = checksumOffset + checksumSize
+	opcodeOffset    = frameSizeOffset + frameSizeSize
+	keyLengthOffset = opcodeOffset + opcodeSize
+	keyOffset       = keyLengthOffset + keyLengthSize
+)
+
+// Marshal serializes the Record into a binary frame.
+//
+// Frame Layout:
+// +-------------+-------------+----------+------------+-----------+-----------+
+// | Checksum    | Frame Size  | Opcode   | Key Length | Key       | Value     |
+// | (4 bytes)   | (4 bytes)   | (1 byte) | (2 bytes)  | (n bytes) | (m bytes) |
+// +-------------+-------------+----------+------------+-----------+-----------+
+//
+// Note: The Checksum (CRC32) covers all bytes starting from the Frame Size.
 func (record *Record) Marshal() []byte {
-	metadataAndDataSize := 3 + len(record.Key) + len(record.Value)
-	totalFrameSizeBytes := 8 + metadataAndDataSize
+	keyLen := len(record.Key)
+	valLen := len(record.Value)
+
+	totalFrameSizeBytes := fixedHeaderSize + keyLen + valLen
 
 	frameBuffer := make([]byte, totalFrameSizeBytes)
 
-	binary.LittleEndian.PutUint32(frameBuffer[4:8], uint32(totalFrameSizeBytes))
-	frameBuffer[8] = record.Opcode
-	binary.LittleEndian.PutUint16(frameBuffer[9:11], uint16(len(record.Key)))
+	binary.LittleEndian.PutUint32(frameBuffer[frameSizeOffset:opcodeOffset], uint32(totalFrameSizeBytes))
+	frameBuffer[opcodeOffset] = record.Opcode
+	binary.LittleEndian.PutUint16(frameBuffer[keyLengthOffset:keyOffset], uint16(keyLen))
 
-	copy(frameBuffer[11:], record.Key)
-	copy(frameBuffer[11+len(record.Key):], record.Value)
+	copy(frameBuffer[keyOffset:], record.Key)
+	valueOffset := keyOffset + keyLen
+	copy(frameBuffer[valueOffset:], record.Value)
 
-	calculatedChecksum := crc32.ChecksumIEEE(frameBuffer[4:])
-	binary.LittleEndian.PutUint32(frameBuffer[0:4], calculatedChecksum)
+	calculatedChecksum := crc32.ChecksumIEEE(frameBuffer[frameSizeOffset:])
+	binary.LittleEndian.PutUint32(frameBuffer[checksumOffset:frameSizeOffset], calculatedChecksum)
 
 	return frameBuffer
 }
@@ -46,32 +75,34 @@ func (record *Record) Marshal() []byte {
 // Record. It validates the data integrity using the CRC checksum and performs
 // bounds checking on payload lengths.
 func UnmarshalRecord(frameData []byte) (*Record, error) {
-	if len(frameData) < 11 {
+	if len(frameData) < fixedHeaderSize {
 		return nil, ErrTruncated
 	}
 
-	storedChecksum := binary.LittleEndian.Uint32(frameData[0:4])
-	calculatedChecksum := crc32.ChecksumIEEE(frameData[4:])
+	storedChecksum := binary.LittleEndian.Uint32(frameData[checksumOffset:frameSizeOffset])
+	calculatedChecksum := crc32.ChecksumIEEE(frameData[frameSizeOffset:])
 
 	if storedChecksum != calculatedChecksum {
 		return nil, ErrInvalidCRC
 	}
 
-	extractedOpcode := frameData[8]
-	extractedKeyLength := binary.LittleEndian.Uint16(frameData[9:11])
+	extractedOpcode := frameData[opcodeOffset]
+	extractedKeyLength := binary.LittleEndian.Uint16(frameData[keyLengthOffset:keyOffset])
 
-	if len(frameData) < 11+int(extractedKeyLength) {
+	if len(frameData) < fixedHeaderSize+int(extractedKeyLength) {
 		return nil, ErrTruncated
 	}
 
 	extractedKey := make([]byte, extractedKeyLength)
-	copy(extractedKey, frameData[11:11+int(extractedKeyLength)])
+	copy(extractedKey, frameData[keyOffset:keyOffset+int(extractedKeyLength)])
 
-	extractedValueLength := len(frameData) - (11 + int(extractedKeyLength))
+	extractedValueLength := len(frameData) - (fixedHeaderSize + int(extractedKeyLength))
 	var extractedValue []byte
+
 	if extractedValueLength > 0 {
 		extractedValue = make([]byte, extractedValueLength)
-		copy(extractedValue, frameData[11+extractedKeyLength:])
+		valueOffset := keyOffset + int(extractedKeyLength)
+		copy(extractedValue, frameData[valueOffset:])
 	}
 
 	return &Record{
