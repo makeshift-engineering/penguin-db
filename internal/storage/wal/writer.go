@@ -28,7 +28,7 @@ type LogWriter struct {
 	currentSizeBytes int64
 
 	ingestionChannel chan *commitTicket
-	stateMu          sync.RWMutex
+	stateMutex       sync.RWMutex
 	isClosed         bool
 
 	workerWaitGroup sync.WaitGroup
@@ -96,15 +96,15 @@ func (writer *LogWriter) Append(record *Record) error {
 		resultChan: make(chan error, 1),
 	}
 
-	writer.stateMu.RLock()
+	writer.stateMutex.RLock()
 	if writer.isClosed {
-		writer.stateMu.RUnlock()
+		writer.stateMutex.RUnlock()
 		return fmt.Errorf("database engine is currently shutting down, write rejected")
 	}
 
 	slog.Debug("network thread: dropping record into ingestion channel", "frame_size", len(frame))
 	writer.ingestionChannel <- ticket
-	writer.stateMu.RUnlock()
+	writer.stateMutex.RUnlock()
 
 	return <-ticket.resultChan
 }
@@ -133,10 +133,10 @@ func (writer *LogWriter) batchWorker() {
 func (writer *LogWriter) Close() error {
 	var closeErr error
 	writer.closeOnce.Do(func() {
-		writer.stateMu.Lock()
+		writer.stateMutex.Lock()
 		writer.isClosed = true
 		close(writer.ingestionChannel)
-		writer.stateMu.Unlock()
+		writer.stateMutex.Unlock()
 
 		writer.workerWaitGroup.Wait()
 
@@ -182,22 +182,22 @@ func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte)
 
 // gatherBatch pulls tickets from the ingestion channel up to the MaxBatchSizeBytes limit.
 // It takes the first ticket yielded by the range loop and drains the remaining buffered tickets.
-func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, batch []*commitTicket, buffer []byte) ([]*commitTicket, []byte) {
-	batch = batch[:0]
-	buffer = buffer[:0]
+func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commitTicket, inBuffer []byte) (outBatch []*commitTicket, outBuffer []byte) {
+	outBatch = inBatch[:0]
+	outBuffer = inBuffer[:0]
 
-	batch = append(batch, firstTicket)
-	buffer = append(buffer, firstTicket.frameData...)
+	outBatch = append(outBatch, firstTicket)
+	outBuffer = append(outBuffer, firstTicket.frameData...)
 
 	pendingWrites := len(writer.ingestionChannel)
-	for i := 0; i < pendingWrites; i++ {
-		if int64(len(buffer)) >= MaxBatchSizeBytes {
+	for range pendingWrites {
+		if int64(len(outBuffer)) >= MaxBatchSizeBytes {
 			break
 		}
 		ticket := <-writer.ingestionChannel
-		batch = append(batch, ticket)
-		buffer = append(buffer, ticket.frameData...)
+		outBatch = append(outBatch, ticket)
+		outBuffer = append(outBuffer, ticket.frameData...)
 	}
 
-	return batch, buffer
+	return outBatch, outBuffer
 }

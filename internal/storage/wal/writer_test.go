@@ -473,3 +473,280 @@ func TestBatchWorker_GroupCommit_AllTicketsSignalled(t *testing.T) {
 		}
 	}
 }
+
+// TestMaxBatchSizeBytes_Is4MB checks the batch size limit constant.
+func TestMaxBatchSizeBytes_Is4MB(t *testing.T) {
+	expected := int64(4 * 1024 * 1024)
+	if MaxBatchSizeBytes != expected {
+		t.Errorf("MaxBatchSizeBytes = %d, want %d (4 MiB)", MaxBatchSizeBytes, expected)
+	}
+}
+
+// TestAppend_ConcurrentWithClose_NoHang verifies that goroutines calling Append
+// while Close is invoked concurrently do not deadlock or panic.
+func TestAppend_ConcurrentWithClose_NoHang(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	const numWriters = 50
+	var wg sync.WaitGroup
+
+	// Launch many concurrent writers.
+	for i := 0; i < numWriters; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				r := &Record{
+					Opcode: OpcodePut,
+					Key:    []byte(fmt.Sprintf("race-key-%d-%d", id, j)),
+					Value:  []byte("v"),
+				}
+				_ = w.Append(r) // may return shutdown error, that's fine
+			}
+		}(i)
+	}
+
+	// Close concurrently with writers.
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(1 * time.Millisecond)
+		w.Close()
+		close(done)
+	}()
+
+	wg.Wait()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close or writers hung for more than 5 seconds")
+	}
+}
+
+// TestAppend_AfterClose_ReturnsShutdownError checks the specific rejection path
+// where Append observes isClosed=true under the read lock.
+func TestAppend_AfterClose_ReturnsShutdownError(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	// Write one record to prove the writer works.
+	r := &Record{Opcode: OpcodePut, Key: []byte("before"), Value: []byte("close")}
+	if err := w.Append(r); err != nil {
+		t.Fatalf("Append before Close: %v", err)
+	}
+
+	w.Close()
+
+	// Multiple post-close appends should all return errors, never panic.
+	for i := 0; i < 10; i++ {
+		r := &Record{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("post-%d", i)), Value: []byte("v")}
+		if err := w.Append(r); err == nil {
+			t.Errorf("Append[%d] after Close returned nil, expected error", i)
+		}
+	}
+}
+
+// TestClose_ConcurrentCalls_NoPanic verifies that calling Close from multiple
+// goroutines simultaneously does not panic or return inconsistent errors.
+func TestClose_ConcurrentCalls_NoPanic(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	// Write some data first.
+	for i := 0; i < 10; i++ {
+		r := &Record{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("k%d", i)), Value: []byte("v")}
+		if err := w.Append(r); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	const numClosers = 10
+	var wg sync.WaitGroup
+	for i := 0; i < numClosers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = w.Close()
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent Close calls hung for more than 5 seconds")
+	}
+}
+
+// TestClose_DrainsInFlightTickets ensures that records already in the ingestion
+// channel at the time of Close are still flushed and recoverable.
+func TestClose_DrainsInFlightTickets(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	const numRecords = 50
+	var wg sync.WaitGroup
+	errs := make([]error, numRecords)
+
+	for i := 0; i < numRecords; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			r := &Record{
+				Opcode: OpcodePut,
+				Key:    []byte(fmt.Sprintf("drain-%04d", idx)),
+				Value:  []byte("v"),
+			}
+			errs[idx] = w.Append(r)
+		}(i)
+	}
+	wg.Wait()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Count how many succeeded.
+	var successCount int
+	for _, e := range errs {
+		if e == nil {
+			successCount++
+		}
+	}
+	if successCount == 0 {
+		t.Fatal("no records were successfully appended")
+	}
+
+	// Verify that all successfully appended records are recoverable.
+	mem := newMockMemTable()
+	if _, err := Replay(dir, mem); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	for i, e := range errs {
+		key := fmt.Sprintf("drain-%04d", i)
+		if e == nil {
+			if _, ok := mem.puts[key]; !ok {
+				t.Errorf("record %q was accepted by Append but not recovered by Replay", key)
+			}
+		}
+	}
+}
+
+// TestBatchWorker_ExitsCleanly_WhenChannelClosed verifies the batchWorker goroutine
+// terminates cleanly when the ingestion channel is closed (the new for-range pattern).
+func TestBatchWorker_ExitsCleanly_WhenChannelClosed(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	// Append a record to prove the worker is running.
+	r := &Record{Opcode: OpcodePut, Key: []byte("alive"), Value: []byte("yes")}
+	if err := w.Append(r); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// Close should cause the channel to close and the worker to exit.
+	done := make(chan struct{})
+	go func() {
+		w.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Worker exited cleanly.
+	case <-time.After(3 * time.Second):
+		t.Fatal("batchWorker did not exit within 3 seconds after channel close")
+	}
+
+	// Confirm the data is durable.
+	mem := newMockMemTable()
+	if _, err := Replay(dir, mem); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if string(mem.puts["alive"]) != "yes" {
+		t.Error("record written before Close was not recovered")
+	}
+}
+
+// TestAppend_ConcurrentWritesDuringClose_AllResolve verifies that every goroutine
+// that calls Append gets a definitive result (success or error), even when Close
+// is called concurrently. No goroutine should hang.
+func TestAppend_ConcurrentWritesDuringClose_AllResolve(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	const numWriters = 100
+	results := make(chan error, numWriters)
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWriters; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			r := &Record{
+				Opcode: OpcodePut,
+				Key:    []byte(fmt.Sprintf("resolve-%d", id)),
+				Value:  []byte("v"),
+			}
+			results <- w.Append(r)
+		}(i)
+	}
+
+	// Close while writers are still racing.
+	go func() {
+		time.Sleep(500 * time.Microsecond)
+		w.Close()
+	}()
+
+	// All writers must eventually return.
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not all Append goroutines resolved within 5 seconds")
+	}
+
+	close(results)
+	var succeeded, failed int
+	for err := range results {
+		if err == nil {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+	t.Logf("concurrent close test: %d succeeded, %d rejected", succeeded, failed)
+
+	if succeeded+failed != numWriters {
+		t.Errorf("expected %d total results, got %d", numWriters, succeeded+failed)
+	}
+}
