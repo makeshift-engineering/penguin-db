@@ -34,7 +34,17 @@ func (l *Lexer) peek() rune {
 	return l.src[l.pos.index]
 }
 
+func (l *Lexer) peekNext() rune {
+	if l.pos.index+1 >= len(l.src) {
+		return 0
+	}
+	return l.src[l.pos.index+1]
+}
+
 func (l *Lexer) advance() rune {
+	if l.pos.index >= len(l.src) {
+		return 0
+	}
 	ch := l.src[l.pos.index]
 	l.pos.index++
 	if ch == '\n' {
@@ -46,16 +56,57 @@ func (l *Lexer) advance() rune {
 	return ch
 }
 
-// skipWhitespace consumes spaces, tabs, \r, \n
-func (l *Lexer) skipWhitespace() {
+// skipLineComment discards everything from the current position to end-of-line.
+// Precondition: the two leading '-' characters have already been consumed.
+func (l *Lexer) skipLineComment() {
+	for l.pos.index < len(l.src) && l.src[l.pos.index] != '\n' {
+		l.advance()
+	}
+}
+
+// skipBlockComment discards everything up to and including the closing */.
+// Precondition: the opening /* has already been consumed.
+func (l *Lexer) skipBlockComment(openLine, openCol int) error {
+	for l.pos.index < len(l.src) {
+		if l.peek() == '*' && l.peekNext() == '/' {
+			l.advance() // *
+			l.advance() // /
+			return nil
+		}
+		l.advance()
+	}
+	// End of input without finding */
+	return lexErr(ErrUnterminatedComment, l.pos.line, l.pos.column,
+		"expected '*/' to close '/*' opened at %d:%d", openLine, openCol)
+}
+
+// skipWhitespaceAndComments returns an error only for an unterminated block comment.
+// All other skipped content (whitespace, line comments) is infallible.
+func (l *Lexer) skipWhitespaceAndComments() error {
 	for l.pos.index < len(l.src) {
 		ch := l.src[l.pos.index]
-		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+		switch {
+		case ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n':
 			l.advance()
-		} else {
-			break
+
+		case ch == '-' && l.peekNext() == '-':
+			l.advance()
+			l.advance()
+			l.skipLineComment()
+
+		case ch == '/' && l.peekNext() == '*':
+			openLine, openCol := l.pos.line, l.pos.column
+			l.advance()
+			l.advance()
+			if err := l.skipBlockComment(openLine, openCol); err != nil {
+				return err
+			}
+
+		default:
+			return nil
 		}
 	}
+	return nil
 }
 
 // makeToken is a convenience to build a Token with the given fields.
@@ -70,7 +121,7 @@ func (l *Lexer) scanIdentifier() Token {
 	start := l.pos.index
 	for l.pos.index < len(l.src) {
 		ch := l.src[l.pos.index]
-		if isLetter(ch) || isDigit(ch) || ch == '_' {
+		if isIdentPart(ch) {
 			l.advance()
 		} else {
 			break
@@ -80,6 +131,9 @@ func (l *Lexer) scanIdentifier() Token {
 	typ := lookupIdent(lit) // keyword or TOKEN_IDENT
 	return l.makeToken(typ, lit, startLine, startCol)
 }
+
+func isIdentStart(ch rune) bool { return isLetter(ch) || ch == '_' }
+func isIdentPart(ch rune) bool  { return isLetter(ch) || isDigit(ch) || ch == '_' }
 
 func isLetter(ch rune) bool { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') }
 func isDigit(ch rune) bool  { return ch >= '0' && ch <= '9' }
@@ -102,8 +156,8 @@ func (l *Lexer) scanNumber() Token {
 
 	// Decimal check
 	if !isFloat && l.peek() == '.' {
-		nextIdx := l.pos.index + 1
-		if nextIdx >= len(l.src) || isDigit(l.src[nextIdx]) || !isLetter(l.src[nextIdx]) && l.src[nextIdx] != '_' {
+		nextCh := l.peekNext()
+		if nextCh == 0 || isDigit(nextCh) || (!isLetter(nextCh) && nextCh != '_') {
 			isFloat = true
 			l.advance()
 			for l.pos.index < len(l.src) && isDigit((l.src[l.pos.index])) {
@@ -119,112 +173,110 @@ func (l *Lexer) scanNumber() Token {
 	return l.makeToken(TOKEN_INTEGER, lit, startLine, startCol)
 }
 
-func (l *Lexer) scanString() Token {
+func (l *Lexer) scanString() (Token, error) {
 	startLine, startCol := l.pos.line, l.pos.column
-	l.advance()
+	l.advance() // consume opening '
 
 	var buf []rune
 	for {
 		if l.pos.index >= len(l.src) {
-			return l.makeToken(TOKEN_ILLEGAL, string(buf), startLine, startCol)
+			return l.makeToken(TOKEN_ILLEGAL, string(buf), startLine, startCol),
+				lexErr(ErrUnterminatedString, l.pos.line, l.pos.column,
+					"expected closing ' (string opened at %d:%d)", startLine, startCol)
 		}
+
 		ch := l.advance()
 		if ch == '\'' {
-			if l.peek() == '\'' {
+			if l.peek() == '\'' { // '' is the SQL escape for a literal single-quote
 				l.advance()
 				buf = append(buf, '\'')
 			} else {
-				break
+				break // normal close
 			}
 		} else {
 			buf = append(buf, ch)
 		}
 	}
 
-	return l.makeToken(TOKEN_STRING, string(buf), startLine, startCol)
+	return l.makeToken(TOKEN_STRING, string(buf), startLine, startCol), nil
 }
 
-func (l *Lexer) NextToken() Token {
-	l.skipWhitespace()
+func (l *Lexer) NextToken() (Token, error) {
+	if err := l.skipWhitespaceAndComments(); err != nil {
+		return l.makeToken(TOKEN_EOF, "", l.pos.line, l.pos.column), err
+	}
 
 	if l.pos.index >= len(l.src) {
-		return l.makeToken(TOKEN_EOF, "", l.pos.line, l.pos.column)
+		return l.makeToken(TOKEN_EOF, "", l.pos.line, l.pos.column), nil
 	}
 
 	startLine, startCol := l.pos.line, l.pos.column
 	ch := l.peek()
 
-	// Identifier or Keyword
-	if isLetter(ch) {
-		return l.scanIdentifier()
+	if isIdentStart(ch) {
+		return l.scanIdentifier(), nil
 	}
-
-	// Number
 	if isDigit(ch) {
-		return l.scanNumber()
+		return l.scanNumber(), nil
 	}
-
 	if ch == '.' {
-		nextIdx := l.pos.index + 1
-		if nextIdx < len(l.src) && isDigit(l.src[nextIdx]) {
-			return l.scanNumber()
+		if next := l.peekNext(); next != 0 && isDigit(next) {
+			return l.scanNumber(), nil
 		}
 		l.advance()
-		return l.makeToken(TOKEN_DOT, ".", startLine, startCol)
+		return l.makeToken(TOKEN_DOT, ".", startLine, startCol), nil
 	}
-
-	// String literal
 	if ch == '\'' {
 		return l.scanString()
 	}
 
-	// Single character
 	l.advance()
 	switch ch {
 	case '(':
-		return l.makeToken(TOKEN_LPAREN, "(", startLine, startCol)
+		return l.makeToken(TOKEN_LPAREN, "(", startLine, startCol), nil
 	case ')':
-		return l.makeToken(TOKEN_RPAREN, ")", startLine, startCol)
+		return l.makeToken(TOKEN_RPAREN, ")", startLine, startCol), nil
 	case ',':
-		return l.makeToken(TOKEN_COMMA, ",", startLine, startCol)
+		return l.makeToken(TOKEN_COMMA, ",", startLine, startCol), nil
 	case ';':
-		return l.makeToken(TOKEN_SEMICOLON, ";", startLine, startCol)
+		return l.makeToken(TOKEN_SEMICOLON, ";", startLine, startCol), nil
 	case '+':
-		return l.makeToken(TOKEN_PLUS, "+", startLine, startCol)
+		return l.makeToken(TOKEN_PLUS, "+", startLine, startCol), nil
 	case '-':
-		return l.makeToken(TOKEN_MINUS, "-", startLine, startCol)
+		return l.makeToken(TOKEN_MINUS, "-", startLine, startCol), nil
 	case '*':
-		return l.makeToken(TOKEN_STAR, "*", startLine, startCol)
+		return l.makeToken(TOKEN_STAR, "*", startLine, startCol), nil
 	case '/':
-		return l.makeToken(TOKEN_SLASH, "/", startLine, startCol)
+		return l.makeToken(TOKEN_SLASH, "/", startLine, startCol), nil
 	case '%':
-		return l.makeToken(TOKEN_PERCENT, "%", startLine, startCol)
+		return l.makeToken(TOKEN_PERCENT, "%", startLine, startCol), nil
 	case '=':
-		return l.makeToken(TOKEN_EQ, "=", startLine, startCol)
+		return l.makeToken(TOKEN_EQ, "=", startLine, startCol), nil
 	// ── Multi-character operators ──
 	case '<':
 		if l.peek() == '=' {
 			l.advance()
-			return l.makeToken(TOKEN_LTE, "<=", startLine, startCol)
+			return l.makeToken(TOKEN_LTE, "<=", startLine, startCol), nil
 		}
 		if l.peek() == '>' {
 			l.advance()
-			return l.makeToken(TOKEN_NEQ, "<>", startLine, startCol)
+			return l.makeToken(TOKEN_NEQ, "<>", startLine, startCol), nil
 		}
-		return l.makeToken(TOKEN_LT, "<", startLine, startCol)
+		return l.makeToken(TOKEN_LT, "<", startLine, startCol), nil
 	case '>':
 		if l.peek() == '=' {
 			l.advance()
-			return l.makeToken(TOKEN_GTE, ">=", startLine, startCol)
+			return l.makeToken(TOKEN_GTE, ">=", startLine, startCol), nil
 		}
-		return l.makeToken(TOKEN_GT, ">", startLine, startCol)
+		return l.makeToken(TOKEN_GT, ">", startLine, startCol), nil
 	case '!':
 		if l.peek() == '=' {
 			l.advance()
-			return l.makeToken(TOKEN_NEQ, "!=", startLine, startCol)
+			return l.makeToken(TOKEN_NEQ, "!=", startLine, startCol), nil
 		}
-		return l.makeToken(TOKEN_ILLEGAL, "!", startLine, startCol)
+		return l.makeToken(TOKEN_ILLEGAL, "!", startLine, startCol), lexErr(ErrUnexpectedChar, startLine, startCol, "'!'; did you mean '!='?")
+
 	default:
-		return l.makeToken(TOKEN_ILLEGAL, string(ch), startLine, startCol)
+		return l.makeToken(TOKEN_ILLEGAL, string(ch), startLine, startCol), lexErr(ErrUnexpectedChar, startLine, startCol, "%q", ch)
 	}
 }
