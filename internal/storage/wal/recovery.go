@@ -102,7 +102,11 @@ func replayFile(filePath string, engine MemTable) (err error) {
 				slog.Debug("unexpected EOF in header, truncating segment",
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes)
-				return file.Truncate(validBytes)
+
+				if truncErr := file.Truncate(validBytes); truncErr != nil {
+					return truncErr
+				}
+				return file.Sync()
 			}
 			return fmt.Errorf("unexpected disk error reading frame header: %w", err)
 		}
@@ -113,7 +117,11 @@ func replayFile(filePath string, engine MemTable) (err error) {
 				"file", filepath.Base(filePath),
 				"frame_size", totalFrameSizeBytes,
 				"valid_bytes", validBytes)
-			return file.Truncate(validBytes)
+
+			if truncErr := file.Truncate(validBytes); truncErr != nil {
+				return truncErr
+			}
+			return file.Sync()
 		}
 		payloadSizeBytes := totalFrameSizeBytes - 8
 
@@ -123,7 +131,11 @@ func replayFile(filePath string, engine MemTable) (err error) {
 			slog.Debug("unexpected EOF in payload, truncating segment",
 				"file", filepath.Base(filePath),
 				"valid_bytes", validBytes)
-			return file.Truncate(validBytes)
+
+			if truncErr := file.Truncate(validBytes); truncErr != nil {
+				return truncErr
+			}
+			return file.Sync()
 		}
 
 		fullFrame := make([]byte, 8+payloadSizeBytes)
@@ -137,7 +149,11 @@ func replayFile(filePath string, engine MemTable) (err error) {
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes,
 					"error", err)
-				return file.Truncate(validBytes)
+
+				if truncErr := file.Truncate(validBytes); truncErr != nil {
+					return truncErr
+				}
+				return file.Sync()
 			}
 			return fmt.Errorf("failed to decode valid frame payload: %w", err)
 		}

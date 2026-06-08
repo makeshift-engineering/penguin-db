@@ -9,6 +9,7 @@ import (
 )
 
 const MaxSegmentSizeBytes int64 = 32 * 1024 * 1024
+const MaxBatchSizeBytes int64 = 4 * 1024 * 1024
 
 // commitTicket represents an ingestion task containing serialized record data
 // and a channel to communicate the result of the log write and fsync.
@@ -27,9 +28,11 @@ type LogWriter struct {
 	currentSizeBytes int64
 
 	ingestionChannel chan *commitTicket
-	shutdownSignal   chan struct{}
-	workerWaitGroup  sync.WaitGroup
-	closeOnce        sync.Once
+	stateMu          sync.RWMutex
+	isClosed         bool
+
+	workerWaitGroup sync.WaitGroup
+	closeOnce       sync.Once
 }
 
 // NewLogWriter creates a new LogWriter instance, initializing the WAL directory,
@@ -43,7 +46,6 @@ func NewLogWriter(directory string, nextSegmentID int) (*LogWriter, error) {
 		directory:        directory,
 		currentSegmentID: nextSegmentID,
 		ingestionChannel: make(chan *commitTicket, 10000),
-		shutdownSignal:   make(chan struct{}),
 	}
 
 	if err := writer.rotateActiveFile(); err != nil {
@@ -94,19 +96,17 @@ func (writer *LogWriter) Append(record *Record) error {
 		resultChan: make(chan error, 1),
 	}
 
-	slog.Debug("network thread: dropping record into ingestion channel", "frame_size", len(frame))
-
-	select {
-	case writer.ingestionChannel <- ticket:
-		select {
-		case err := <-ticket.resultChan:
-			return err
-		case <-writer.shutdownSignal:
-			return fmt.Errorf("database engine is currently shutting down, write rejected")
-		}
-	case <-writer.shutdownSignal:
+	writer.stateMu.RLock()
+	if writer.isClosed {
+		writer.stateMu.RUnlock()
 		return fmt.Errorf("database engine is currently shutting down, write rejected")
 	}
+
+	slog.Debug("network thread: dropping record into ingestion channel", "frame_size", len(frame))
+	writer.ingestionChannel <- ticket
+	writer.stateMu.RUnlock()
+
+	return <-ticket.resultChan
 }
 
 // batchWorker runs in a background goroutine, receiving commit tickets from the
@@ -117,53 +117,14 @@ func (writer *LogWriter) batchWorker() {
 	var commitBatch []*commitTicket
 	var writeBuffer []byte
 
-	for {
-		select {
-		case <-writer.shutdownSignal:
-			return
+	for ticket := range writer.ingestionChannel {
+		commitBatch, writeBuffer = writer.gatherBatch(ticket, commitBatch, writeBuffer)
 
-		case firstTicket := <-writer.ingestionChannel:
-			commitBatch = append(commitBatch[:0], firstTicket)
-			writeBuffer = append(writeBuffer[:0], firstTicket.frameData...)
+		slog.Debug("batch worker: executing group commit",
+			"batch_size", len(commitBatch),
+			"total_bytes", len(writeBuffer))
 
-			pendingWrites := len(writer.ingestionChannel)
-			for i := 0; i < pendingWrites; i++ {
-				ticket := <-writer.ingestionChannel
-				commitBatch = append(commitBatch, ticket)
-				writeBuffer = append(writeBuffer, ticket.frameData...)
-			}
-
-			if writer.currentSizeBytes+int64(len(writeBuffer)) > MaxSegmentSizeBytes {
-				if err := writer.rotateActiveFile(); err != nil {
-					for _, ticket := range commitBatch {
-						ticket.resultChan <- err
-					}
-					continue
-				}
-			}
-
-			slog.Debug("batch worker: executing group commit",
-				"batch_size", len(commitBatch),
-				"total_bytes", len(writeBuffer))
-
-			_, err := writer.activeFile.Write(writeBuffer)
-			if err == nil {
-				err = writer.activeFile.Sync()
-			}
-			if err == nil {
-				writer.currentSizeBytes += int64(len(writeBuffer))
-			}
-
-			if err != nil {
-				slog.Debug("batch worker: fsync failed", "error", err)
-			} else {
-				slog.Debug("batch worker: fsync successful")
-			}
-
-			for _, ticket := range commitBatch {
-				ticket.resultChan <- err
-			}
-		}
+		writer.writeAndSyncBatch(commitBatch, writeBuffer)
 	}
 }
 
@@ -172,8 +133,13 @@ func (writer *LogWriter) batchWorker() {
 func (writer *LogWriter) Close() error {
 	var closeErr error
 	writer.closeOnce.Do(func() {
-		close(writer.shutdownSignal)
+		writer.stateMu.Lock()
+		writer.isClosed = true
+		close(writer.ingestionChannel)
+		writer.stateMu.Unlock()
+
 		writer.workerWaitGroup.Wait()
+
 		if writer.activeFile != nil {
 			if syncErr := writer.activeFile.Sync(); syncErr != nil {
 				closeErr = syncErr
@@ -184,4 +150,54 @@ func (writer *LogWriter) Close() error {
 		}
 	})
 	return closeErr
+}
+
+// writeAndSyncBatch handles the disk I/O, segment rotation, and network thread
+// notification for a gathered batch of records.
+func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte) {
+	if writer.currentSizeBytes+int64(len(buffer)) > MaxSegmentSizeBytes {
+		if err := writer.rotateActiveFile(); err != nil {
+			for _, ticket := range batch {
+				ticket.resultChan <- err
+			}
+			return
+		}
+	}
+
+	_, err := writer.activeFile.Write(buffer)
+	if err == nil {
+		err = writer.activeFile.Sync()
+	}
+
+	if err == nil {
+		writer.currentSizeBytes += int64(len(buffer))
+	} else {
+		slog.Debug("batch worker: fsync/write failed", "error", err)
+	}
+
+	for _, ticket := range batch {
+		ticket.resultChan <- err
+	}
+}
+
+// gatherBatch pulls tickets from the ingestion channel up to the MaxBatchSizeBytes limit.
+// It takes the first ticket yielded by the range loop and drains the remaining buffered tickets.
+func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, batch []*commitTicket, buffer []byte) ([]*commitTicket, []byte) {
+	batch = batch[:0]
+	buffer = buffer[:0]
+
+	batch = append(batch, firstTicket)
+	buffer = append(buffer, firstTicket.frameData...)
+
+	pendingWrites := len(writer.ingestionChannel)
+	for i := 0; i < pendingWrites; i++ {
+		if int64(len(buffer)) >= MaxBatchSizeBytes {
+			break
+		}
+		ticket := <-writer.ingestionChannel
+		batch = append(batch, ticket)
+		buffer = append(buffer, ticket.frameData...)
+	}
+
+	return batch, buffer
 }
