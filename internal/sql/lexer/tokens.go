@@ -7,6 +7,7 @@ import "fmt"
 // TokenType constant.
 type TokenType int
 
+//nolint:revive // We prefer ALL_CAPS for token constants
 const (
 	// Special
 	TOKEN_EOF     TokenType = iota // end of input; always the last token
