@@ -11,17 +11,17 @@ import (
 	"sort"
 )
 
-// MemTable defines the minimal interface for in-memory storage engine components
+// RecordConsumer defines the minimal interface for in-memory storage engine components
 // that can consume replayed WAL records during recovery.
-type MemTable interface {
+type RecordConsumer interface {
 	Put(key, value []byte) error
 	Delete(key []byte) error
 }
 
 // Replay scans the specified WAL directory, identifies all segment files
 // matching the *.wal pattern, and replays their logged operations onto the
-// target MemTable. It returns the highest segment ID found or 1 if fresh.
-func Replay(directory string, engine MemTable) (int, error) {
+// target RecordConsumer. It returns the highest segment ID found or 1 if fresh.
+func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
 	slog.Debug("starting WAL recovery sequence", "directory", directory)
 
 	entries, err := os.ReadDir(directory)
@@ -58,7 +58,7 @@ func Replay(directory string, engine MemTable) (int, error) {
 		filePath := filepath.Join(directory, fileName)
 		slog.Debug("replaying WAL segment", "segment_id", segmentID, "file", fileName)
 
-		if err := replayFile(filePath, engine); err != nil {
+		if err := replayFile(filePath, recordConsumer); err != nil {
 			return 0, fmt.Errorf("critical failure while replaying segment %s: %w", fileName, err)
 		}
 	}
@@ -72,9 +72,9 @@ func Replay(directory string, engine MemTable) (int, error) {
 }
 
 // replayFile opens a single WAL segment, reads it frame-by-frame, validates
-// check-sums and frame sizes, and applies the operations onto the MemTable.
+// check-sums and frame sizes, and applies the operations onto the RecordConsumer.
 // If it encounters corruption or a partial write, it truncates the segment.
-func replayFile(filePath string, engine MemTable) (err error) {
+func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 	file, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("unable to open WAL segment for reading: %w", err)
@@ -88,6 +88,13 @@ func replayFile(filePath string, engine MemTable) (err error) {
 	var validBytes int64
 	var recordsRecovered int
 	headerBuffer := make([]byte, 8)
+
+	truncateAndSync := func() error {
+		if truncErr := file.Truncate(validBytes); truncErr != nil {
+			return truncErr
+		}
+		return file.Sync()
+	}
 
 	for {
 		_, err := io.ReadFull(file, headerBuffer)
@@ -103,10 +110,7 @@ func replayFile(filePath string, engine MemTable) (err error) {
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes)
 
-				if truncErr := file.Truncate(validBytes); truncErr != nil {
-					return truncErr
-				}
-				return file.Sync()
+				return truncateAndSync()
 			}
 			return fmt.Errorf("unexpected disk error reading frame header: %w", err)
 		}
@@ -118,10 +122,7 @@ func replayFile(filePath string, engine MemTable) (err error) {
 				"frame_size", totalFrameSizeBytes,
 				"valid_bytes", validBytes)
 
-			if truncErr := file.Truncate(validBytes); truncErr != nil {
-				return truncErr
-			}
-			return file.Sync()
+			return truncateAndSync()
 		}
 		payloadSizeBytes := totalFrameSizeBytes - 8
 
@@ -132,10 +133,7 @@ func replayFile(filePath string, engine MemTable) (err error) {
 				"file", filepath.Base(filePath),
 				"valid_bytes", validBytes)
 
-			if truncErr := file.Truncate(validBytes); truncErr != nil {
-				return truncErr
-			}
-			return file.Sync()
+			return truncateAndSync()
 		}
 
 		fullFrame := make([]byte, 8+payloadSizeBytes)
@@ -150,21 +148,18 @@ func replayFile(filePath string, engine MemTable) (err error) {
 					"valid_bytes", validBytes,
 					"error", err)
 
-				if truncErr := file.Truncate(validBytes); truncErr != nil {
-					return truncErr
-				}
-				return file.Sync()
+				return truncateAndSync()
 			}
 			return fmt.Errorf("failed to decode valid frame payload: %w", err)
 		}
 
 		switch record.Opcode {
 		case OpcodePut:
-			if putErr := engine.Put(record.Key, record.Value); putErr != nil {
+			if putErr := recordConsumer.Put(record.Key, record.Value); putErr != nil {
 				return fmt.Errorf("memtable rejected recovered put operation: %w", putErr)
 			}
 		case OpcodeDelete:
-			if delErr := engine.Delete(record.Key); delErr != nil {
+			if delErr := recordConsumer.Delete(record.Key); delErr != nil {
 				return fmt.Errorf("memtable rejected recovered delete operation: %w", delErr)
 			}
 		}

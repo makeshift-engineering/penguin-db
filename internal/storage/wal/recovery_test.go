@@ -258,9 +258,9 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)
 
-	writeRecordsToFile(t, path, []*Record{
-		{Opcode: OpcodePut, Key: []byte("ok"), Value: []byte("v")},
-	})
+	good := &Record{Opcode: OpcodePut, Key: []byte("ok"), Value: []byte("v")}
+	validBytes := good.Marshal()
+	writeRecordsToFile(t, path, []*Record{good})
 
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	f.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFF})
@@ -273,6 +273,14 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	if _, ok := mem.puts["ok"]; !ok {
 		t.Error("valid record was not applied")
 	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() != int64(len(validBytes)) {
+		t.Errorf("file size after truncate = %d, want %d", info.Size(), len(validBytes))
+	}
 }
 
 // TestReplay_TruncatedPayload_TruncatesFile checks truncation when the frame payload is truncated.
@@ -280,9 +288,9 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := segmentPath(dir, 1)
 
-	writeRecordsToFile(t, path, []*Record{
-		{Opcode: OpcodePut, Key: []byte("safe"), Value: []byte("data")},
-	})
+	good := &Record{Opcode: OpcodePut, Key: []byte("safe"), Value: []byte("data")}
+	validBytes := good.Marshal()
+	writeRecordsToFile(t, path, []*Record{good})
 
 	fakeKey := []byte("payload-cut")
 	fakeSizeBytes := uint32(8 + 3 + len(fakeKey) + 100)
@@ -301,6 +309,14 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	}
 	if _, ok := mem.puts["safe"]; !ok {
 		t.Error("valid record before truncation point was not applied")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() != int64(len(validBytes)) {
+		t.Errorf("file size after truncate = %d, want %d", info.Size(), len(validBytes))
 	}
 }
 
