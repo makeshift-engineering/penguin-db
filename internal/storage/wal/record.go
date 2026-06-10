@@ -3,6 +3,7 @@ package wal
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"math"
 )
 
 const (
@@ -49,11 +50,23 @@ const (
 // +-------------+-------------+----------+------------+-----------+-----------+
 //
 // Note: The Checksum (CRC32) covers all bytes starting from the Frame Size.
-func (record *Record) Marshal() []byte {
+//
+// Marshal returns ErrKeyTooLarge if the key exceeds math.MaxUint16 bytes, or
+// ErrFrameTooLarge if the total frame size exceeds math.MaxUint32 bytes, since
+// these sizes cannot be represented in the on-disk field widths.
+func (record *Record) Marshal() ([]byte, error) {
 	keyLen := len(record.Key)
 	valLen := len(record.Value)
 
+	if keyLen > math.MaxUint16 {
+		return nil, ErrKeyTooLarge
+	}
+
 	totalFrameSizeBytes := fixedHeaderSize + keyLen + valLen
+
+	if totalFrameSizeBytes > math.MaxUint32 {
+		return nil, ErrFrameTooLarge
+	}
 
 	frameBuffer := make([]byte, totalFrameSizeBytes)
 
@@ -68,7 +81,7 @@ func (record *Record) Marshal() []byte {
 	calculatedChecksum := crc32.ChecksumIEEE(frameBuffer[frameSizeOffset:])
 	binary.LittleEndian.PutUint32(frameBuffer[checksumOffset:frameSizeOffset], calculatedChecksum)
 
-	return frameBuffer
+	return frameBuffer, nil
 }
 
 // UnmarshalRecord deserializes a raw binary frame and reconstructs the original

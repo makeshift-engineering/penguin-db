@@ -50,7 +50,7 @@ func writeRecordsToFile(t *testing.T, path string, records []*Record) {
 	}
 	defer f.Close()
 	for _, r := range records {
-		if _, err := f.Write(r.Marshal()); err != nil {
+		if _, err := f.Write(mustMarshal(t, r)); err != nil {
 			t.Fatalf("writeRecordsToFile write: %v", err)
 		}
 	}
@@ -220,10 +220,10 @@ func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 	path := segmentPath(dir, 1)
 
 	good := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
-	validBytes := good.Marshal()
+	validBytes := mustMarshal(t, good)
 	writeRecordsToFile(t, path, []*Record{good})
 
-	badFrame := (&Record{Opcode: OpcodePut, Key: []byte("bad"), Value: []byte("x")}).Marshal()
+	badFrame := mustMarshal(t, &Record{Opcode: OpcodePut, Key: []byte("bad"), Value: []byte("x")})
 	badFrame[12] ^= 0xFF
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
@@ -259,7 +259,7 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	path := segmentPath(dir, 1)
 
 	good := &Record{Opcode: OpcodePut, Key: []byte("ok"), Value: []byte("v")}
-	validBytes := good.Marshal()
+	validBytes := mustMarshal(t, good)
 	writeRecordsToFile(t, path, []*Record{good})
 
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
@@ -289,7 +289,7 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	path := segmentPath(dir, 1)
 
 	good := &Record{Opcode: OpcodePut, Key: []byte("safe"), Value: []byte("data")}
-	validBytes := good.Marshal()
+	validBytes := mustMarshal(t, good)
 	writeRecordsToFile(t, path, []*Record{good})
 
 	fakeKey := []byte("payload-cut")
@@ -449,7 +449,7 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	path := segmentPath(dir, 1)
 
 	good := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
-	validBytes := good.Marshal()
+	validBytes := mustMarshal(t, good)
 	writeRecordsToFile(t, path, []*Record{good})
 
 	hdr := make([]byte, checksumSize+frameSizeSize)
@@ -486,7 +486,7 @@ func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
 	path := segmentPath(dir, 1)
 
 	good := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
-	validBytes := good.Marshal()
+	validBytes := mustMarshal(t, good)
 	writeRecordsToFile(t, path, []*Record{good})
 
 	hdr := make([]byte, checksumSize+frameSizeSize)
@@ -528,7 +528,7 @@ func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Write(bad.Marshal())
+	f.Write(mustMarshal(t, bad))
 	f.Close()
 
 	mem := newMockRecordConsumer()

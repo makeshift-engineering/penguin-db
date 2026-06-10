@@ -5,19 +5,34 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"math"
 	"testing"
 )
 
+// mustMarshal is a test helper that calls Marshal and fails the test on error.
+func mustMarshal(t *testing.T, r *Record) []byte {
+	t.Helper()
+	frame, err := r.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	return frame
+}
+
 // buildValidFrame is a helper that constructs a valid binary frame from a Record.
 func buildValidFrame(r *Record) []byte {
-	return r.Marshal()
+	frame, err := r.Marshal()
+	if err != nil {
+		panic("buildValidFrame: " + err.Error())
+	}
+	return frame
 }
 
 // TestMarshal_FrameLayout tests that the layout of the marshaled frame meets
 // specification requirements (proper size, opcode location, and key/value placement).
 func TestMarshal_FrameLayout(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("hello"), Value: []byte("world")}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 
 	wantSize := fixedHeaderSize + len(r.Key) + len(r.Value)
 	if len(frame) != wantSize {
@@ -51,7 +66,7 @@ func TestMarshal_FrameLayout(t *testing.T) {
 // correctly over the rest of the frame payload.
 func TestMarshal_CRCCoversPayload(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("k"), Value: nil}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 
 	storedCRC := binary.LittleEndian.Uint32(frame[checksumOffset:frameSizeOffset])
 	if storedCRC != crc32.ChecksumIEEE(frame[frameSizeOffset:]) {
@@ -62,7 +77,7 @@ func TestMarshal_CRCCoversPayload(t *testing.T) {
 // TestMarshal_OpcodeDelete verifies that deletion records marshal with OpcodeDelete.
 func TestMarshal_OpcodeDelete(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("mykey"), Value: nil}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 	if frame[opcodeOffset] != OpcodeDelete {
 		t.Errorf("opcode = %d, want OpcodeDelete (%d)", frame[opcodeOffset], OpcodeDelete)
 	}
@@ -79,7 +94,7 @@ func TestMarshal_ZeroLengthKey(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			frame := (&Record{Opcode: OpcodePut, Key: tc.key, Value: []byte("v")}).Marshal()
+			frame := mustMarshal(t, &Record{Opcode: OpcodePut, Key: tc.key, Value: []byte("v")})
 			if keyLen := binary.LittleEndian.Uint16(frame[keyLengthOffset:keyOffset]); keyLen != 0 {
 				t.Errorf("key length = %d, want 0", keyLen)
 			}
@@ -99,7 +114,7 @@ func TestMarshal_ZeroLengthValue(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Record{Opcode: OpcodePut, Key: []byte("key"), Value: tc.value}
-			frame := r.Marshal()
+			frame := mustMarshal(t, r)
 			wantSize := fixedHeaderSize + len(r.Key)
 			if len(frame) != wantSize {
 				t.Errorf("frame length = %d, want %d", len(frame), wantSize)
@@ -113,7 +128,7 @@ func TestMarshal_LargePayload(t *testing.T) {
 	key := bytes.Repeat([]byte("k"), 1024)
 	value := bytes.Repeat([]byte("v"), 4096)
 	r := &Record{Opcode: OpcodePut, Key: key, Value: value}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 	wantSize := fixedHeaderSize + len(key) + len(value)
 	if len(frame) != wantSize {
 		t.Errorf("frame size = %d, want %d", len(frame), wantSize)
@@ -130,7 +145,7 @@ func TestMarshal_BinaryKeyAndValue(t *testing.T) {
 	key := []byte{0x00, 0xFF, 0x7F, 0x80}
 	value := []byte{0x01, 0x02, 0x03}
 	r := &Record{Opcode: OpcodePut, Key: key, Value: value}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 
 	recovered, err := UnmarshalRecord(frame)
 	if err != nil {
@@ -147,8 +162,34 @@ func TestMarshal_BinaryKeyAndValue(t *testing.T) {
 // TestMarshal_Idempotent verifies that Marshal output is identical for successive calls.
 func TestMarshal_Idempotent(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("idempotent"), Value: []byte("yes")}
-	if !bytes.Equal(r.Marshal(), r.Marshal()) {
+	frame1 := mustMarshal(t, r)
+	frame2 := mustMarshal(t, r)
+	if !bytes.Equal(frame1, frame2) {
 		t.Error("Marshal is not idempotent for the same record")
+	}
+}
+
+// TestMarshal_KeyTooLarge verifies that keys exceeding math.MaxUint16 bytes are rejected.
+func TestMarshal_KeyTooLarge(t *testing.T) {
+	oversizedKey := make([]byte, math.MaxUint16+1)
+	r := &Record{Opcode: OpcodePut, Key: oversizedKey, Value: []byte("v")}
+	_, err := r.Marshal()
+	if !errors.Is(err, ErrKeyTooLarge) {
+		t.Errorf("expected ErrKeyTooLarge, got %v", err)
+	}
+}
+
+// TestMarshal_MaxKeyLength verifies that a key of exactly math.MaxUint16 bytes is accepted.
+func TestMarshal_MaxKeyLength(t *testing.T) {
+	maxKey := make([]byte, math.MaxUint16)
+	r := &Record{Opcode: OpcodePut, Key: maxKey, Value: nil}
+	frame, err := r.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal rejected max-length key: %v", err)
+	}
+	storedKeyLen := binary.LittleEndian.Uint16(frame[keyLengthOffset:keyOffset])
+	if storedKeyLen != math.MaxUint16 {
+		t.Errorf("stored key length = %d, want %d", storedKeyLen, math.MaxUint16)
 	}
 }
 
@@ -207,7 +248,7 @@ func TestUnmarshal_TruncatedFrame_TooShort(t *testing.T) {
 // TestUnmarshal_MinimalFrame_EmptyKeyNoValue verifies parsing of minimally sized frames.
 func TestUnmarshal_MinimalFrame_EmptyKeyNoValue(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte{}, Value: nil}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 	recovered, err := UnmarshalRecord(frame)
 	if err != nil {
 		t.Fatalf("unexpected error for minimal frame: %v", err)
@@ -230,7 +271,7 @@ func TestUnmarshal_CRCCorruption(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Record{Opcode: OpcodePut, Key: []byte("key"), Value: []byte("val")}
-			frame := r.Marshal()
+			frame := mustMarshal(t, r)
 			tc.corruptFn(frame)
 			_, err := UnmarshalRecord(frame)
 			if !errors.Is(err, ErrInvalidCRC) {
@@ -243,7 +284,7 @@ func TestUnmarshal_CRCCorruption(t *testing.T) {
 // TestUnmarshal_KeyLengthExceedsFrame checks that key lengths exceeding frame limits are rejected.
 func TestUnmarshal_KeyLengthExceedsFrame(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("ab"), Value: []byte("v")}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 
 	binary.LittleEndian.PutUint16(frame[keyLengthOffset:keyOffset], 65535)
 	newCRC := crc32.ChecksumIEEE(frame[frameSizeOffset:])
@@ -258,7 +299,7 @@ func TestUnmarshal_KeyLengthExceedsFrame(t *testing.T) {
 // TestUnmarshal_NilValueForDeleteRecord checks that deleted records correctly parse nil values.
 func TestUnmarshal_NilValueForDeleteRecord(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("mykey"), Value: nil}
-	frame := r.Marshal()
+	frame := mustMarshal(t, r)
 
 	recovered, err := UnmarshalRecord(frame)
 	if err != nil {

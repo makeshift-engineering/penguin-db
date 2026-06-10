@@ -89,7 +89,10 @@ func (writer *LogWriter) Append(record *Record) error {
 		return ErrEmptyKey
 	}
 
-	frame := record.Marshal()
+	frame, err := record.Marshal()
+	if err != nil {
+		return err
+	}
 
 	ticket := &commitTicket{
 		frameData:  frame,
