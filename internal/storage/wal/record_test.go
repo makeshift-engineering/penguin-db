@@ -19,30 +19,30 @@ func TestMarshal_FrameLayout(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("hello"), Value: []byte("world")}
 	frame := r.Marshal()
 
-	wantSize := 8 + 3 + len(r.Key) + len(r.Value)
+	wantSize := fixedHeaderSize + len(r.Key) + len(r.Value)
 	if len(frame) != wantSize {
 		t.Fatalf("frame length = %d, want %d", len(frame), wantSize)
 	}
 
-	storedSize := binary.LittleEndian.Uint32(frame[4:8])
+	storedSize := binary.LittleEndian.Uint32(frame[frameSizeOffset:opcodeOffset])
 	if int(storedSize) != wantSize {
 		t.Errorf("stored size field = %d, want %d", storedSize, wantSize)
 	}
 
-	if frame[8] != OpcodePut {
-		t.Errorf("opcode byte = %d, want %d", frame[8], OpcodePut)
+	if frame[opcodeOffset] != OpcodePut {
+		t.Errorf("opcode byte = %d, want %d", frame[opcodeOffset], OpcodePut)
 	}
 
-	storedKeyLen := binary.LittleEndian.Uint16(frame[9:11])
+	storedKeyLen := binary.LittleEndian.Uint16(frame[keyLengthOffset:keyOffset])
 	if int(storedKeyLen) != len(r.Key) {
 		t.Errorf("stored key length = %d, want %d", storedKeyLen, len(r.Key))
 	}
 
-	if !bytes.Equal(frame[11:11+len(r.Key)], r.Key) {
+	if !bytes.Equal(frame[keyOffset:keyOffset+len(r.Key)], r.Key) {
 		t.Error("key bytes mismatch in frame")
 	}
 
-	if !bytes.Equal(frame[11+len(r.Key):], r.Value) {
+	if !bytes.Equal(frame[keyOffset+len(r.Key):], r.Value) {
 		t.Error("value bytes mismatch in frame")
 	}
 }
@@ -53,9 +53,9 @@ func TestMarshal_CRCCoversPayload(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("k"), Value: nil}
 	frame := r.Marshal()
 
-	storedCRC := binary.LittleEndian.Uint32(frame[0:4])
-	if storedCRC != crc32.ChecksumIEEE(frame[4:]) {
-		t.Errorf("CRC mismatch: stored=%d calculated=%d", storedCRC, crc32.ChecksumIEEE(frame[4:]))
+	storedCRC := binary.LittleEndian.Uint32(frame[checksumOffset:frameSizeOffset])
+	if storedCRC != crc32.ChecksumIEEE(frame[frameSizeOffset:]) {
+		t.Errorf("CRC mismatch: stored=%d calculated=%d", storedCRC, crc32.ChecksumIEEE(frame[frameSizeOffset:]))
 	}
 }
 
@@ -63,8 +63,8 @@ func TestMarshal_CRCCoversPayload(t *testing.T) {
 func TestMarshal_OpcodeDelete(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("mykey"), Value: nil}
 	frame := r.Marshal()
-	if frame[8] != OpcodeDelete {
-		t.Errorf("opcode = %d, want OpcodeDelete (%d)", frame[8], OpcodeDelete)
+	if frame[opcodeOffset] != OpcodeDelete {
+		t.Errorf("opcode = %d, want OpcodeDelete (%d)", frame[opcodeOffset], OpcodeDelete)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestMarshal_ZeroLengthKey(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			frame := (&Record{Opcode: OpcodePut, Key: tc.key, Value: []byte("v")}).Marshal()
-			if keyLen := binary.LittleEndian.Uint16(frame[9:11]); keyLen != 0 {
+			if keyLen := binary.LittleEndian.Uint16(frame[keyLengthOffset:keyOffset]); keyLen != 0 {
 				t.Errorf("key length = %d, want 0", keyLen)
 			}
 		})
@@ -100,7 +100,7 @@ func TestMarshal_ZeroLengthValue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Record{Opcode: OpcodePut, Key: []byte("key"), Value: tc.value}
 			frame := r.Marshal()
-			wantSize := 8 + 3 + len(r.Key)
+			wantSize := fixedHeaderSize + len(r.Key)
 			if len(frame) != wantSize {
 				t.Errorf("frame length = %d, want %d", len(frame), wantSize)
 			}
@@ -114,12 +114,12 @@ func TestMarshal_LargePayload(t *testing.T) {
 	value := bytes.Repeat([]byte("v"), 4096)
 	r := &Record{Opcode: OpcodePut, Key: key, Value: value}
 	frame := r.Marshal()
-	wantSize := 8 + 3 + len(key) + len(value)
+	wantSize := fixedHeaderSize + len(key) + len(value)
 	if len(frame) != wantSize {
 		t.Errorf("frame size = %d, want %d", len(frame), wantSize)
 	}
-	storedCRC := binary.LittleEndian.Uint32(frame[0:4])
-	if storedCRC != crc32.ChecksumIEEE(frame[4:]) {
+	storedCRC := binary.LittleEndian.Uint32(frame[checksumOffset:frameSizeOffset])
+	if storedCRC != crc32.ChecksumIEEE(frame[frameSizeOffset:]) {
 		t.Error("CRC invalid for large payload")
 	}
 }
@@ -223,9 +223,9 @@ func TestUnmarshal_CRCCorruption(t *testing.T) {
 		name      string
 		corruptFn func([]byte)
 	}{
-		{"payload byte", func(f []byte) { f[12] ^= 0x01 }},
-		{"crc field", func(f []byte) { f[0] ^= 0xFF }},
-		{"size field", func(f []byte) { binary.LittleEndian.PutUint32(f[4:8], 9999) }},
+		{"payload byte", func(f []byte) { f[keyOffset+1] ^= 0x01 }},
+		{"crc field", func(f []byte) { f[checksumOffset] ^= 0xFF }},
+		{"size field", func(f []byte) { binary.LittleEndian.PutUint32(f[frameSizeOffset:opcodeOffset], 9999) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -245,9 +245,9 @@ func TestUnmarshal_KeyLengthExceedsFrame(t *testing.T) {
 	r := &Record{Opcode: OpcodePut, Key: []byte("ab"), Value: []byte("v")}
 	frame := r.Marshal()
 
-	binary.LittleEndian.PutUint16(frame[9:11], 65535)
-	newCRC := crc32.ChecksumIEEE(frame[4:])
-	binary.LittleEndian.PutUint32(frame[0:4], newCRC)
+	binary.LittleEndian.PutUint16(frame[keyLengthOffset:keyOffset], 65535)
+	newCRC := crc32.ChecksumIEEE(frame[frameSizeOffset:])
+	binary.LittleEndian.PutUint32(frame[checksumOffset:frameSizeOffset], newCRC)
 
 	_, err := UnmarshalRecord(frame)
 	if !errors.Is(err, ErrTruncated) {

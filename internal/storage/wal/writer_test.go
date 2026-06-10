@@ -114,7 +114,7 @@ func TestAppend_MultipleRecords_AllWritten(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestAppend_RecordRoundtrip_ViaReplay(t *testing.T) {
 	}
 	w.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 	wg.Wait()
 	w.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestClose_SyncsDataToDisk(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 	}
 
 	// Verify that all successfully appended records are recoverable.
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -680,7 +680,7 @@ func TestBatchWorker_ExitsCleanly_WhenChannelClosed(t *testing.T) {
 	}
 
 	// Confirm the data is durable.
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}

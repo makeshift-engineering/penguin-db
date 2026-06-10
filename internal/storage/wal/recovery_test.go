@@ -9,22 +9,22 @@ import (
 	"testing"
 )
 
-// mockMemTable implements the MemTable interface for tracking replayed actions
+// mockRecordConsumer implements the RecordConsumer interface for tracking replayed actions
 // and simulating write failures during recovery tests.
-type mockMemTable struct {
+type mockRecordConsumer struct {
 	puts    map[string][]byte
 	deletes []string
 	putErr  error
 	delErr  error
 }
 
-// newMockMemTable constructs an empty mockMemTable.
-func newMockMemTable() *mockMemTable {
-	return &mockMemTable{puts: make(map[string][]byte)}
+// newMockRecordConsumer constructs an empty mockRecordConsumer.
+func newMockRecordConsumer() *mockRecordConsumer {
+	return &mockRecordConsumer{puts: make(map[string][]byte)}
 }
 
 // Put records a put operation or returns an injected failure error.
-func (m *mockMemTable) Put(key, value []byte) error {
+func (m *mockRecordConsumer) Put(key, value []byte) error {
 	if m.putErr != nil {
 		return m.putErr
 	}
@@ -33,7 +33,7 @@ func (m *mockMemTable) Put(key, value []byte) error {
 }
 
 // Delete records a delete operation or returns an injected failure error.
-func (m *mockMemTable) Delete(key []byte) error {
+func (m *mockRecordConsumer) Delete(key []byte) error {
 	if m.delErr != nil {
 		return m.delErr
 	}
@@ -65,7 +65,7 @@ func segmentPath(dir string, id int) string {
 // correctly if the WAL directory does not exist.
 func TestReplay_NonExistentDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "no-such-wal")
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 
 	nextID, err := Replay(dir, mem)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestReplay_NonExistentDirectory_ReturnsFreshSegmentID(t *testing.T) {
 // TestReplay_EmptyDirectory_ReturnsFreshSegmentID checks recovery on an empty directory.
 func TestReplay_EmptyDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	dir := t.TempDir()
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 
 	nextID, err := Replay(dir, mem)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestReplay_NonWALFilesIgnored(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -121,7 +121,7 @@ func TestReplay_SingleSegment_AllPuts(t *testing.T) {
 	}
 	writeRecordsToFile(t, segmentPath(dir, 1), records)
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -144,7 +144,7 @@ func TestReplay_SingleSegment_Deletes(t *testing.T) {
 		{Opcode: OpcodeDelete, Key: []byte("x")},
 	})
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestReplay_MultipleSegments_ReplayedInOrder(t *testing.T) {
 		{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("seg2")},
 	})
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -188,7 +188,7 @@ func TestReplay_ReturnsHighestSegmentID(t *testing.T) {
 			{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("k%d", id)), Value: []byte("v")},
 		})
 	}
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -205,7 +205,7 @@ func TestReplay_UnknownOpcode_Ignored(t *testing.T) {
 		{Opcode: 99, Key: []byte("k"), Value: []byte("v")},
 	})
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Errorf("unexpected error for unknown opcode: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 	f.Write(badFrame)
 	f.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	f.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFF})
 	f.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -293,17 +293,17 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	writeRecordsToFile(t, path, []*Record{good})
 
 	fakeKey := []byte("payload-cut")
-	fakeSizeBytes := uint32(8 + 3 + len(fakeKey) + 100)
-	hdr := make([]byte, 8)
-	binary.LittleEndian.PutUint32(hdr[4:8], fakeSizeBytes)
-	binary.LittleEndian.PutUint32(hdr[0:4], crc32.ChecksumIEEE(hdr[4:]))
+	fakeSizeBytes := uint32(fixedHeaderSize + len(fakeKey) + 100)
+	hdr := make([]byte, checksumSize+frameSizeSize)
+	binary.LittleEndian.PutUint32(hdr[frameSizeOffset:frameSizeOffset+frameSizeSize], fakeSizeBytes)
+	binary.LittleEndian.PutUint32(hdr[checksumOffset:checksumOffset+checksumSize], crc32.ChecksumIEEE(hdr[frameSizeOffset:]))
 
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	f.Write(hdr)
 	f.Write(fakeKey[:3])
 	f.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestReplay_EmptySegmentFile_NoError(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(segmentPath(dir, 1), []byte{}, 0644)
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error for empty WAL file: %v", err)
@@ -342,7 +342,7 @@ func TestReplay_MemTablePutError_PropagatesError(t *testing.T) {
 		{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("v")},
 	})
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	mem.putErr = fmt.Errorf("memtable full")
 
 	if _, err := Replay(dir, mem); err == nil {
@@ -357,7 +357,7 @@ func TestReplay_MemTableDeleteError_PropagatesError(t *testing.T) {
 		{Opcode: OpcodeDelete, Key: []byte("k")},
 	})
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	mem.delErr = fmt.Errorf("read-only memtable")
 
 	if _, err := Replay(dir, mem); err == nil {
@@ -368,7 +368,7 @@ func TestReplay_MemTableDeleteError_PropagatesError(t *testing.T) {
 // TestReplay_MixedPutsAndDeletes_CorrectOrder verifies interleaved Puts/Deletes replay in correct order.
 func TestReplay_MixedPutsAndDeletes_CorrectOrder(t *testing.T) {
 	dir := t.TempDir()
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 
 	writeRecordsToFile(t, segmentPath(dir, 1), []*Record{
 		{Opcode: OpcodePut, Key: []byte("a"), Value: []byte("1")},
@@ -409,7 +409,7 @@ func TestReplay_SegmentsSortedNumerically(t *testing.T) {
 		})
 	}
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -433,7 +433,7 @@ func TestReplay_SubdirectoriesAreIgnored(t *testing.T) {
 		{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("v")},
 	})
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -452,9 +452,9 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	validBytes := good.Marshal()
 	writeRecordsToFile(t, path, []*Record{good})
 
-	hdr := make([]byte, 8)
-	binary.LittleEndian.PutUint32(hdr[4:8], 7)
-	binary.LittleEndian.PutUint32(hdr[0:4], crc32.ChecksumIEEE(hdr[4:]))
+	hdr := make([]byte, checksumSize+frameSizeSize)
+	binary.LittleEndian.PutUint32(hdr[frameSizeOffset:frameSizeOffset+frameSizeSize], 7)
+	binary.LittleEndian.PutUint32(hdr[checksumOffset:checksumOffset+checksumSize], crc32.ChecksumIEEE(hdr[frameSizeOffset:]))
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
@@ -463,7 +463,7 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	f.Write(hdr)
 	f.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -489,15 +489,15 @@ func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
 	validBytes := good.Marshal()
 	writeRecordsToFile(t, path, []*Record{good})
 
-	hdr := make([]byte, 8)
-	binary.LittleEndian.PutUint32(hdr[4:8], 129*1024*1024)
-	binary.LittleEndian.PutUint32(hdr[0:4], crc32.ChecksumIEEE(hdr[4:]))
+	hdr := make([]byte, checksumSize+frameSizeSize)
+	binary.LittleEndian.PutUint32(hdr[frameSizeOffset:frameSizeOffset+frameSizeSize], 129*1024*1024)
+	binary.LittleEndian.PutUint32(hdr[checksumOffset:checksumOffset+checksumSize], crc32.ChecksumIEEE(hdr[frameSizeOffset:]))
 
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	f.Write(hdr)
 	f.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
 	f.Write(bad.Marshal())
 	f.Close()
 
-	mem := newMockMemTable()
+	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
 	if err != nil {
 		t.Fatalf("unexpected error replaying: %v", err)
