@@ -78,7 +78,14 @@ func (writer *LogWriter) rotateActiveFile() error {
 	}
 
 	writer.activeFile = file
-	writer.currentSizeBytes = 0
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return fmt.Errorf("failed to stat WAL segment %s: %w", segmentPath, err)
+	}
+	writer.currentSizeBytes = info.Size()
+
 	return nil
 }
 

@@ -309,6 +309,51 @@ func TestRotation_SizeResetAfterRotation(t *testing.T) {
 	}
 }
 
+// TestRotation_ReopenedSegment_SizeAccountedFor verifies that when a writer
+// reopens an existing segment (e.g. after recovery), it seeds currentSizeBytes
+// from the file's actual size so the rotation threshold isn't silently bypassed.
+func TestRotation_ReopenedSegment_SizeAccountedFor(t *testing.T) {
+	dir := t.TempDir()
+
+	// Phase 1: Write data to segment 1, then close.
+	w1, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter (phase 1): %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		r := &Record{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("k%d", i)), Value: []byte("v")}
+		if err := w1.Append(r); err != nil {
+			t.Fatalf("Append (phase 1): %v", err)
+		}
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("Close (phase 1): %v", err)
+	}
+
+	// Get actual file size on disk.
+	info, err := os.Stat(segmentPath(dir, 1))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	fileSize := info.Size()
+	if fileSize == 0 {
+		t.Fatal("segment file is unexpectedly empty")
+	}
+
+	// Phase 2: Reopen the same segment (simulating post-recovery).
+	w2, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter (phase 2): %v", err)
+	}
+	defer w2.Close()
+
+	// The writer must account for the preexisting data.
+	if w2.currentSizeBytes != fileSize {
+		t.Errorf("currentSizeBytes = %d, want %d (preexisting file size)",
+			w2.currentSizeBytes, fileSize)
+	}
+}
+
 // TestAppend_ConcurrentWrites_NoDataRace validates concurrent WAL writes do not cause data races.
 func TestAppend_ConcurrentWrites_NoDataRace(t *testing.T) {
 	dir := t.TempDir()
