@@ -215,6 +215,24 @@ func TestAppend_EmptyValue_Allowed(t *testing.T) {
 	}
 }
 
+// TestAppend_InvalidOpcode_Rejected verifies that records with unrecognized opcodes
+// are rejected with ErrInvalidOpcode instead of being silently persisted.
+func TestAppend_InvalidOpcode_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+	defer w.Close()
+
+	for _, opcode := range []uint8{2, 99, 255} {
+		r := &Record{Opcode: opcode, Key: []byte("k"), Value: []byte("v")}
+		if err := w.Append(r); !errors.Is(err, ErrInvalidOpcode) {
+			t.Errorf("opcode %d: expected ErrInvalidOpcode, got %v", opcode, err)
+		}
+	}
+}
+
 // TestRotation_NewSegmentCreatedAfterSizeExceeded checks that segment file rotates on limit overrun.
 func TestRotation_NewSegmentCreatedAfterSizeExceeded(t *testing.T) {
 	dir := t.TempDir()

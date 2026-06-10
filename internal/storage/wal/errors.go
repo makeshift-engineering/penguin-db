@@ -17,6 +17,11 @@ var (
 	// ErrEmptyKey is returned when attempting to write a log record with a zero-length key.
 	ErrEmptyKey = errors.New("wal record rejected: key must not be empty")
 
+	// ErrInvalidOpcode is returned when a record carries an opcode that is not
+	// recognized by the WAL format. Persisting such a record would succeed but
+	// the entry would be silently skipped during recovery replay.
+	ErrInvalidOpcode = errors.New("wal record rejected: unrecognized opcode")
+
 	// ErrKeyTooLarge is returned when the key exceeds the maximum representable
 	// length (math.MaxUint16 bytes) in the on-disk frame format.
 	ErrKeyTooLarge = errors.New("wal record rejected: key length exceeds maximum of " + uitoa(math.MaxUint16) + " bytes")

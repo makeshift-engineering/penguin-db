@@ -89,6 +89,10 @@ func (writer *LogWriter) Append(record *Record) error {
 		return ErrEmptyKey
 	}
 
+	if record.Opcode != OpcodePut && record.Opcode != OpcodeDelete {
+		return ErrInvalidOpcode
+	}
+
 	frame, err := record.Marshal()
 	if err != nil {
 		return err
