@@ -14,7 +14,7 @@ type BloomFilter struct {
 }
 
 // New creates a Bloom filter optimized for the given number of keys and bits per key.
-func NewBloomFilter(numKeys int, bitsPerKey int) *BloomFilter {
+func NewBloomFilter(numKeys, bitsPerKey int) *BloomFilter {
 	if numKeys < 0 {
 		numKeys = 0
 	}
@@ -80,20 +80,20 @@ func (f *BloomFilter) MayContain(key []byte) bool {
 	return true
 }
 
-func (bf *BloomFilter) Bytes() []byte {
-	return bf.bits
+func (f *BloomFilter) Bytes() []byte {
+	return f.bits
 }
 
-func (bf *BloomFilter) NumHashes() uint8 {
-	return bf.numHashes
+func (f *BloomFilter) NumHashes() uint8 {
+	return f.numHashes
 }
 
 // hash is an internal helper to generate the two base hashes using FNV-1a.
-func (f *BloomFilter) hash(key []byte) (uint32, uint32) {
+func (f *BloomFilter) hash(key []byte) (h1, h2 uint32) {
 	hasher := fnv.New32a()
 
 	hasher.Write(key)
-	h1 := hasher.Sum32()
+	h1 = hasher.Sum32()
 
 	hasher.Reset()
 
@@ -103,7 +103,7 @@ func (f *BloomFilter) hash(key []byte) (uint32, uint32) {
 	h1Bytes[4] = 0x01 // Arbitrary salt byte
 
 	hasher.Write(h1Bytes)
-	h2 := hasher.Sum32()
+	h2 = hasher.Sum32()
 
 	return h1, h2
 }
