@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
 // ---------- helpers ----------------------------------------------------------
@@ -666,25 +668,25 @@ func TestNextToken_NoWhitespace(t *testing.T) {
 
 // ---------- LexError structure -----------------------------------------------
 
-func TestLexError_ErrorMessage(t *testing.T) {
-	e := lexErr(ErrUnexpectedChar, 5, 10, "'@'")
-	want := "5:10: unexpected character: '@'"
+func TestDiagnostic_ErrorMessage(t *testing.T) {
+	e := diagnostic.New(ErrUnexpectedChar, 5, 10, "unexpected character: %q", "@")
+	want := "5:10: E1001: unexpected character: \"@\""
 	if e.Error() != want {
 		t.Errorf("got %q, want %q", e.Error(), want)
 	}
 }
 
-func TestLexError_Unwrap(t *testing.T) {
-	e := lexErr(ErrUnterminatedString, 1, 1, "detail")
+func TestDiagnostic_Unwrap(t *testing.T) {
+	e := diagnostic.New(ErrUnterminatedString, 1, 1, "detail")
 	if !errors.Is(e, ErrUnterminatedString) {
-		t.Error("errors.Is should match sentinel")
+		t.Error("errors.Is should match sentinel Code")
 	}
-	var le *LexError
-	if !errors.As(e, &le) {
-		t.Error("errors.As should succeed for *LexError")
+	var diag diagnostic.Diagnostic
+	if !errors.As(e, &diag) {
+		t.Error("errors.As should succeed for diagnostic.Diagnostic")
 	}
-	if le.Line != 1 || le.Col != 1 {
-		t.Errorf("position: got %d:%d, want 1:1", le.Line, le.Col)
+	if diag.Line != 1 || diag.Col != 1 {
+		t.Errorf("position: got %d:%d, want 1:1", diag.Line, diag.Col)
 	}
 }
 

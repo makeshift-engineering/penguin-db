@@ -1,5 +1,7 @@
 package lexer
 
+import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+
 // Position represents a position in the source input.
 // It tracks three values:
 //
@@ -15,8 +17,9 @@ type position struct {
 
 // Lexer tokenizes SQL source text into a stream of Tokens
 type Lexer struct {
-	src []rune   // full input as runes
-	pos position // current read cursor(line, col, index)
+	src  []rune   // full input as runes
+	pos  position // current read cursor(line, col, index)
+	Diag diagnostic.List
 }
 
 // NewLexer creates a Lexer fro the given SQL source string
@@ -25,6 +28,12 @@ func NewLexer(src string) *Lexer {
 		src: []rune(src),
 		pos: position{0, 1, 1},
 	}
+}
+
+func (l *Lexer) addError(code diagnostic.Code, line, col int, format string, args ...any) diagnostic.Diagnostic {
+	diag := diagnostic.New(code, line, col, format, args...)
+	l.Diag = append(l.Diag, diag)
+	return diag
 }
 
 func (l *Lexer) peek() rune {
@@ -76,7 +85,7 @@ func (l *Lexer) skipBlockComment(openLine, openCol int) error {
 		l.advance()
 	}
 	// End of input without finding */
-	return lexErr(ErrUnterminatedComment, l.pos.line, l.pos.column,
+	return l.addError(ErrUnterminatedComment, l.pos.line, l.pos.column,
 		"expected '*/' to close '/*' opened at %d:%d", openLine, openCol)
 }
 
@@ -181,7 +190,7 @@ func (l *Lexer) scanString() (Token, error) {
 	for {
 		if l.pos.index >= len(l.src) {
 			return l.makeToken(TOKEN_ILLEGAL, string(buf), startLine, startCol),
-				lexErr(ErrUnterminatedString, l.pos.line, l.pos.column,
+				l.addError(ErrUnterminatedString, l.pos.line, l.pos.column,
 					"expected closing ' (string opened at %d:%d)", startLine, startCol)
 		}
 
@@ -274,9 +283,9 @@ func (l *Lexer) NextToken() (Token, error) {
 			l.advance()
 			return l.makeToken(TOKEN_NEQ, "!=", startLine, startCol), nil
 		}
-		return l.makeToken(TOKEN_ILLEGAL, "!", startLine, startCol), lexErr(ErrUnexpectedChar, startLine, startCol, "'!'; did you mean '!='?")
+		return l.makeToken(TOKEN_ILLEGAL, "!", startLine, startCol), l.addError(ErrUnexpectedChar, startLine, startCol, "'!'; did you mean '!='?")
 
 	default:
-		return l.makeToken(TOKEN_ILLEGAL, string(ch), startLine, startCol), lexErr(ErrUnexpectedChar, startLine, startCol, "%q", ch)
+		return l.makeToken(TOKEN_ILLEGAL, string(ch), startLine, startCol), l.addError(ErrUnexpectedChar, startLine, startCol, "%q", ch)
 	}
 }
