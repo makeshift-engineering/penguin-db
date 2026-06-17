@@ -46,6 +46,9 @@ func NewBloomFilter(numKeys, bitsPerKey int) *BloomFilter {
 
 // Add inserts a key into the Bloom filter.
 func (f *BloomFilter) Add(key []byte) {
+	if f == nil || f.totalBitCount <= 0 || len(f.bits) == 0 || f.numHashes == 0 {
+		return
+	}
 	baseHash1, baseHash2 := f.hash(key)
 
 	for i := uint8(0); i < f.numHashes; i++ {
@@ -62,6 +65,9 @@ func (f *BloomFilter) Add(key []byte) {
 
 // MayContain returns true if the key might be in the filter, false if it is definitely absent.
 func (f *BloomFilter) MayContain(key []byte) bool {
+	if f == nil || f.totalBitCount <= 0 || len(f.bits) == 0 || f.numHashes == 0 {
+		return false
+	}
 	baseHash1, baseHash2 := f.hash(key)
 
 	for i := uint8(0); i < f.numHashes; i++ {
@@ -81,7 +87,9 @@ func (f *BloomFilter) MayContain(key []byte) bool {
 }
 
 func (f *BloomFilter) Bytes() []byte {
-	return f.bits
+	out := make([]byte, len(f.bits))
+	copy(out, f.bits)
+	return out
 }
 
 func (f *BloomFilter) NumHashes() uint8 {

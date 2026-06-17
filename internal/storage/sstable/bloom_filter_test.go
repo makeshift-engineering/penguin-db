@@ -117,7 +117,9 @@ func TestBloomFilter_LargeKey(t *testing.T) {
 	bf := NewBloomFilter(100, bitsPerKey)
 
 	largeKey := make([]byte, 1024*1024) // 1MB
-	rand.Read(largeKey)
+	if _, err := rand.Read(largeKey); err != nil {
+		t.Fatalf("failed to generate random key: %v", err)
+	}
 
 	bf.Add(largeKey)
 
@@ -532,5 +534,71 @@ func TestBloomFilter_HighBitsPerKey(t *testing.T) {
 
 	if fpr > 0.001 {
 		t.Errorf("FPR too high for 50 bits/key: got %.6f, want <= 0.001", fpr)
+	}
+}
+
+// TestBloomFilter_NilReceiver verifies that calling Add and MayContain on a
+// nil *BloomFilter does not panic. MayContain should return false (fail closed).
+func TestBloomFilter_NilReceiver(t *testing.T) {
+	var bf *BloomFilter // nil
+
+	// Must not panic
+	bf.Add([]byte("key"))
+
+	if bf.MayContain([]byte("key")) {
+		t.Errorf("MayContain on nil receiver should return false")
+	}
+}
+
+// TestBloomFilter_ZeroValueStruct verifies that a zero-value BloomFilter
+// (not created via NewBloomFilter) fails closed: MayContain returns false
+// for any key, and Add is a safe no-op.
+func TestBloomFilter_ZeroValueStruct(t *testing.T) {
+	var bf BloomFilter // zero value: bits=nil, numHashes=0, totalBitCount=0
+
+	// Add must not panic on a zero-value filter
+	bf.Add([]byte("key"))
+
+	// MayContain must return false, not true (the pre-guard bug)
+	if bf.MayContain([]byte("key")) {
+		t.Errorf("MayContain on zero-value struct should return false, got true")
+	}
+	if bf.MayContain([]byte("other")) {
+		t.Errorf("MayContain on zero-value struct should return false for any key")
+	}
+}
+
+// TestBloomFilter_ZeroNumHashes verifies that a filter with allocated bits
+// but zero hash functions fails closed rather than vacuously returning true.
+func TestBloomFilter_ZeroNumHashes(t *testing.T) {
+	bf := &BloomFilter{
+		bits:          make([]byte, 8),
+		numHashes:     0,
+		totalBitCount: 64,
+	}
+
+	// Add should be a no-op (no hashes to compute)
+	bf.Add([]byte("key"))
+
+	// MayContain must return false, not fall through to true
+	if bf.MayContain([]byte("key")) {
+		t.Errorf("MayContain with zero numHashes should return false")
+	}
+}
+
+// TestBloomFilter_EmptyBitsSlice verifies that a filter with numHashes > 0
+// but an empty bits slice does not panic on Add or MayContain.
+func TestBloomFilter_EmptyBitsSlice(t *testing.T) {
+	bf := &BloomFilter{
+		bits:          []byte{},
+		numHashes:     7,
+		totalBitCount: 64,
+	}
+
+	// Must not panic
+	bf.Add([]byte("key"))
+
+	if bf.MayContain([]byte("key")) {
+		t.Errorf("MayContain with empty bits should return false")
 	}
 }
