@@ -3,14 +3,32 @@ package wal
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 )
 
-const MaxSegmentSizeBytes int64 = 32 * 1024 * 1024
-const MaxBatchSizeBytes int64 = 4 * 1024 * 1024
+const (
+	// maxFrameSizeBytes is the upper bound on a single serialized WAL frame.
+	// It is the single source of truth: MaxSegmentSizeBytes is derived from it,
+	// ensuring a record can never be larger than one segment.
+	maxFrameSizeBytes = 32 * 1024 * 1024 // 32 MiB
+
+	// MaxSegmentSizeBytes is the maximum size a WAL segment file may grow to
+	// before the writer rotates to a new segment.
+	MaxSegmentSizeBytes int64 = maxFrameSizeBytes
+
+	// MaxBatchSizeBytes is the maximum number of bytes gathered into a single
+	// group-commit batch before writing to disk.
+	MaxBatchSizeBytes int64 = 4 * 1024 * 1024
+
+	// ingestChannelCapacity is the number of in-flight uncommitted tickets that
+	// can queue in the ingestion channel before callers block. Sized to absorb
+	// burst writes at typical database workloads (~10k concurrent operations).
+	ingestChannelCapacity = 10_000
+)
 
 // commitTicket represents an ingestion task containing serialized record data
 // and a channel to communicate the result of the log write and fsync.
@@ -27,6 +45,7 @@ type LogWriter struct {
 	activeFile       *os.File
 	currentSegmentID int
 	currentSizeBytes int64
+	options          Options
 
 	ingestionChannel chan *commitTicket
 	stateMutex       sync.RWMutex
@@ -36,17 +55,82 @@ type LogWriter struct {
 	closeOnce       sync.Once
 }
 
+// Options configures the behavior of a LogWriter.
+type Options struct {
+	// SegmentSizeBytes is the maximum size a WAL segment file may grow to
+	// before the writer rotates to a new segment.
+	SegmentSizeBytes int64
+
+	// BatchSizeBytes is the maximum number of bytes gathered into a single
+	// group-commit batch before writing to disk.
+	BatchSizeBytes int64
+
+	// IngestChannelCapacity is the number of in-flight uncommitted tickets that
+	// can queue in the ingestion channel before callers block.
+	IngestChannelCapacity int
+}
+
+// DefaultOptions returns the default configuration options for LogWriter.
+func DefaultOptions() Options {
+	return Options{
+		SegmentSizeBytes:      MaxSegmentSizeBytes,
+		BatchSizeBytes:        MaxBatchSizeBytes,
+		IngestChannelCapacity: ingestChannelCapacity,
+	}
+}
+
+// Option is a functional option for configuring a LogWriter.
+type Option func(*Options)
+
+// WithSegmentSizeBytes sets the maximum segment size.
+func WithSegmentSizeBytes(size int64) Option {
+	return func(o *Options) {
+		o.SegmentSizeBytes = size
+	}
+}
+
+// WithBatchSizeBytes sets the maximum batch size for group commits.
+func WithBatchSizeBytes(size int64) Option {
+	return func(o *Options) {
+		o.BatchSizeBytes = size
+	}
+}
+
+// WithIngestChannelCapacity sets the ingestion channel capacity.
+func WithIngestChannelCapacity(capacity int) Option {
+	return func(o *Options) {
+		o.IngestChannelCapacity = capacity
+	}
+}
+
 // NewLogWriter creates a new LogWriter instance, initializing the WAL directory,
 // creating the initial active segment, and launching the background batch worker.
-func NewLogWriter(directory string, nextSegmentID int) (*LogWriter, error) {
+// Configuration can be customized by passing Option functional parameters.
+func NewLogWriter(directory string, nextSegmentID int, opts ...Option) (*LogWriter, error) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to initialize WAL directory structure at %s: %w", directory, err)
+	}
+
+	options := DefaultOptions()
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	if options.SegmentSizeBytes <= 0 {
+		return nil, fmt.Errorf("SegmentSizeBytes must be greater than 0")
+	}
+	if options.BatchSizeBytes <= 0 {
+		return nil, fmt.Errorf("BatchSizeBytes must be greater than 0")
+	}
+	if options.IngestChannelCapacity <= 0 {
+		return nil, fmt.Errorf("IngestChannelCapacity must be greater than 0")
 	}
 
 	writer := &LogWriter{
 		directory:        directory,
 		currentSegmentID: nextSegmentID,
-		ingestionChannel: make(chan *commitTicket, 10000),
+		options:          options,
+		ingestionChannel: make(chan *commitTicket, options.IngestChannelCapacity),
 	}
 
 	if err := writer.rotateActiveFile(); err != nil {
@@ -78,18 +162,14 @@ func (writer *LogWriter) rotateActiveFile() error {
 		return fmt.Errorf("failed to open new WAL segment %s: %w", segmentPath, err)
 	}
 
-	writer.activeFile = file
-
 	info, err := file.Stat()
 	if err != nil {
-		writer.activeFile = nil
-		if closeErr := file.Close(); closeErr != nil {
-			return fmt.Errorf("failed to stat WAL segment %s: %w", segmentPath, errors.Join(err, closeErr))
-		}
-		return fmt.Errorf("failed to stat WAL segment %s: %w", segmentPath, err)
+		closeErr := file.Close()
+		return fmt.Errorf("failed to stat WAL segment %s: %w", segmentPath, errors.Join(err, closeErr))
 	}
-	writer.currentSizeBytes = info.Size()
 
+	writer.activeFile = file
+	writer.currentSizeBytes = info.Size()
 	return nil
 }
 
@@ -117,10 +197,10 @@ func (writer *LogWriter) Append(record *Record) error {
 	writer.stateMutex.RLock()
 	if writer.isClosed {
 		writer.stateMutex.RUnlock()
-		return fmt.Errorf("database engine is currently shutting down, write rejected")
+		return ErrWriterClosed
 	}
 
-	slog.Debug("network thread: dropping record into ingestion channel", "frame_size", len(frame))
+	slog.Debug("caller: enqueuing record into ingestion channel", "frame_size", len(frame))
 	writer.ingestionChannel <- ticket
 	writer.stateMutex.RUnlock()
 
@@ -159,21 +239,18 @@ func (writer *LogWriter) Close() error {
 		writer.workerWaitGroup.Wait()
 
 		if writer.activeFile != nil {
-			if syncErr := writer.activeFile.Sync(); syncErr != nil {
-				closeErr = syncErr
-			}
-			if err := writer.activeFile.Close(); err != nil && closeErr == nil {
-				closeErr = err
-			}
+			syncErr := writer.activeFile.Sync()
+			fileCloseErr := writer.activeFile.Close()
+			closeErr = errors.Join(syncErr, fileCloseErr)
 		}
 	})
 	return closeErr
 }
 
-// writeAndSyncBatch handles the disk I/O, segment rotation, and network thread
+// writeAndSyncBatch handles the disk I/O, segment rotation, and caller goroutine
 // notification for a gathered batch of records.
 func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte) {
-	if writer.currentSizeBytes+int64(len(buffer)) > MaxSegmentSizeBytes {
+	if writer.currentSizeBytes+int64(len(buffer)) > writer.options.SegmentSizeBytes {
 		if err := writer.rotateActiveFile(); err != nil {
 			for _, ticket := range batch {
 				ticket.resultChan <- err
@@ -182,7 +259,10 @@ func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte)
 		}
 	}
 
-	_, err := writer.activeFile.Write(buffer)
+	n, err := writer.activeFile.Write(buffer)
+	if err == nil && n < len(buffer) {
+		err = io.ErrShortWrite
+	}
 	if err == nil {
 		err = writer.activeFile.Sync()
 	}
@@ -209,7 +289,7 @@ func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commi
 
 	pendingWrites := len(writer.ingestionChannel)
 	for range pendingWrites {
-		if int64(len(outBuffer)) >= MaxBatchSizeBytes {
+		if int64(len(outBuffer)) >= writer.options.BatchSizeBytes {
 			break
 		}
 		ticket := <-writer.ingestionChannel

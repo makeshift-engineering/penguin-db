@@ -229,8 +229,12 @@ func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Write(badFrame)
-	f.Close()
+	if _, err := f.Write(badFrame); err != nil {
+		t.Fatalf("write bad frame: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
@@ -262,9 +266,16 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	validBytes := mustMarshal(t, good)
 	writeRecordsToFile(t, path, []*Record{good})
 
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
-	f.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFF})
-	f.Close()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open for header append: %v", err)
+	}
+	if _, err := f.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFF}); err != nil {
+		t.Fatalf("write truncated header: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
@@ -298,10 +309,19 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	binary.LittleEndian.PutUint32(hdr[frameSizeOffset:frameSizeOffset+frameSizeSize], fakeSizeBytes)
 	binary.LittleEndian.PutUint32(hdr[checksumOffset:checksumOffset+checksumSize], crc32.ChecksumIEEE(hdr[frameSizeOffset:]))
 
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
-	f.Write(hdr)
-	f.Write(fakeKey[:3])
-	f.Close()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open for payload append: %v", err)
+	}
+	if _, err := f.Write(hdr); err != nil {
+		t.Fatalf("write hdr: %v", err)
+	}
+	if _, err := f.Write(fakeKey[:3]); err != nil {
+		t.Fatalf("write partial payload: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
@@ -323,7 +343,9 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 // TestReplay_EmptySegmentFile_NoError checks that an empty WAL segment is handled gracefully.
 func TestReplay_EmptySegmentFile_NoError(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(segmentPath(dir, 1), []byte{}, 0644)
+	if err := os.WriteFile(segmentPath(dir, 1), []byte{}, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
@@ -460,8 +482,12 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Write(hdr)
-	f.Close()
+	if _, err := f.Write(hdr); err != nil {
+		t.Fatalf("write hdr (TooSmall): %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
@@ -490,12 +516,20 @@ func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
 	writeRecordsToFile(t, path, []*Record{good})
 
 	hdr := make([]byte, checksumSize+frameSizeSize)
-	binary.LittleEndian.PutUint32(hdr[frameSizeOffset:frameSizeOffset+frameSizeSize], 129*1024*1024)
+	// Frame size must exceed maxFrameSizeBytes (32 MiB); use 33 MiB.
+	binary.LittleEndian.PutUint32(hdr[frameSizeOffset:frameSizeOffset+frameSizeSize], 33*1024*1024)
 	binary.LittleEndian.PutUint32(hdr[checksumOffset:checksumOffset+checksumSize], crc32.ChecksumIEEE(hdr[frameSizeOffset:]))
 
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
-	f.Write(hdr)
-	f.Close()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open for TooLarge append: %v", err)
+	}
+	if _, err := f.Write(hdr); err != nil {
+		t.Fatalf("write hdr (TooLarge): %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {

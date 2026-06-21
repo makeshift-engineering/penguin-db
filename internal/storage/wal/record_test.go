@@ -84,6 +84,12 @@ func TestMarshal_OpcodeDelete(t *testing.T) {
 }
 
 // TestMarshal_ZeroLengthKey tests marshaling records with empty or nil keys.
+//
+// Marshal itself does not reject zero-length keys — that constraint is
+// enforced by Append (which returns ErrEmptyKey before calling Marshal).
+// This test deliberately exercises Marshal in isolation to verify the on-disk
+// frame layout for a key-length of zero is still well-formed and round-trips
+// correctly through UnmarshalRecord.
 func TestMarshal_ZeroLengthKey(t *testing.T) {
 	cases := []struct {
 		name string
@@ -176,6 +182,21 @@ func TestMarshal_KeyTooLarge(t *testing.T) {
 	_, err := r.Marshal()
 	if !errors.Is(err, ErrKeyTooLarge) {
 		t.Errorf("expected ErrKeyTooLarge, got %v", err)
+	}
+}
+
+// TestMarshal_FrameTooLarge verifies that key+value combinations whose total
+// serialized size exceeds maxFrameSizeBytes (= MaxSegmentSizeBytes, 32 MiB)
+// are rejected with ErrFrameTooLarge before any heap allocation for the frame.
+// Note: this test allocates ~32 MiB to reach the actual boundary.
+func TestMarshal_FrameTooLarge(t *testing.T) {
+	// With a 1-byte key, a value of (maxFrameSizeBytes - fixedHeaderSize) bytes
+	// causes totalFrameSizeBytes = maxFrameSizeBytes + 1, tripping the guard.
+	oversizeValue := make([]byte, maxFrameSizeBytes-fixedHeaderSize)
+	r := &Record{Opcode: OpcodePut, Key: []byte("k"), Value: oversizeValue}
+	_, err := r.Marshal()
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Errorf("expected ErrFrameTooLarge for oversized frame, got %v", err)
 	}
 }
 

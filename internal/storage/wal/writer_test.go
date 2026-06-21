@@ -236,13 +236,11 @@ func TestAppend_InvalidOpcode_Rejected(t *testing.T) {
 // TestRotation_NewSegmentCreatedAfterSizeExceeded checks that segment file rotates on limit overrun.
 func TestRotation_NewSegmentCreatedAfterSizeExceeded(t *testing.T) {
 	dir := t.TempDir()
-	w, err := NewLogWriter(dir, 1)
+	w, err := NewLogWriter(dir, 1, WithSegmentSizeBytes(1))
 	if err != nil {
 		t.Fatalf("NewLogWriter: %v", err)
 	}
 	defer w.Close()
-
-	w.currentSizeBytes = MaxSegmentSizeBytes - 1
 
 	r := &Record{Opcode: OpcodePut, Key: []byte("trigger"), Value: []byte("rotation")}
 	if err := w.Append(r); err != nil {
@@ -268,7 +266,7 @@ func TestRotation_OldSegmentSyncedOnRotation(t *testing.T) {
 		t.Fatalf("Append r1: %v", err)
 	}
 
-	w.currentSizeBytes = MaxSegmentSizeBytes
+	w.options.SegmentSizeBytes = 1 // force rotation on next write
 
 	r2 := &Record{Opcode: OpcodePut, Key: []byte("after"), Value: []byte("rotation")}
 	if err := w.Append(r2); err != nil {
@@ -297,14 +295,17 @@ func TestRotation_SizeResetAfterRotation(t *testing.T) {
 	}
 	defer w.Close()
 
-	w.currentSizeBytes = MaxSegmentSizeBytes
+	w.options.SegmentSizeBytes = 1 // force rotation on next write
 	r := &Record{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("v")}
 	if err := w.Append(r); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 
+	// After rotation the size counter reflects only the new segment's data.
+	// It must be small (just the one written frame), not an accumulated value
+	// carried over from the old segment.
 	if w.currentSizeBytes >= MaxSegmentSizeBytes {
-		t.Errorf("currentSizeBytes = %d after rotation, expected < %d",
+		t.Errorf("currentSizeBytes = %d after rotation, expected < MaxSegmentSizeBytes (%d): size was not reset",
 			w.currentSizeBytes, MaxSegmentSizeBytes)
 	}
 }
@@ -861,5 +862,43 @@ func TestAppend_ConcurrentWritesDuringClose_AllResolve(t *testing.T) {
 
 	if succeeded+failed != numWriters {
 		t.Errorf("expected %d total results, got %d", numWriters, succeeded+failed)
+	}
+}
+
+// TestNewLogWriter_WithOptions verifies that functional options correctly configure the LogWriter.
+func TestNewLogWriter_WithOptions(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1,
+		WithSegmentSizeBytes(1024),
+		WithBatchSizeBytes(512),
+		WithIngestChannelCapacity(100),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer w.Close()
+
+	if w.options.SegmentSizeBytes != 1024 {
+		t.Errorf("SegmentSizeBytes = %d, want 1024", w.options.SegmentSizeBytes)
+	}
+	if w.options.BatchSizeBytes != 512 {
+		t.Errorf("BatchSizeBytes = %d, want 512", w.options.BatchSizeBytes)
+	}
+	if w.options.IngestChannelCapacity != 100 {
+		t.Errorf("IngestChannelCapacity = %d, want 100", w.options.IngestChannelCapacity)
+	}
+
+	// Verify validation rules
+	_, err = NewLogWriter(dir, 2, WithSegmentSizeBytes(0))
+	if err == nil {
+		t.Error("expected error with 0 segment size")
+	}
+	_, err = NewLogWriter(dir, 2, WithBatchSizeBytes(0))
+	if err == nil {
+		t.Error("expected error with 0 batch size")
+	}
+	_, err = NewLogWriter(dir, 2, WithIngestChannelCapacity(-1))
+	if err == nil {
+		t.Error("expected error with negative channel capacity")
 	}
 }

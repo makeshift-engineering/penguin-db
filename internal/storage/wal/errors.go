@@ -28,6 +28,10 @@ var (
 	ErrKeyTooLarge = errors.New("wal record rejected: key length exceeds maximum of " + strconv.FormatUint(math.MaxUint16, 10) + " bytes")
 
 	// ErrFrameTooLarge is returned when the total serialized frame size exceeds
-	// maxFrameSizeBytes (128 MiB).
-	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + strconv.FormatUint(maxFrameSizeBytes, 10) + " bytes")
+	// maxFrameSizeBytes (32 MiB, equal to MaxSegmentSizeBytes).
+	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + strconv.FormatUint(uint64(maxFrameSizeBytes), 10) + " bytes")
+
+	// ErrWriterClosed is returned by Append when the LogWriter has already been
+	// closed. Callers can detect this condition programmatically with errors.Is.
+	ErrWriterClosed = errors.New("wal writer is closed")
 )

@@ -20,7 +20,11 @@ type RecordConsumer interface {
 
 // Replay scans the specified WAL directory, identifies all segment files
 // matching the *.wal pattern, and replays their logged operations onto the
-// target RecordConsumer. It returns the highest segment ID found or 1 if fresh.
+// target RecordConsumer in ascending segment-ID order.
+//
+// The returned integer is the highest segment ID replayed. Pass this value
+// directly to NewLogWriter as nextSegmentID to resume appending to that
+// segment. If no segments exist, 1 is returned so the caller creates 000001.wal.
 func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
 	slog.Debug("starting WAL recovery sequence", "directory", directory)
 
@@ -47,8 +51,10 @@ func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
 
 	for _, fileName := range walFiles {
 		var segmentID int
-		if n, _ := fmt.Sscanf(fileName, "%d.wal", &segmentID); n != 1 {
-			slog.Debug("skipping WAL file with unexpected name format", "file", fileName)
+		n, scanErr := fmt.Sscanf(fileName, "%d.wal", &segmentID)
+		if n != 1 {
+			slog.Debug("skipping WAL file with unexpected name format",
+				"file", fileName, "error", scanErr)
 			continue
 		}
 		if segmentID > highestSegmentID {
@@ -71,11 +77,11 @@ func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
 	return highestSegmentID, nil
 }
 
-// replayFile opens a single WAL segment, reads it frame-by-frame, validates
-// check-sums and frame sizes, and applies the operations onto the RecordConsumer.
+// replayFile opens a single WAL segment read-only, reads it frame-by-frame, validates
+// checksums and frame sizes, and applies the operations onto the RecordConsumer.
 // If it encounters corruption or a partial write, it truncates the segment.
 func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
-	file, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("unable to open WAL segment for reading: %w", err)
 	}
@@ -87,14 +93,9 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 
 	var validBytes int64
 	var recordsRecovered int
-	headerBuffer := make([]byte, 8)
-
-	truncateAndSync := func() error {
-		if truncErr := file.Truncate(validBytes); truncErr != nil {
-			return truncErr
-		}
-		return file.Sync()
-	}
+	// headerBuffer holds only the checksum and frame-size fields — just enough
+	// to determine the total frame length before sizing the full-frame allocation.
+	headerBuffer := make([]byte, checksumSize+frameSizeSize)
 
 	for {
 		_, err := io.ReadFull(file, headerBuffer)
@@ -110,40 +111,42 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes)
 
-				return truncateAndSync()
+				return truncateSegment(filePath, validBytes)
 			}
 			return fmt.Errorf("unexpected disk error reading frame header: %w", err)
 		}
 
-		totalFrameSizeBytes := binary.LittleEndian.Uint32(headerBuffer[4:8])
-		if totalFrameSizeBytes < fixedHeaderSize || totalFrameSizeBytes > maxFrameSizeBytes {
+		totalFrameSizeBytes := binary.LittleEndian.Uint32(
+			headerBuffer[frameSizeOffset : frameSizeOffset+frameSizeSize],
+		)
+		if totalFrameSizeBytes < uint32(fixedHeaderSize) || totalFrameSizeBytes > maxFrameSizeBytes {
 			slog.Debug("invalid frame size in header, truncating segment",
 				"file", filepath.Base(filePath),
 				"frame_size", totalFrameSizeBytes,
 				"valid_bytes", validBytes)
 
-			return truncateAndSync()
+			return truncateSegment(filePath, validBytes)
 		}
-		payloadSizeBytes := totalFrameSizeBytes - 8
 
-		payloadBuffer := make([]byte, payloadSizeBytes)
-		_, err = io.ReadFull(file, payloadBuffer)
+		// Allocate a single buffer for the full frame and copy the already-read
+		// header bytes in. The remainder is read directly into the same buffer,
+		// eliminating the separate payloadBuffer and the extra fullFrame copy.
+		frameBuffer := make([]byte, totalFrameSizeBytes)
+		copy(frameBuffer, headerBuffer)
+
+		_, err = io.ReadFull(file, frameBuffer[checksumSize+frameSizeSize:])
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				slog.Debug("unexpected EOF in payload, truncating segment",
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes)
 
-				return truncateAndSync()
+				return truncateSegment(filePath, validBytes)
 			}
 			return fmt.Errorf("disk error reading frame payload: %w", err)
 		}
 
-		fullFrame := make([]byte, 8+payloadSizeBytes)
-		copy(fullFrame[:8], headerBuffer)
-		copy(fullFrame[8:], payloadBuffer)
-
-		record, err := UnmarshalRecord(fullFrame)
+		record, err := UnmarshalRecord(frameBuffer)
 		if err != nil {
 			if errors.Is(err, ErrInvalidCRC) || errors.Is(err, ErrTruncated) {
 				slog.Debug("corrupted frame detected, truncating segment",
@@ -151,7 +154,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 					"valid_bytes", validBytes,
 					"error", err)
 
-				return truncateAndSync()
+				return truncateSegment(filePath, validBytes)
 			}
 			return fmt.Errorf("failed to decode valid frame payload: %w", err)
 		}
@@ -172,4 +175,19 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 	}
 
 	return nil
+}
+
+// truncateSegment opens the segment with write access and truncates it to validBytes,
+// then syncs. This is called only when corruption or a partial write is detected,
+// keeping the replay pass itself read-only (least-privilege).
+func truncateSegment(filePath string, validBytes int64) error {
+	f, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("unable to open WAL segment for truncation: %w", err)
+	}
+	defer f.Close()
+	if err := f.Truncate(validBytes); err != nil {
+		return err
+	}
+	return f.Sync()
 }
