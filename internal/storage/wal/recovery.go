@@ -129,11 +129,14 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 		payloadBuffer := make([]byte, payloadSizeBytes)
 		_, err = io.ReadFull(file, payloadBuffer)
 		if err != nil {
-			slog.Debug("unexpected EOF in payload, truncating segment",
-				"file", filepath.Base(filePath),
-				"valid_bytes", validBytes)
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				slog.Debug("unexpected EOF in payload, truncating segment",
+					"file", filepath.Base(filePath),
+					"valid_bytes", validBytes)
 
-			return truncateAndSync()
+				return truncateAndSync()
+			}
+			return fmt.Errorf("disk error reading frame payload: %w", err)
 		}
 
 		fullFrame := make([]byte, 8+payloadSizeBytes)
