@@ -386,7 +386,17 @@ func TestAppend_ConcurrentWrites_NoDataRace(t *testing.T) {
 		}(g)
 	}
 
-	wg.Wait()
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent writers hung for more than 5 seconds")
+	}
 
 	if errCount > 0 {
 		t.Errorf("%d Append calls failed under concurrency", errCount)
@@ -446,7 +456,7 @@ func TestClose_IsIdempotent(t *testing.T) {
 		t.Errorf("first Close error: %v", err)
 	}
 	if err := w.Close(); err != nil {
-		t.Logf("second Close returned (expected nil): %v", err)
+		t.Errorf("second Close returned (expected nil): %v", err)
 	}
 }
 
@@ -528,7 +538,17 @@ func TestBatchWorker_GroupCommit_AllTicketsSignalled(t *testing.T) {
 			errs[idx] = w.Append(r)
 		}(i)
 	}
-	wg.Wait()
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("batch writers hung for more than 5 seconds")
+	}
 
 	for i, e := range errs {
 		if e != nil {
@@ -680,7 +700,17 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 			errs[idx] = w.Append(r)
 		}(i)
 	}
-	wg.Wait()
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain writers hung for more than 5 seconds")
+	}
 
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
