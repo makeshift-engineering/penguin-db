@@ -180,13 +180,17 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 // truncateSegment opens the segment with write access and truncates it to validBytes,
 // then syncs. This is called only when corruption or a partial write is detected,
 // keeping the replay pass itself read-only (least-privilege).
-func truncateSegment(filePath string, validBytes int64) error {
+func truncateSegment(filePath string, validBytes int64) (err error) {
 	f, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("unable to open WAL segment for truncation: %w", err)
 	}
-	defer f.Close()
-	if err := f.Truncate(validBytes); err != nil {
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close WAL segment %s after truncation: %w", filePath, closeErr)
+		}
+	}()
+	if err = f.Truncate(validBytes); err != nil {
 		return err
 	}
 	return f.Sync()
