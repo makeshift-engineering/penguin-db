@@ -31,4 +31,3 @@ var (
 	// maxFrameSizeBytes (128 MiB).
 	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + strconv.FormatUint(maxFrameSizeBytes, 10) + " bytes")
 )
-

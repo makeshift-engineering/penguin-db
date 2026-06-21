@@ -473,7 +473,7 @@ func randomUnicodeString(rng *rand.Rand, n int) string {
 	for i := 0; i < n; i++ {
 		block := unicodeRuneRanges[rng.Intn(len(unicodeRuneRanges))]
 		r := block.lo + rng.Int31n(block.hi-block.lo)
-		buf = utf8.AppendRune(buf, rune(r))
+		buf = utf8.AppendRune(buf, r)
 	}
 	return string(buf)
 }
@@ -490,16 +490,16 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 
 		// Fixed multi-script keys that exercise different byte widths.
 		entries := map[string]string{
-			"日本語テスト":           "値一",                  // CJK + Hiragana (3-byte runes)
-			"Привет":            "Мир",                 // Cyrillic (2-byte runes)
-			"مفتاح":             "قيمة",                // Arabic (2-byte runes)
-			"हिंदी":              "मान",                 // Devanagari (3-byte runes)
-			"한국어":              "값",                   // Hangul (3-byte runes)
-			"🦊🐧🔥":             "🎉🚀",                // Emoji (4-byte runes)
-			"café":             "résumé",              // Latin with accents (mixed 1-2 byte runes)
-			"mix混合кл🎮":        "val值ue🧪",            // Mixed scripts in single key
-			"Z̤̈":               "combining-marks",     // Latin + combining diacriticals
-			"a\x00b":           "embedded-null",       // Embedded null byte in key
+			"日本語テスト":   "値一",              // CJK + Hiragana (3-byte runes)
+			"Привет":   "Мир",             // Cyrillic (2-byte runes)
+			"مفتاح":    "قيمة",            // Arabic (2-byte runes)
+			"हिंदी":    "मान",             // Devanagari (3-byte runes)
+			"한국어":      "값",               // Hangul (3-byte runes)
+			"🦊🐧🔥":      "🎉🚀",              // Emoji (4-byte runes)
+			"café":     "résumé",          // Latin with accents (mixed 1-2 byte runes)
+			"mix混合кл🎮": "val値ue🧪",         // Mixed scripts in single key
+			"Z̤̈":      "combining-marks", // Latin + combining diacriticals
+			"a\x00b":   "embedded-null",   // Embedded null byte in key
 		}
 
 		for k, v := range entries {
@@ -577,10 +577,10 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 	t.Run("SortedOrderByBytes", func(t *testing.T) {
 		skipList := NewSkipList(100000, 12)
 		keys := []string{
-			"🦊emoji",     // starts with F0 9F A6 8A (4-byte)
-			"Яcyrillic",  // starts with D0 AF (2-byte)
+			"🦊emoji",      // starts with F0 9F A6 8A (4-byte)
+			"Яcyrillic",   // starts with D0 AF (2-byte)
 			"ascii-first", // starts with 61 (1-byte)
-			"日cjk",       // starts with E6 97 A5 (3-byte)
+			"日cjk",        // starts with E6 97 A5 (3-byte)
 			"àlatin-ext",  // starts with C3 A0 (2-byte)
 		}
 
@@ -616,7 +616,7 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 		skipList := NewSkipList(100000, 12)
 
 		key := []byte("π") // U+03C0 → 2 bytes in UTF-8
-		val := []byte("🎲")  // U+1F3B2 → 4 bytes in UTF-8
+		val := []byte("🎲") // U+1F3B2 → 4 bytes in UTF-8
 
 		if err := skipList.Put(key, val); err != nil {
 			t.Fatalf("Put failed: %v", err)
