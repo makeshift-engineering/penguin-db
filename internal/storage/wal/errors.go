@@ -5,6 +5,7 @@ package wal
 import (
 	"errors"
 	"math"
+	"strconv"
 )
 
 var (
@@ -24,26 +25,10 @@ var (
 
 	// ErrKeyTooLarge is returned when the key exceeds the maximum representable
 	// length (math.MaxUint16 bytes) in the on-disk frame format.
-	ErrKeyTooLarge = errors.New("wal record rejected: key length exceeds maximum of " + uitoa(math.MaxUint16) + " bytes")
+	ErrKeyTooLarge = errors.New("wal record rejected: key length exceeds maximum of " + strconv.FormatUint(math.MaxUint16, 10) + " bytes")
 
 	// ErrFrameTooLarge is returned when the total serialized frame size exceeds
 	// the maximum representable size (math.MaxUint32 bytes) in the on-disk format.
-	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + uitoa(math.MaxUint32) + " bytes")
+	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + strconv.FormatUint(math.MaxUint32, 10) + " bytes")
 )
 
-// uitoa converts an unsigned integer to its decimal string representation.
-// Used to embed numeric limits in error sentinel messages at init time without
-// depending on strconv or fmt.
-func uitoa(val uint64) string {
-	if val == 0 {
-		return "0"
-	}
-	var buf [20]byte // max uint64 is 20 digits
-	i := len(buf)
-	for val > 0 {
-		i--
-		buf[i] = byte(val%10) + '0'
-		val /= 10
-	}
-	return string(buf[i:])
-}
