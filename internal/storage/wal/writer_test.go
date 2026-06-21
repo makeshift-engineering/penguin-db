@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -295,18 +296,36 @@ func TestRotation_SizeResetAfterRotation(t *testing.T) {
 	}
 	defer w.Close()
 
-	w.options.SegmentSizeBytes = 1 // force rotation on next write
-	r := &Record{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("v")}
-	if err := w.Append(r); err != nil {
-		t.Fatalf("Append: %v", err)
+	// 1. Write the first record. This goes into segment 1.
+	r1 := &Record{Opcode: OpcodePut, Key: []byte("k1"), Value: []byte("v1")}
+	if err := w.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
 	}
 
-	// After rotation the size counter reflects only the new segment's data.
-	// It must be small (just the one written frame), not an accumulated value
-	// carried over from the old segment.
-	if w.currentSizeBytes >= MaxSegmentSizeBytes {
-		t.Errorf("currentSizeBytes = %d after rotation, expected < MaxSegmentSizeBytes (%d): size was not reset",
-			w.currentSizeBytes, MaxSegmentSizeBytes)
+	sizeBeforeRotation := w.currentSizeBytes
+	if sizeBeforeRotation == 0 {
+		t.Fatal("expected currentSizeBytes to be non-zero after first write")
+	}
+
+	// 2. Force rotation by setting a tiny segment limit.
+	w.options.SegmentSizeBytes = 1
+
+	// 3. Write a second record. This must trigger rotation to segment 2,
+	// and the size counter must be reset to only include r2's size.
+	r2 := &Record{Opcode: OpcodePut, Key: []byte("k2"), Value: []byte("v2")}
+	if err := w.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	r2Frame, err := r2.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal r2: %v", err)
+	}
+	expectedSize := int64(len(r2Frame))
+
+	if w.currentSizeBytes != expectedSize {
+		t.Errorf("currentSizeBytes = %d after rotation, expected %d (size of r2 frame only); size was not reset (first segment size was %d)",
+			w.currentSizeBytes, expectedSize, sizeBeforeRotation)
 	}
 }
 
@@ -645,13 +664,15 @@ func TestAppend_AfterClose_ReturnsShutdownError(t *testing.T) {
 		t.Fatalf("Append before Close: %v", err)
 	}
 
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	// Multiple post-close appends should all return errors, never panic.
 	for i := 0; i < 10; i++ {
 		r := &Record{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("post-%d", i)), Value: []byte("v")}
-		if err := w.Append(r); err == nil {
-			t.Errorf("Append[%d] after Close returned nil, expected error", i)
+		if err := w.Append(r); !errors.Is(err, ErrWriterClosed) {
+			t.Errorf("Append[%d] after Close = %v, want ErrWriterClosed", i, err)
 		}
 	}
 }
@@ -705,10 +726,11 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 		t.Fatalf("NewLogWriter: %v", err)
 	}
 
-	const numRecords = 50
+	const numRecords = 100
 	var wg sync.WaitGroup
 	errs := make([]error, numRecords)
 
+	// Spawn multiple concurrent appends to saturate the worker and ingestion channel.
 	for i := 0; i < numRecords; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -721,20 +743,31 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 			errs[idx] = w.Append(r)
 		}(i)
 	}
-	allDone := make(chan struct{})
+
+	closeErrChan := make(chan error, 1)
+	go func() {
+		closeErrChan <- w.Close()
+	}()
+
+	allAppendsDone := make(chan struct{})
 	go func() {
 		wg.Wait()
-		close(allDone)
+		close(allAppendsDone)
 	}()
 
 	select {
-	case <-allDone:
+	case <-allAppendsDone:
 	case <-time.After(5 * time.Second):
-		t.Fatal("drain writers hung for more than 5 seconds")
+		t.Fatal("Append goroutines hung for more than 5 seconds")
 	}
 
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	select {
+	case closeErr := <-closeErrChan:
+		if closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung for more than 5 seconds")
 	}
 
 	// Count how many succeeded.
@@ -760,6 +793,8 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 			if _, ok := mem.puts[key]; !ok {
 				t.Errorf("record %q was accepted by Append but not recovered by Replay", key)
 			}
+		} else if !errors.Is(e, ErrWriterClosed) {
+			t.Errorf("Append[%d] returned unexpected error: %v (expected nil or ErrWriterClosed)", i, e)
 		}
 	}
 }
@@ -831,9 +866,10 @@ func TestAppend_ConcurrentWritesDuringClose_AllResolve(t *testing.T) {
 	}
 
 	// Close while writers are still racing.
+	closeDone := make(chan error, 1)
 	go func() {
 		time.Sleep(500 * time.Microsecond)
-		w.Close()
+		closeDone <- w.Close()
 	}()
 
 	// All writers must eventually return.
@@ -847,6 +883,15 @@ func TestAppend_ConcurrentWritesDuringClose_AllResolve(t *testing.T) {
 	case <-allDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("not all Append goroutines resolved within 5 seconds")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not resolve within 5 seconds")
 	}
 
 	close(results)
@@ -900,5 +945,47 @@ func TestNewLogWriter_WithOptions(t *testing.T) {
 	_, err = NewLogWriter(dir, 2, WithIngestChannelCapacity(-1))
 	if err == nil {
 		t.Error("expected error with negative channel capacity")
+	}
+}
+
+// TestLogWriter_TerminalError verifies that I/O write failures transition the
+// writer to a terminal error state, making all subsequent appends fail immediately.
+func TestLogWriter_TerminalError(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+	defer w.Close()
+
+	// Append a good record to ensure things are working.
+	r1 := &Record{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("val")}
+	if err := w.Append(r1); err != nil {
+		t.Fatalf("first Append: %v", err)
+	}
+
+	// Close the file descriptor from under the writer to force a write error on next append.
+	if err := w.activeFile.Close(); err != nil {
+		t.Fatalf("force-closing active file: %v", err)
+	}
+
+	// The next append will attempt to write/sync to the closed file, which must fail.
+	r2 := &Record{Opcode: OpcodePut, Key: []byte("fail"), Value: []byte("val")}
+	err2 := w.Append(r2)
+	if err2 == nil {
+		t.Fatal("expected second Append to fail due to closed file descriptor, but it succeeded")
+	}
+
+	// This failed append must transition the writer to a terminal error state.
+	// Any subsequent append should immediately return a terminal error.
+	r3 := &Record{Opcode: OpcodePut, Key: []byte("subsequent"), Value: []byte("val")}
+	err3 := w.Append(r3)
+	if err3 == nil {
+		t.Fatal("expected subsequent Append to fail in terminal error state, but it succeeded")
+	}
+
+	// Verify that the error wraps or matches our terminal I/O error pattern.
+	if !strings.Contains(err3.Error(), "terminal WAL I/O error") {
+		t.Errorf("expected error containing 'terminal WAL I/O error', got: %v", err3)
 	}
 }

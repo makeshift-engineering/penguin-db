@@ -50,6 +50,7 @@ type LogWriter struct {
 	ingestionChannel chan *commitTicket
 	stateMutex       sync.RWMutex
 	isClosed         bool
+	terminalErr      error
 
 	workerWaitGroup sync.WaitGroup
 	closeOnce       sync.Once
@@ -199,6 +200,10 @@ func (writer *LogWriter) Append(record *Record) error {
 		writer.stateMutex.RUnlock()
 		return ErrWriterClosed
 	}
+	if writer.terminalErr != nil {
+		writer.stateMutex.RUnlock()
+		return writer.terminalErr
+	}
 
 	slog.Debug("caller: enqueuing record into ingestion channel", "frame_size", len(frame))
 	writer.ingestionChannel <- ticket
@@ -214,9 +219,35 @@ func (writer *LogWriter) batchWorker() {
 
 	var commitBatch []*commitTicket
 	var writeBuffer []byte
+	var leftoverTicket *commitTicket
 
-	for ticket := range writer.ingestionChannel {
-		commitBatch, writeBuffer = writer.gatherBatch(ticket, commitBatch, writeBuffer)
+	for {
+		writer.stateMutex.RLock()
+		tErr := writer.terminalErr
+		writer.stateMutex.RUnlock()
+		if tErr != nil {
+			if leftoverTicket != nil {
+				leftoverTicket.resultChan <- tErr
+			}
+			for ticket := range writer.ingestionChannel {
+				ticket.resultChan <- tErr
+			}
+			break
+		}
+
+		var ticket *commitTicket
+		if leftoverTicket != nil {
+			ticket = leftoverTicket
+			leftoverTicket = nil
+		} else {
+			var ok bool
+			ticket, ok = <-writer.ingestionChannel
+			if !ok {
+				break
+			}
+		}
+
+		commitBatch, writeBuffer, leftoverTicket = writer.gatherBatch(ticket, commitBatch, writeBuffer)
 
 		slog.Debug("batch worker: executing group commit",
 			"batch_size", len(commitBatch),
@@ -252,6 +283,7 @@ func (writer *LogWriter) Close() error {
 func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte) {
 	if writer.currentSizeBytes+int64(len(buffer)) > writer.options.SegmentSizeBytes {
 		if err := writer.rotateActiveFile(); err != nil {
+			writer.markTerminalError(err)
 			for _, ticket := range batch {
 				ticket.resultChan <- err
 			}
@@ -271,6 +303,7 @@ func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte)
 		writer.currentSizeBytes += int64(len(buffer))
 	} else {
 		slog.Debug("batch worker: fsync/write failed", "error", err)
+		writer.markTerminalError(err)
 	}
 
 	for _, ticket := range batch {
@@ -278,9 +311,19 @@ func (writer *LogWriter) writeAndSyncBatch(batch []*commitTicket, buffer []byte)
 	}
 }
 
-// gatherBatch pulls tickets from the ingestion channel up to the MaxBatchSizeBytes limit.
-// It takes the first ticket yielded by the range loop and drains the remaining buffered tickets.
-func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commitTicket, inBuffer []byte) (outBatch []*commitTicket, outBuffer []byte) {
+// markTerminalError sets a terminal error state under the state mutex.
+func (writer *LogWriter) markTerminalError(err error) {
+	writer.stateMutex.Lock()
+	if writer.terminalErr == nil {
+		writer.terminalErr = fmt.Errorf("terminal WAL I/O error: %w", err)
+	}
+	writer.stateMutex.Unlock()
+}
+
+// gatherBatch pulls tickets from the ingestion channel up to the BatchSizeBytes limit.
+// It takes the first ticket and drains the remaining buffered tickets.
+// If a ticket would cause the batch to exceed BatchSizeBytes, it is returned as a leftover.
+func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commitTicket, inBuffer []byte) (outBatch []*commitTicket, outBuffer []byte, leftover *commitTicket) {
 	outBatch = inBatch[:0]
 	outBuffer = inBuffer[:0]
 
@@ -289,13 +332,19 @@ func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commi
 
 	pendingWrites := len(writer.ingestionChannel)
 	for range pendingWrites {
-		if int64(len(outBuffer)) >= writer.options.BatchSizeBytes {
+		ticket, ok := <-writer.ingestionChannel
+		if !ok {
 			break
 		}
-		ticket := <-writer.ingestionChannel
+
+		if int64(len(outBuffer)+len(ticket.frameData)) > writer.options.BatchSizeBytes {
+			leftover = ticket
+			break
+		}
+
 		outBatch = append(outBatch, ticket)
 		outBuffer = append(outBuffer, ticket.frameData...)
 	}
 
-	return outBatch, outBuffer
+	return outBatch, outBuffer, leftover
 }

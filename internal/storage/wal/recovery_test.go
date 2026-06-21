@@ -562,8 +562,12 @@ func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Write(mustMarshal(t, bad))
-	f.Close()
+	if _, err := f.Write(mustMarshal(t, bad)); err != nil {
+		t.Fatalf("write malformed wal frame: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close malformed wal file: %v", err)
+	}
 
 	mem := newMockRecordConsumer()
 	nextID, err := Replay(dir, mem)
