@@ -418,6 +418,7 @@ func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
+	errs := make([]error, numRecords)
 	for i := 0; i < numRecords; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -427,19 +428,38 @@ func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 				Key:    []byte(keys[idx]),
 				Value:  []byte("ok"),
 			}
-			_ = w.Append(r)
+			errs[idx] = w.Append(r)
 		}(i)
 	}
-	wg.Wait()
+
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent writers hung for more than 5 seconds")
+	}
 	w.Close()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Errorf("Append(%q) failed: %v", keys[i], e)
+		}
+	}
 
 	mem := newMockRecordConsumer()
 	if _, err := Replay(dir, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
-	for _, k := range keys {
-		if _, ok := mem.puts[k]; !ok {
-			t.Errorf("key %q missing after concurrent write + replay", k)
+	for i, k := range keys {
+		if errs[i] == nil {
+			if _, ok := mem.puts[k]; !ok {
+				t.Errorf("key %q was accepted by Append but not recovered by Replay", k)
+			}
 		}
 	}
 }
