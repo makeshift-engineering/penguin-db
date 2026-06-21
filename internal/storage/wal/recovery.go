@@ -190,8 +190,8 @@ func truncateSegment(filePath string, validBytes int64) (err error) {
 			err = fmt.Errorf("failed to close WAL segment %s after truncation: %w", filePath, closeErr)
 		}
 	}()
-	if err = f.Truncate(validBytes); err != nil {
-		return err
+	if truncateErr := f.Truncate(validBytes); truncateErr != nil {
+		return truncateErr
 	}
 	return f.Sync()
 }
