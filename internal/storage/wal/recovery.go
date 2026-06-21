@@ -116,7 +116,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 		}
 
 		totalFrameSizeBytes := binary.LittleEndian.Uint32(headerBuffer[4:8])
-		if totalFrameSizeBytes < 8 || totalFrameSizeBytes > 128*1024*1024 {
+		if totalFrameSizeBytes < fixedHeaderSize || totalFrameSizeBytes > maxFrameSizeBytes {
 			slog.Debug("invalid frame size in header, truncating segment",
 				"file", filepath.Base(filePath),
 				"frame_size", totalFrameSizeBytes,

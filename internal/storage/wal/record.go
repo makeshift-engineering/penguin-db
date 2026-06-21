@@ -30,6 +30,11 @@ const (
 
 	// Fixed header size is the sum of all fixed-length fields
 	fixedHeaderSize = checksumSize + frameSizeSize + opcodeSize + keyLengthSize
+
+	// maxFrameSizeBytes is the upper bound on the total serialized frame size.
+	// This guards against memory exhaustion during recovery and serves as a
+	// practical limit for individual WAL records in an LSM-tree workload.
+	maxFrameSizeBytes = 128 * 1024 * 1024 // 128 MiB
 )
 
 // Define offsets for each field to eliminate magic slice indices
@@ -52,8 +57,7 @@ const (
 // Note: The Checksum (CRC32) covers all bytes starting from the Frame Size.
 //
 // Marshal returns ErrKeyTooLarge if the key exceeds math.MaxUint16 bytes, or
-// ErrFrameTooLarge if the total frame size exceeds math.MaxUint32 bytes, since
-// these sizes cannot be represented in the on-disk field widths.
+// ErrFrameTooLarge if the total frame size exceeds maxFrameSizeBytes (128 MiB).
 func (record *Record) Marshal() ([]byte, error) {
 	keyLen := len(record.Key)
 	valLen := len(record.Value)
@@ -64,7 +68,7 @@ func (record *Record) Marshal() ([]byte, error) {
 
 	totalFrameSizeBytes := fixedHeaderSize + keyLen + valLen
 
-	if totalFrameSizeBytes > math.MaxUint32 {
+	if totalFrameSizeBytes > maxFrameSizeBytes {
 		return nil, ErrFrameTooLarge
 	}
 

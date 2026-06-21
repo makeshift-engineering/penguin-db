@@ -28,7 +28,7 @@ var (
 	ErrKeyTooLarge = errors.New("wal record rejected: key length exceeds maximum of " + strconv.FormatUint(math.MaxUint16, 10) + " bytes")
 
 	// ErrFrameTooLarge is returned when the total serialized frame size exceeds
-	// the maximum representable size (math.MaxUint32 bytes) in the on-disk format.
-	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + strconv.FormatUint(math.MaxUint32, 10) + " bytes")
+	// maxFrameSizeBytes (128 MiB).
+	ErrFrameTooLarge = errors.New("wal record rejected: frame size exceeds maximum of " + strconv.FormatUint(maxFrameSizeBytes, 10) + " bytes")
 )
 
