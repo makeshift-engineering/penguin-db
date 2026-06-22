@@ -114,7 +114,6 @@ func TestWriter_SingleEntry(t *testing.T) {
 	gotKey := data[offset : offset+int(keyLen)]
 	offset += int(keyLen)
 	gotVal := data[offset : offset+int(valLen)]
-	offset += int(valLen)
 
 	if !bytes.Equal(gotKey, key) {
 		t.Errorf("data key: got %q, want %q", gotKey, key)

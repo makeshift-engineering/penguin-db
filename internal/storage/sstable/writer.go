@@ -32,7 +32,7 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 	file, err := os.OpenFile(
 		filePath,
 		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
-		0666,
+		0o666,
 	)
 	if err != nil {
 		return nil, err

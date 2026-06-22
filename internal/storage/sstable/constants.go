@@ -25,8 +25,8 @@ const (
 
 // Index entry field offsets
 const (
-	indexKeyLenOffset = 0
-	indexOffsetOffset = indexKeyLenOffset + indexKeyLenSize
+	indexKeyLenOffset  = 0
+	indexOffsetOffset  = indexKeyLenOffset + indexKeyLenSize
 	indexKeyDataOffset = indexOffsetOffset + indexOffsetSize
 )
 
