@@ -730,11 +730,11 @@ func TestDiagnostic_Unwrap(t *testing.T) {
 		},
 		Msg: "detail",
 	}
-	if !errors.Is(e, CodeUnterminatedString) {
+	if !errors.Is(&e, CodeUnterminatedString) {
 		t.Error("errors.Is should match sentinel Code")
 	}
-	var diag diagnostic.Diagnostic
-	if !errors.As(e, &diag) {
+	var diag *diagnostic.Diagnostic
+	if !errors.As(&e, &diag) {
 		t.Error("errors.As should succeed for diagnostic.Diagnostic")
 	}
 	if diag.Span.Start.Line != 1 || diag.Span.Start.Col != 1 {

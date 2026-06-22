@@ -14,8 +14,8 @@ type TokenType int
 //nolint:revive // We prefer ALL_CAPS for token constants
 const (
 	// Special
-	TOKEN_EOF TokenType = iota // end of input; always the last token
-	TOKEN_ILLEGAL              // unrecognised character; carries the raw byte
+	TOKEN_EOF     TokenType = iota // end of input; always the last token
+	TOKEN_ILLEGAL                  // unrecognised character; carries the raw byte
 
 	// Literals
 	TOKEN_IDENT

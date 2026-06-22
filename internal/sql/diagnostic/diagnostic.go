@@ -95,7 +95,7 @@ type Diagnostic struct {
 
 // Error implements the error interface.
 // Format: "3:18: error [E1001] Illegal Character: unexpected character '@'"
-func (d Diagnostic) Error() string {
+func (d *Diagnostic) Error() string {
 	return fmt.Sprintf("%d:%d: %s [E%d] %s: %s",
 		d.Span.Start.Line, d.Span.Start.Col,
 		d.Severity, int(d.Code),
@@ -103,13 +103,13 @@ func (d Diagnostic) Error() string {
 }
 
 // Unwrap allows standard library functions like errors.Is to check for specific Code sentinels.
-func (d Diagnostic) Unwrap() error {
+func (d *Diagnostic) Unwrap() error {
 	return d.Code
 }
 
 // Snippet returns the offending source line with a caret underline.
 // Returns "" if Source is nil.
-func (d Diagnostic) Snippet() string {
+func (d *Diagnostic) Snippet() string {
 	if d.Source == nil {
 		return ""
 	}
@@ -127,7 +127,7 @@ func (d Diagnostic) Snippet() string {
 }
 
 // FullString is the human display: error line + source snippet.
-func (d Diagnostic) FullString() string {
+func (d *Diagnostic) FullString() string {
 	msg := d.Error()
 	if snip := d.Snippet(); snip != "" {
 		msg += "\n" + snip
@@ -137,7 +137,7 @@ func (d Diagnostic) FullString() string {
 
 // List is an ordered collection of Diagnostic values.
 // It satisfies the error interface so it can be returned as a single error.
-type List []Diagnostic
+type List []*Diagnostic
 
 func (l List) Error() string {
 	if len(l) == 0 {
@@ -173,6 +173,6 @@ func (l List) Unwrap() []error {
 }
 
 // Append adds a diagnostic directly to the list.
-func (l *List) Append(d Diagnostic) {
+func (l *List) Append(d *Diagnostic) {
 	*l = append(*l, d)
 }

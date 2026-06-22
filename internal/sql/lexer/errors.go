@@ -14,8 +14,8 @@ const (
 )
 
 // unexpectedChar creates a diagnostic for an unexpected character.
-func unexpectedChar(span diagnostic.Span, src *diagnostic.Source, ch rune) diagnostic.Diagnostic {
-	return diagnostic.Diagnostic{
+func unexpectedChar(span diagnostic.Span, src *diagnostic.Source, ch rune) *diagnostic.Diagnostic {
+	return &diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
 		Code:     CodeUnexpectedChar,
 		Category: "Illegal Character",
@@ -26,8 +26,8 @@ func unexpectedChar(span diagnostic.Span, src *diagnostic.Source, ch rune) diagn
 }
 
 // unterminatedString creates a diagnostic for an unterminated string literal.
-func unterminatedString(span diagnostic.Span, src *diagnostic.Source, openPos diagnostic.Pos) diagnostic.Diagnostic {
-	return diagnostic.Diagnostic{
+func unterminatedString(span diagnostic.Span, src *diagnostic.Source, openPos diagnostic.Pos) *diagnostic.Diagnostic {
+	return &diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
 		Code:     CodeUnterminatedString,
 		Category: "Unterminated String",
@@ -38,8 +38,8 @@ func unterminatedString(span diagnostic.Span, src *diagnostic.Source, openPos di
 }
 
 // unterminatedComment creates a diagnostic for an unterminated block comment.
-func unterminatedComment(span diagnostic.Span, src *diagnostic.Source, openPos diagnostic.Pos) diagnostic.Diagnostic {
-	return diagnostic.Diagnostic{
+func unterminatedComment(span diagnostic.Span, src *diagnostic.Source, openPos diagnostic.Pos) *diagnostic.Diagnostic {
+	return &diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
 		Code:     CodeUnterminatedComment,
 		Category: "Unterminated Comment",
