@@ -1,99 +1,91 @@
 package lexer
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+import (
+	"strings"
+	"unicode/utf8"
 
-// Position represents a position in the source input.
-// It tracks three values:
-//
-//   - Index:  absolute character offset from the start of the entire input (0-based).
-//     It counts every character (including newlines) and never resets.
-//   - Line:   the current line number (1-based). Increments only when a '\n' is encountered.
-//   - Column: the position within the current line (1-based). Resets to 1 on every new line.
-type position struct {
-	index  int
-	line   int
-	column int
-}
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+)
 
-// Lexer tokenizes SQL source text into a stream of Tokens
+// Lexer tokenizes SQL source text into a stream of Tokens.
 type Lexer struct {
-	src  []rune   // full input as runes
-	pos  position // current read cursor(line, col, index)
-	Diag diagnostic.List
+	src    string             // full input as a string
+	pos    position           // current read cursor (line, col, index)
+	diag   diagnostic.List    // unexported diagnostics list
+	source *diagnostic.Source // source reference for diagnostics
 }
 
-// NewLexer creates a Lexer fro the given SQL source string
-func NewLexer(src string) *Lexer {
+// NewLexer creates a Lexer for the given SQL source string.
+func NewLexer(name, src string) *Lexer {
 	return &Lexer{
-		src: []rune(src),
-		pos: position{0, 1, 1},
+		src:    src,
+		pos:    position{line: 1, column: 1},
+		source: &diagnostic.Source{Name: name, Text: src},
 	}
 }
 
-func (l *Lexer) addError(code diagnostic.Code, line, col int, format string, args ...any) diagnostic.Diagnostic {
-	diag := diagnostic.New(code, line, col, format, args...)
-	l.Diag = append(l.Diag, diag)
-	return diag
+// Diagnostics returns the list of collected diagnostics.
+func (l *Lexer) Diagnostics() diagnostic.List {
+	return l.diag
 }
 
 func (l *Lexer) peek() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
 	}
-	return l.src[l.pos.index]
+	r, _ := utf8.DecodeRuneInString(l.src[l.pos.index:])
+	return r
 }
 
 func (l *Lexer) peekNext() rune {
-	if l.pos.index+1 >= len(l.src) {
+	if l.pos.index >= len(l.src) {
 		return 0
 	}
-	return l.src[l.pos.index+1]
+	_, size := utf8.DecodeRuneInString(l.src[l.pos.index:])
+	if l.pos.index+size >= len(l.src) {
+		return 0
+	}
+	r, _ := utf8.DecodeRuneInString(l.src[l.pos.index+size:])
+	return r
 }
 
 func (l *Lexer) advance() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
 	}
-	ch := l.src[l.pos.index]
-	l.pos.index++
-	if ch == '\n' {
-		l.pos.line++
-		l.pos.column = 1
-	} else {
-		l.pos.column++
-	}
-	return ch
+	r, size := utf8.DecodeRuneInString(l.src[l.pos.index:])
+	l.pos.advance(r, size)
+	return r
 }
 
 // skipLineComment discards everything from the current position to end-of-line.
-// Precondition: the two leading '-' characters have already been consumed.
 func (l *Lexer) skipLineComment() {
-	for l.pos.index < len(l.src) && l.src[l.pos.index] != '\n' {
+	for l.peek() != 0 && l.peek() != '\n' {
 		l.advance()
 	}
 }
 
 // skipBlockComment discards everything up to and including the closing */.
-// Precondition: the opening /* has already been consumed.
-func (l *Lexer) skipBlockComment(openLine, openCol int) error {
+func (l *Lexer) skipBlockComment(start diagnostic.Pos) bool {
 	for l.pos.index < len(l.src) {
 		if l.peek() == '*' && l.peekNext() == '/' {
 			l.advance() // *
 			l.advance() // /
-			return nil
+			return true
 		}
 		l.advance()
 	}
 	// End of input without finding */
-	return l.addError(ErrUnterminatedComment, l.pos.line, l.pos.column,
-		"expected '*/' to close '/*' opened at %d:%d", openLine, openCol)
+	end := l.pos.snapshot()
+	span := diagnostic.Span{Start: start, End: end}
+	l.diag.Append(unterminatedComment(span, l.source, start))
+	return false
 }
 
-// skipWhitespaceAndComments returns an error only for an unterminated block comment.
-// All other skipped content (whitespace, line comments) is infallible.
-func (l *Lexer) skipWhitespaceAndComments() error {
+// skipWhitespaceAndComments returns false if an unterminated block comment is encountered.
+func (l *Lexer) skipWhitespaceAndComments() bool {
 	for l.pos.index < len(l.src) {
-		ch := l.src[l.pos.index]
+		ch := l.peek()
 		switch {
 		case ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n':
 			l.advance()
@@ -104,41 +96,47 @@ func (l *Lexer) skipWhitespaceAndComments() error {
 			l.skipLineComment()
 
 		case ch == '/' && l.peekNext() == '*':
-			openLine, openCol := l.pos.line, l.pos.column
+			start := l.pos.snapshot()
 			l.advance()
 			l.advance()
-			if err := l.skipBlockComment(openLine, openCol); err != nil {
-				return err
+			if !l.skipBlockComment(start) {
+				return false
 			}
 
 		default:
-			return nil
+			return true
 		}
 	}
-	return nil
+	return true
 }
 
 // makeToken is a convenience to build a Token with the given fields.
-func (l *Lexer) makeToken(typ TokenType, lit string, line, col int) Token {
-	return Token{Type: typ, Literal: lit, Line: line, Col: col}
+func (l *Lexer) makeToken(typ TokenType, lit string, start diagnostic.Pos) Token {
+	return Token{
+		Type:    typ,
+		Literal: lit,
+		Span: diagnostic.Span{
+			Start: start,
+			End:   l.pos.snapshot(),
+		},
+	}
 }
 
 // scanIdentifier reads a keyword or user identifier.
-// Precondition: peek() is a letter.
 func (l *Lexer) scanIdentifier() Token {
-	startLine, startCol := l.pos.line, l.pos.column
-	start := l.pos.index
+	start := l.pos.snapshot()
+	startIndex := l.pos.index
 	for l.pos.index < len(l.src) {
-		ch := l.src[l.pos.index]
+		ch := l.peek()
 		if isIdentPart(ch) {
 			l.advance()
 		} else {
 			break
 		}
 	}
-	lit := string(l.src[start:l.pos.index])
+	lit := l.src[startIndex:l.pos.index]
 	typ := lookupIdent(lit) // keyword or TOKEN_IDENT
-	return l.makeToken(typ, lit, startLine, startCol)
+	return l.makeToken(typ, lit, start)
 }
 
 func isIdentStart(ch rune) bool { return isLetter(ch) || ch == '_' }
@@ -147,9 +145,15 @@ func isIdentPart(ch rune) bool  { return isLetter(ch) || isDigit(ch) || ch == '_
 func isLetter(ch rune) bool { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') }
 func isDigit(ch rune) bool  { return ch >= '0' && ch <= '9' }
 
+func (l *Lexer) scanDigits() {
+	for isDigit(l.peek()) {
+		l.advance()
+	}
+}
+
 func (l *Lexer) scanNumber() Token {
-	startLine, startCol := l.pos.line, l.pos.column
-	start := l.pos.index
+	start := l.pos.snapshot()
+	startIndex := l.pos.index
 	isFloat := false
 
 	// Leading '.' case
@@ -159,81 +163,80 @@ func (l *Lexer) scanNumber() Token {
 	}
 
 	// Digits consumption
-	for l.pos.index < len(l.src) && isDigit((l.src[l.pos.index])) {
-		l.advance()
-	}
+	l.scanDigits()
 
 	// Decimal check
 	if !isFloat && l.peek() == '.' {
 		nextCh := l.peekNext()
-		if nextCh == 0 || isDigit(nextCh) || (!isLetter(nextCh) && nextCh != '_') {
+		if isDigit(nextCh) || (!isLetter(nextCh) && nextCh != '_') {
 			isFloat = true
 			l.advance()
-			for l.pos.index < len(l.src) && isDigit((l.src[l.pos.index])) {
-				l.advance()
-			}
+			l.scanDigits()
 		}
 	}
 
-	lit := string(l.src[start:l.pos.index])
+	lit := l.src[startIndex:l.pos.index]
 	if isFloat {
-		return l.makeToken(TOKEN_FLOAT, lit, startLine, startCol)
+		return l.makeToken(TOKEN_FLOAT, lit, start)
 	}
-	return l.makeToken(TOKEN_INTEGER, lit, startLine, startCol)
+	return l.makeToken(TOKEN_INTEGER, lit, start)
 }
 
-func (l *Lexer) scanString() (Token, error) {
-	startLine, startCol := l.pos.line, l.pos.column
+func (l *Lexer) scanString() Token {
+	start := l.pos.snapshot()
 	l.advance() // consume opening '
 
-	var buf []rune
+	var buf strings.Builder
 	for {
 		if l.pos.index >= len(l.src) {
-			return l.makeToken(TOKEN_ILLEGAL, string(buf), startLine, startCol),
-				l.addError(ErrUnterminatedString, l.pos.line, l.pos.column,
-					"expected closing ' (string opened at %d:%d)", startLine, startCol)
+			end := l.pos.snapshot()
+			span := diagnostic.Span{Start: start, End: end}
+			l.diag.Append(unterminatedString(span, l.source, start))
+			return l.makeToken(TOKEN_ILLEGAL, buf.String(), start)
 		}
 
 		ch := l.advance()
 		if ch == '\'' {
 			if l.peek() == '\'' { // '' is the SQL escape for a literal single-quote
 				l.advance()
-				buf = append(buf, '\'')
+				buf.WriteByte('\'')
 			} else {
 				break // normal close
 			}
 		} else {
-			buf = append(buf, ch)
+			buf.WriteRune(ch)
 		}
 	}
 
-	return l.makeToken(TOKEN_STRING, string(buf), startLine, startCol), nil
+	return l.makeToken(TOKEN_STRING, buf.String(), start)
 }
 
-func (l *Lexer) NextToken() (Token, error) {
-	if err := l.skipWhitespaceAndComments(); err != nil {
-		return l.makeToken(TOKEN_EOF, "", l.pos.line, l.pos.column), err
+// NextToken scans and returns the next token.
+func (l *Lexer) NextToken() Token {
+	start := l.pos.snapshot()
+	if !l.skipWhitespaceAndComments() {
+		return l.makeToken(TOKEN_ILLEGAL, "", start)
 	}
 
+	start = l.pos.snapshot()
 	if l.pos.index >= len(l.src) {
-		return l.makeToken(TOKEN_EOF, "", l.pos.line, l.pos.column), nil
+		return l.makeToken(TOKEN_EOF, "", start)
 	}
 
-	startLine, startCol := l.pos.line, l.pos.column
 	ch := l.peek()
 
 	if isIdentStart(ch) {
-		return l.scanIdentifier(), nil
+		return l.scanIdentifier()
 	}
 	if isDigit(ch) {
-		return l.scanNumber(), nil
+		return l.scanNumber()
 	}
 	if ch == '.' {
 		if next := l.peekNext(); next != 0 && isDigit(next) {
-			return l.scanNumber(), nil
+			return l.scanNumber()
 		}
 		l.advance()
-		return l.makeToken(TOKEN_DOT, ".", startLine, startCol), nil
+		return l.makeToken(TOKEN_DOT, ".", start)
 	}
 	if ch == '\'' {
 		return l.scanString()
@@ -242,50 +245,54 @@ func (l *Lexer) NextToken() (Token, error) {
 	l.advance()
 	switch ch {
 	case '(':
-		return l.makeToken(TOKEN_LPAREN, "(", startLine, startCol), nil
+		return l.makeToken(TOKEN_LPAREN, "(", start)
 	case ')':
-		return l.makeToken(TOKEN_RPAREN, ")", startLine, startCol), nil
+		return l.makeToken(TOKEN_RPAREN, ")", start)
 	case ',':
-		return l.makeToken(TOKEN_COMMA, ",", startLine, startCol), nil
+		return l.makeToken(TOKEN_COMMA, ",", start)
 	case ';':
-		return l.makeToken(TOKEN_SEMICOLON, ";", startLine, startCol), nil
+		return l.makeToken(TOKEN_SEMICOLON, ";", start)
 	case '+':
-		return l.makeToken(TOKEN_PLUS, "+", startLine, startCol), nil
+		return l.makeToken(TOKEN_PLUS, "+", start)
 	case '-':
-		return l.makeToken(TOKEN_MINUS, "-", startLine, startCol), nil
+		return l.makeToken(TOKEN_MINUS, "-", start)
 	case '*':
-		return l.makeToken(TOKEN_STAR, "*", startLine, startCol), nil
+		return l.makeToken(TOKEN_STAR, "*", start)
 	case '/':
-		return l.makeToken(TOKEN_SLASH, "/", startLine, startCol), nil
+		return l.makeToken(TOKEN_SLASH, "/", start)
 	case '%':
-		return l.makeToken(TOKEN_PERCENT, "%", startLine, startCol), nil
+		return l.makeToken(TOKEN_PERCENT, "%", start)
 	case '=':
-		return l.makeToken(TOKEN_EQ, "=", startLine, startCol), nil
+		return l.makeToken(TOKEN_EQ, "=", start)
 	// ── Multi-character operators ──
 	case '<':
 		if l.peek() == '=' {
 			l.advance()
-			return l.makeToken(TOKEN_LTE, "<=", startLine, startCol), nil
+			return l.makeToken(TOKEN_LTE, "<=", start)
 		}
 		if l.peek() == '>' {
 			l.advance()
-			return l.makeToken(TOKEN_NEQ, "<>", startLine, startCol), nil
+			return l.makeToken(TOKEN_NEQ, "<>", start)
 		}
-		return l.makeToken(TOKEN_LT, "<", startLine, startCol), nil
+		return l.makeToken(TOKEN_LT, "<", start)
 	case '>':
 		if l.peek() == '=' {
 			l.advance()
-			return l.makeToken(TOKEN_GTE, ">=", startLine, startCol), nil
+			return l.makeToken(TOKEN_GTE, ">=", start)
 		}
-		return l.makeToken(TOKEN_GT, ">", startLine, startCol), nil
+		return l.makeToken(TOKEN_GT, ">", start)
 	case '!':
 		if l.peek() == '=' {
 			l.advance()
-			return l.makeToken(TOKEN_NEQ, "!=", startLine, startCol), nil
+			return l.makeToken(TOKEN_NEQ, "!=", start)
 		}
-		return l.makeToken(TOKEN_ILLEGAL, "!", startLine, startCol), l.addError(ErrUnexpectedChar, startLine, startCol, "'!'; did you mean '!='?")
+		span := diagnostic.Span{Start: start, End: l.pos.snapshot()}
+		l.diag.Append(unexpectedChar(span, l.source, '!'))
+		return l.makeToken(TOKEN_ILLEGAL, "!", start)
 
 	default:
-		return l.makeToken(TOKEN_ILLEGAL, string(ch), startLine, startCol), l.addError(ErrUnexpectedChar, startLine, startCol, "%q", ch)
+		span := diagnostic.Span{Start: start, End: l.pos.snapshot()}
+		l.diag.Append(unexpectedChar(span, l.source, ch))
+		return l.makeToken(TOKEN_ILLEGAL, string(ch), start)
 	}
 }

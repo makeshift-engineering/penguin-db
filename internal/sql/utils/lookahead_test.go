@@ -1,6 +1,10 @@
-package lexer
+package utils
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+)
 
 // ---------- LookaheadIterator ------------------------------------------------
 
@@ -20,24 +24,24 @@ func TestLookaheadIterator_BasicNextAndPeek(t *testing.T) {
 	if got := iter.Peek(); got != 10 {
 		t.Fatalf("second Peek() = %d, want 10 (should be idempotent)", got)
 	}
-	if iter.Count() != 0 {
-		t.Fatalf("Count() = %d after Peek, want 0", iter.Count())
+	if iter.Consumed() != 0 {
+		t.Fatalf("Consumed() = %d after Peek, want 0", iter.Consumed())
 	}
 
 	// Next should consume the peeked element.
 	if got := iter.Next(); got != 10 {
 		t.Fatalf("Next() = %d, want 10", got)
 	}
-	if iter.Count() != 1 {
-		t.Fatalf("Count() = %d after first Next, want 1", iter.Count())
+	if iter.Consumed() != 1 {
+		t.Fatalf("Consumed() = %d after first Next, want 1", iter.Consumed())
 	}
 
 	// Next without prior Peek.
 	if got := iter.Next(); got != 20 {
 		t.Fatalf("Next() = %d, want 20", got)
 	}
-	if iter.Count() != 2 {
-		t.Fatalf("Count() = %d, want 2", iter.Count())
+	if iter.Consumed() != 2 {
+		t.Fatalf("Consumed() = %d, want 2", iter.Consumed())
 	}
 
 	// Peek then Next.
@@ -47,8 +51,8 @@ func TestLookaheadIterator_BasicNextAndPeek(t *testing.T) {
 	if got := iter.Next(); got != 30 {
 		t.Fatalf("Next() = %d, want 30", got)
 	}
-	if iter.Count() != 3 {
-		t.Fatalf("Count() = %d, want 3", iter.Count())
+	if iter.Consumed() != 3 {
+		t.Fatalf("Consumed() = %d, want 3", iter.Consumed())
 	}
 }
 
@@ -87,29 +91,29 @@ func TestLookaheadIterator_PeekDoesNotCallNextFnTwice(t *testing.T) {
 	}
 }
 
-func TestLookaheadIterator_Count_StartsAtZero(t *testing.T) {
+func TestLookaheadIterator_Consumed_StartsAtZero(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 0 })
-	if iter.Count() != 0 {
-		t.Fatalf("Count() = %d, want 0", iter.Count())
+	if iter.Consumed() != 0 {
+		t.Fatalf("Consumed() = %d, want 0", iter.Consumed())
 	}
 }
 
-func TestLookaheadIterator_Count_IncrementedByNext(t *testing.T) {
+func TestLookaheadIterator_Consumed_IncrementedByNext(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 42 })
 	for i := 1; i <= 5; i++ {
 		iter.Next()
-		if iter.Count() != i {
-			t.Fatalf("after %d Next calls: Count() = %d", i, iter.Count())
+		if iter.Consumed() != i {
+			t.Fatalf("after %d Next calls: Consumed() = %d", i, iter.Consumed())
 		}
 	}
 }
 
-func TestLookaheadIterator_Count_NotIncrementedByPeek(t *testing.T) {
+func TestLookaheadIterator_Consumed_NotIncrementedByPeek(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 1 })
 	iter.Peek()
 	iter.Peek()
-	if iter.Count() != 0 {
-		t.Fatalf("Peek should not increment Count; got %d", iter.Count())
+	if iter.Consumed() != 0 {
+		t.Fatalf("Peek should not increment Consumed; got %d", iter.Consumed())
 	}
 }
 
@@ -126,15 +130,15 @@ func TestLookaheadIterator_ExpectNextValue_Match(t *testing.T) {
 
 	eq := func(a, b int) bool { return a == b }
 
-	result := iter.ExpectNextValue(5, eq)
-	if result == nil {
-		t.Fatal("expected match, got nil")
+	result, ok := iter.ExpectNextValue(5, eq)
+	if !ok {
+		t.Fatal("expected match, got ok=false")
 	}
-	if *result != 5 {
-		t.Fatalf("matched value = %d, want 5", *result)
+	if result != 5 {
+		t.Fatalf("matched value = %d, want 5", result)
 	}
-	if iter.Count() != 1 {
-		t.Fatalf("Count() = %d, want 1 (match should consume)", iter.Count())
+	if iter.Consumed() != 1 {
+		t.Fatalf("Consumed() = %d, want 1 (match should consume)", iter.Consumed())
 	}
 }
 
@@ -149,12 +153,12 @@ func TestLookaheadIterator_ExpectNextValue_NoMatch(t *testing.T) {
 
 	eq := func(a, b int) bool { return a == b }
 
-	result := iter.ExpectNextValue(999, eq)
-	if result != nil {
-		t.Fatalf("expected nil for non-match, got %d", *result)
+	result, ok := iter.ExpectNextValue(999, eq)
+	if ok {
+		t.Fatalf("expected ok=false for non-match, got ok=true with %d", result)
 	}
-	if iter.Count() != 0 {
-		t.Fatalf("Count() = %d, want 0 (non-match should not consume)", iter.Count())
+	if iter.Consumed() != 0 {
+		t.Fatalf("Consumed() = %d, want 0 (non-match should not consume)", iter.Consumed())
 	}
 
 	// The element should still be available.
@@ -175,16 +179,16 @@ func TestLookaheadIterator_ExpectNextValue_ConsecutiveMatches(t *testing.T) {
 	eq := func(a, b int) bool { return a == b }
 
 	for i, expected := range seq {
-		result := iter.ExpectNextValue(expected, eq)
-		if result == nil {
-			t.Fatalf("step %d: expected match for %d, got nil", i, expected)
+		result, ok := iter.ExpectNextValue(expected, eq)
+		if !ok {
+			t.Fatalf("step %d: expected match for %d, got ok=false", i, expected)
 		}
-		if *result != expected {
-			t.Fatalf("step %d: got %d, want %d", i, *result, expected)
+		if result != expected {
+			t.Fatalf("step %d: got %d, want %d", i, result, expected)
 		}
 	}
-	if iter.Count() != 3 {
-		t.Fatalf("Count() = %d, want 3", iter.Count())
+	if iter.Consumed() != 3 {
+		t.Fatalf("Consumed() = %d, want 3", iter.Consumed())
 	}
 }
 
@@ -200,12 +204,14 @@ func TestLookaheadIterator_ExpectNextValue_FailThenSucceed(t *testing.T) {
 	eq := func(a, b int) bool { return a == b }
 
 	// Fail: looking for 2, but next is 1.
-	if r := iter.ExpectNextValue(2, eq); r != nil {
-		t.Fatalf("expected nil, got %d", *r)
+	if _, ok := iter.ExpectNextValue(2, eq); ok {
+		t.Fatal("expected ok=false, got ok=true")
 	}
 	// Succeed: looking for 1, and next is 1.
-	if r := iter.ExpectNextValue(1, eq); r == nil {
-		t.Fatal("expected match for 1, got nil")
+	if r, ok := iter.ExpectNextValue(1, eq); !ok {
+		t.Fatal("expected match for 1, got ok=false")
+	} else if r != 1 {
+		t.Fatalf("got %d, want 1", r)
 	}
 }
 
@@ -214,34 +220,34 @@ func TestLookaheadIterator_ExpectNextValue_FailThenSucceed(t *testing.T) {
 func TestLookaheadIterator_ExpectNextMatches_PredicateTrue(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 42 })
 
-	result := iter.ExpectNextMatches(func(v int) bool { return v > 0 })
-	if result == nil {
-		t.Fatal("expected match, got nil")
+	result, ok := iter.ExpectNextMatches(func(v int) bool { return v > 0 })
+	if !ok {
+		t.Fatal("expected match, got ok=false")
 	}
-	if *result != 42 {
-		t.Fatalf("matched = %d, want 42", *result)
+	if result != 42 {
+		t.Fatalf("matched = %d, want 42", result)
 	}
-	if iter.Count() != 1 {
-		t.Fatalf("Count() = %d, want 1", iter.Count())
+	if iter.Consumed() != 1 {
+		t.Fatalf("Consumed() = %d, want 1", iter.Consumed())
 	}
 }
 
 func TestLookaheadIterator_ExpectNextMatches_PredicateFalse(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 42 })
 
-	result := iter.ExpectNextMatches(func(v int) bool { return v < 0 })
-	if result != nil {
-		t.Fatalf("expected nil, got %d", *result)
+	_, ok := iter.ExpectNextMatches(func(v int) bool { return v < 0 })
+	if ok {
+		t.Fatal("expected ok=false, got ok=true")
 	}
-	if iter.Count() != 0 {
-		t.Fatalf("Count() = %d, want 0 (no consume on mismatch)", iter.Count())
+	if iter.Consumed() != 0 {
+		t.Fatalf("Consumed() = %d, want 0 (no consume on mismatch)", iter.Consumed())
 	}
 }
 
 func TestLookaheadIterator_ExpectNextMatches_PredicateCalledOnce(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 1 })
 	calls := 0
-	iter.ExpectNextMatches(func(v int) bool {
+	_, _ = iter.ExpectNextMatches(func(v int) bool {
 		calls++
 		return false
 	})
@@ -260,9 +266,9 @@ func TestLookaheadIterator_ExpectNextMatches_DoesNotConsumeOnMismatch(t *testing
 	})
 
 	// Mismatch.
-	result := iter.ExpectNextMatches(func(v string) bool { return v == "world" })
-	if result != nil {
-		t.Fatalf("expected nil, got %q", *result)
+	_, ok := iter.ExpectNextMatches(func(v string) bool { return v == "world" })
+	if ok {
+		t.Fatal("expected ok=false, got ok=true")
 	}
 
 	// "hello" should still be there.
@@ -298,60 +304,59 @@ func TestLookaheadIterator_WithStrings(t *testing.T) {
 	if got := iter.Next(); got != "WHERE" {
 		t.Fatalf("Next() = %q, want 'WHERE'", got)
 	}
-	if iter.Count() != 3 {
-		t.Fatalf("Count() = %d, want 3", iter.Count())
+	if iter.Consumed() != 3 {
+		t.Fatalf("Consumed() = %d, want 3", iter.Consumed())
 	}
 }
 
 // ---------- Integration: LookaheadIterator wrapping the Lexer ----------------
 
 func TestLookaheadIterator_WithLexer(t *testing.T) {
-	l := NewLexer("SELECT * FROM t;")
-	iter := NewLookaheadIterator(func() Token {
-		tok, _ := l.NextToken()
-		return tok
+	l := lexer.NewLexer("test", "SELECT * FROM t;")
+	iter := NewLookaheadIterator(func() lexer.Token {
+		return l.NextToken()
 	})
 
 	// Peek should give SELECT.
 	peeked := iter.Peek()
-	if peeked.Type != TOKEN_SELECT {
+	if peeked.Type != lexer.TOKEN_SELECT {
 		t.Fatalf("Peek() type = %v, want SELECT", peeked.Type)
 	}
 
 	// Next should consume the same SELECT.
 	got := iter.Next()
-	if got.Type != TOKEN_SELECT {
+	if got.Type != lexer.TOKEN_SELECT {
 		t.Fatalf("Next() type = %v, want SELECT", got.Type)
 	}
 
 	// Next → STAR.
 	got = iter.Next()
-	if got.Type != TOKEN_STAR {
+	if got.Type != lexer.TOKEN_STAR {
 		t.Fatalf("Next() type = %v, want STAR", got.Type)
 	}
 
 	// Peek → FROM.
 	peeked = iter.Peek()
-	if peeked.Type != TOKEN_FROM {
+	if peeked.Type != lexer.TOKEN_FROM {
 		t.Fatalf("Peek() type = %v, want FROM", peeked.Type)
 	}
 
 	// ExpectNextValue should match FROM.
-	eq := func(a, b Token) bool { return a.Type == b.Type }
-	result := iter.ExpectNextValue(Token{Type: TOKEN_FROM}, eq)
-	if result == nil {
-		t.Fatal("expected FROM to match, got nil")
+	eq := func(a, b lexer.Token) bool { return a.Type == b.Type }
+	result, ok := iter.ExpectNextValue(lexer.Token{Type: lexer.TOKEN_FROM}, eq)
+	if !ok {
+		t.Fatal("expected FROM to match, got ok=false")
 	}
 	if result.Literal != "FROM" {
 		t.Fatalf("matched literal = %q, want 'FROM'", result.Literal)
 	}
 
 	// ExpectNextMatches for an identifier.
-	result = iter.ExpectNextMatches(func(tok Token) bool {
-		return tok.Type == TOKEN_IDENT
+	result, ok = iter.ExpectNextMatches(func(tok lexer.Token) bool {
+		return tok.Type == lexer.TOKEN_IDENT
 	})
-	if result == nil {
-		t.Fatal("expected IDENT match, got nil")
+	if !ok {
+		t.Fatal("expected IDENT match, got ok=false")
 	}
 	if result.Literal != "t" {
 		t.Fatalf("matched literal = %q, want 't'", result.Literal)
@@ -359,39 +364,38 @@ func TestLookaheadIterator_WithLexer(t *testing.T) {
 
 	// SEMICOLON.
 	got = iter.Next()
-	if got.Type != TOKEN_SEMICOLON {
+	if got.Type != lexer.TOKEN_SEMICOLON {
 		t.Fatalf("Next() type = %v, want SEMICOLON", got.Type)
 	}
 
 	// EOF.
 	got = iter.Next()
-	if got.Type != TOKEN_EOF {
+	if got.Type != lexer.TOKEN_EOF {
 		t.Fatalf("Next() type = %v, want EOF", got.Type)
 	}
 
-	if iter.Count() != 6 {
-		t.Fatalf("Count() = %d, want 6", iter.Count())
+	if iter.Consumed() != 6 {
+		t.Fatalf("Consumed() = %d, want 6", iter.Consumed())
 	}
 }
 
 func TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer(t *testing.T) {
-	l := NewLexer("SELECT FROM")
-	iter := NewLookaheadIterator(func() Token {
-		tok, _ := l.NextToken()
-		return tok
+	l := lexer.NewLexer("test", "SELECT FROM")
+	iter := NewLookaheadIterator(func() lexer.Token {
+		return l.NextToken()
 	})
 
-	eq := func(a, b Token) bool { return a.Type == b.Type }
+	eq := func(a, b lexer.Token) bool { return a.Type == b.Type }
 
 	// Try to match FROM, but next is SELECT — should fail.
-	result := iter.ExpectNextValue(Token{Type: TOKEN_FROM}, eq)
-	if result != nil {
-		t.Fatal("expected nil, got a match")
+	_, ok := iter.ExpectNextValue(lexer.Token{Type: lexer.TOKEN_FROM}, eq)
+	if ok {
+		t.Fatal("expected ok=false, got ok=true")
 	}
 
 	// SELECT should still be the next token.
 	got := iter.Next()
-	if got.Type != TOKEN_SELECT {
+	if got.Type != lexer.TOKEN_SELECT {
 		t.Fatalf("Next() after failed expect = %v, want SELECT", got.Type)
 	}
 }
@@ -423,11 +427,14 @@ func TestLookaheadIterator_WithStructs(t *testing.T) {
 	}
 
 	// ExpectNextMatches with struct field check.
-	result := iter.ExpectNextMatches(func(p testPair) bool {
+	result, ok := iter.ExpectNextMatches(func(p testPair) bool {
 		return p.key == "a"
 	})
-	if result == nil {
-		t.Fatal("expected match, got nil")
+	if !ok {
+		t.Fatal("expected match, got ok=false")
+	}
+	if result.key != "a" || result.value != 1 {
+		t.Fatalf("matched = %+v, want {a 1}", result)
 	}
 
 	// Next.
@@ -436,7 +443,7 @@ func TestLookaheadIterator_WithStructs(t *testing.T) {
 		t.Fatalf("Next() = %+v, want key='b'", got)
 	}
 
-	if iter.Count() != 2 {
-		t.Fatalf("Count() = %d, want 2", iter.Count())
+	if iter.Consumed() != 2 {
+		t.Fatalf("Consumed() = %d, want 2", iter.Consumed())
 	}
 }

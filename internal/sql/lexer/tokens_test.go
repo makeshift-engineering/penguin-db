@@ -3,6 +3,8 @@ package lexer
 import (
 	"fmt"
 	"testing"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
 // ---------- TokenType.String() -----------------------------------------------
@@ -72,24 +74,59 @@ func TestToken_String(t *testing.T) {
 		want  string
 	}{
 		{
-			Token{Type: TOKEN_SELECT, Literal: "SELECT", Line: 1, Col: 1},
-			`Token{SELECT       "SELECT"  1:1}`,
+			Token{
+				Type:    TOKEN_SELECT,
+				Literal: "SELECT",
+				Span: diagnostic.Span{
+					Start: diagnostic.Pos{Line: 1, Col: 1},
+					End:   diagnostic.Pos{Line: 1, Col: 7},
+				},
+			},
+			`Token{SELECT       "SELECT"  1:1-1:7}`,
 		},
 		{
-			Token{Type: TOKEN_INTEGER, Literal: "42", Line: 3, Col: 15},
-			`Token{INTEGER      "42"  3:15}`,
+			Token{
+				Type:    TOKEN_INTEGER,
+				Literal: "42",
+				Span: diagnostic.Span{
+					Start: diagnostic.Pos{Line: 3, Col: 15},
+					End:   diagnostic.Pos{Line: 3, Col: 17},
+				},
+			},
+			`Token{INTEGER      "42"  3:15-3:17}`,
 		},
 		{
-			Token{Type: TOKEN_STRING, Literal: "hello", Line: 1, Col: 10},
-			`Token{STRING       "hello"  1:10}`,
+			Token{
+				Type:    TOKEN_STRING,
+				Literal: "hello",
+				Span: diagnostic.Span{
+					Start: diagnostic.Pos{Line: 1, Col: 10},
+					End:   diagnostic.Pos{Line: 1, Col: 17},
+				},
+			},
+			`Token{STRING       "hello"  1:10-1:17}`,
 		},
 		{
-			Token{Type: TOKEN_EOF, Literal: "", Line: 5, Col: 1},
-			`Token{EOF          ""  5:1}`,
+			Token{
+				Type:    TOKEN_EOF,
+				Literal: "",
+				Span: diagnostic.Span{
+					Start: diagnostic.Pos{Line: 5, Col: 1},
+					End:   diagnostic.Pos{Line: 5, Col: 1},
+				},
+			},
+			`Token{EOF          ""  5:1-5:1}`,
 		},
 		{
-			Token{Type: TOKEN_ILLEGAL, Literal: "@", Line: 1, Col: 1},
-			`Token{ILLEGAL      "@"  1:1}`,
+			Token{
+				Type:    TOKEN_ILLEGAL,
+				Literal: "@",
+				Span: diagnostic.Span{
+					Start: diagnostic.Pos{Line: 1, Col: 1},
+					End:   diagnostic.Pos{Line: 1, Col: 2},
+				},
+			},
+			`Token{ILLEGAL      "@"  1:1-1:2}`,
 		},
 	}
 	for _, tc := range tests {

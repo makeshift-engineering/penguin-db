@@ -12,24 +12,31 @@ import (
 
 // tok is a compact constructor for expected Token values in table-driven tests.
 func tok(typ TokenType, lit string, line, col int) Token {
-	return Token{Type: typ, Literal: lit, Line: line, Col: col}
+	return Token{
+		Type:    typ,
+		Literal: lit,
+		Span: diagnostic.Span{
+			Start: diagnostic.Pos{Line: line, Col: col},
+			End:   diagnostic.Pos{Line: line, Col: col + len(lit)},
+		},
+	}
 }
 
 // collectAll drives the lexer to exhaustion and returns every token it emits
 // (including the final EOF). It fails the test on the first error.
 func collectAll(t *testing.T, input string) []Token {
 	t.Helper()
-	l := NewLexer(input)
+	l := NewLexer("test", input)
 	var tokens []Token
 	for {
-		token, err := l.NextToken()
-		if err != nil {
-			t.Fatalf("unexpected error at %d:%d: %v", token.Line, token.Col, err)
-		}
+		token := l.NextToken()
 		tokens = append(tokens, token)
 		if token.Type == TOKEN_EOF {
 			break
 		}
+	}
+	if l.Diagnostics().HasErrors() {
+		t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 	}
 	return tokens
 }
@@ -44,8 +51,10 @@ func requireTokens(t *testing.T, input string, want []Token) {
 			len(got), len(want), got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("token[%d]: got %v, want %v", i, got[i], want[i])
+		g := got[i]
+		w := want[i]
+		if g.Type != w.Type || g.Literal != w.Literal || g.Span.Start.Line != w.Span.Start.Line || g.Span.Start.Col != w.Span.Start.Col {
+			t.Errorf("token[%d]: got %v, want %v", i, g, w)
 		}
 	}
 }
@@ -54,15 +63,26 @@ func requireTokens(t *testing.T, input string, want []Token) {
 // ILLEGAL or EOF token at the expected position.
 func requireError(t *testing.T, input string, sentinel error) {
 	t.Helper()
-	l := NewLexer(input)
+	l := NewLexer("test", input)
 	for {
-		_, err := l.NextToken()
-		if err != nil {
-			if !errors.Is(err, sentinel) {
-				t.Fatalf("expected error wrapping %v, got %v", sentinel, err)
-			}
-			return
+		token := l.NextToken()
+		if token.Type == TOKEN_EOF {
+			break
 		}
+	}
+	if !l.Diagnostics().HasErrors() {
+		t.Fatalf("expected error, but got none")
+	}
+
+	var found bool
+	for _, d := range l.Diagnostics() {
+		if errors.Is(d, sentinel) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected error wrapping %v, got %v", sentinel, l.Diagnostics().Error())
 	}
 }
 
@@ -81,11 +101,11 @@ func TestNextToken_OnlyWhitespace(t *testing.T) {
 }
 
 func TestNextToken_RepeatedEOF(t *testing.T) {
-	l := NewLexer("")
+	l := NewLexer("test", "")
 	for i := 0; i < 5; i++ {
-		token, err := l.NextToken()
-		if err != nil {
-			t.Fatalf("iteration %d: unexpected error: %v", i, err)
+		token := l.NextToken()
+		if l.Diagnostics().HasErrors() {
+			t.Fatalf("iteration %d: unexpected error: %v", i, l.Diagnostics().Error())
 		}
 		if token.Type != TOKEN_EOF {
 			t.Fatalf("iteration %d: expected EOF, got %v", i, token)
@@ -186,13 +206,20 @@ func TestNextToken_ComparisonOperators(t *testing.T) {
 // ---------- Lone bang (!) is ILLEGAL -----------------------------------------
 
 func TestNextToken_LoneBang_IsIllegal(t *testing.T) {
-	l := NewLexer("!")
-	token, err := l.NextToken()
-	if err == nil {
+	l := NewLexer("test", "!")
+	token := l.NextToken()
+	if !l.Diagnostics().HasErrors() {
 		t.Fatal("expected error for lone '!'")
 	}
-	if !errors.Is(err, ErrUnexpectedChar) {
-		t.Fatalf("expected ErrUnexpectedChar, got %v", err)
+	var found bool
+	for _, d := range l.Diagnostics() {
+		if errors.Is(d, CodeUnexpectedChar) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected CodeUnexpectedChar, got %v", l.Diagnostics().Error())
 	}
 	if token.Type != TOKEN_ILLEGAL {
 		t.Fatalf("expected TOKEN_ILLEGAL, got %v", token.Type)
@@ -315,10 +342,10 @@ func TestNextToken_Strings(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			l := NewLexer(tc.input)
-			token, err := l.NextToken()
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			l := NewLexer("test", tc.input)
+			token := l.NextToken()
+			if l.Diagnostics().HasErrors() {
+				t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 			}
 			if token.Type != TOKEN_STRING {
 				t.Fatalf("expected TOKEN_STRING, got %v", token.Type)
@@ -326,8 +353,8 @@ func TestNextToken_Strings(t *testing.T) {
 			if token.Literal != tc.wantLit {
 				t.Fatalf("literal: got %q, want %q", token.Literal, tc.wantLit)
 			}
-			if token.Line != 1 || token.Col != 1 {
-				t.Fatalf("position: got %d:%d, want 1:1", token.Line, token.Col)
+			if token.Span.Start.Line != 1 || token.Span.Start.Col != 1 {
+				t.Fatalf("position: got %d:%d, want 1:1", token.Span.Start.Line, token.Span.Start.Col)
 			}
 		})
 	}
@@ -342,7 +369,7 @@ func TestNextToken_UnterminatedString(t *testing.T) {
 	}
 	for _, input := range inputs {
 		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
-			requireError(t, input, ErrUnterminatedString)
+			requireError(t, input, CodeUnterminatedString)
 		})
 	}
 }
@@ -564,7 +591,7 @@ func TestNextToken_UnterminatedBlockComment(t *testing.T) {
 	}
 	for _, input := range inputs {
 		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
-			requireError(t, input, ErrUnterminatedComment)
+			requireError(t, input, CodeUnterminatedComment)
 		})
 	}
 }
@@ -583,13 +610,20 @@ func TestNextToken_IllegalCharacters(t *testing.T) {
 	illegals := []string{"@", "#", "$", "^", "&", "~", "\\", "`", "?", "|"}
 	for _, ch := range illegals {
 		t.Run(ch, func(t *testing.T) {
-			l := NewLexer(ch)
-			token, err := l.NextToken()
-			if err == nil {
+			l := NewLexer("test", ch)
+			token := l.NextToken()
+			if !l.Diagnostics().HasErrors() {
 				t.Fatal("expected error for illegal character")
 			}
-			if !errors.Is(err, ErrUnexpectedChar) {
-				t.Fatalf("expected ErrUnexpectedChar, got %v", err)
+			var found bool
+			for _, d := range l.Diagnostics() {
+				if errors.Is(d, CodeUnexpectedChar) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected CodeUnexpectedChar, got %v", l.Diagnostics().Error())
 			}
 			if token.Type != TOKEN_ILLEGAL {
 				t.Fatalf("expected TOKEN_ILLEGAL, got %v", token.Type)
@@ -618,16 +652,16 @@ func TestNextToken_TabTracking(t *testing.T) {
 	// Tabs count as single column advances.
 	input := "\tSELECT"
 	tokens := collectAll(t, input)
-	if tokens[0].Col != 2 {
-		t.Errorf("expected column 2 after tab, got %d", tokens[0].Col)
+	if tokens[0].Span.Start.Col != 2 {
+		t.Errorf("expected column 2 after tab, got %d", tokens[0].Span.Start.Col)
 	}
 }
 
 func TestNextToken_MultipleNewlines(t *testing.T) {
 	input := "\n\n\n42"
 	tokens := collectAll(t, input)
-	if tokens[0].Line != 4 || tokens[0].Col != 1 {
-		t.Errorf("expected 4:1, got %d:%d", tokens[0].Line, tokens[0].Col)
+	if tokens[0].Span.Start.Line != 4 || tokens[0].Span.Start.Col != 1 {
+		t.Errorf("expected 4:1, got %d:%d", tokens[0].Span.Start.Line, tokens[0].Span.Start.Col)
 	}
 }
 
@@ -636,12 +670,12 @@ func TestNextToken_CarriageReturnLineFeed(t *testing.T) {
 	input := "a\r\nb"
 	tokens := collectAll(t, input)
 	// 'a' at 1:1
-	if tokens[0].Line != 1 || tokens[0].Col != 1 {
-		t.Errorf("'a' expected 1:1, got %d:%d", tokens[0].Line, tokens[0].Col)
+	if tokens[0].Span.Start.Line != 1 || tokens[0].Span.Start.Col != 1 {
+		t.Errorf("'a' expected 1:1, got %d:%d", tokens[0].Span.Start.Line, tokens[0].Span.Start.Col)
 	}
 	// 'b' at 2:1
-	if tokens[1].Line != 2 || tokens[1].Col != 1 {
-		t.Errorf("'b' expected 2:1, got %d:%d", tokens[1].Line, tokens[1].Col)
+	if tokens[1].Span.Start.Line != 2 || tokens[1].Span.Start.Col != 1 {
+		t.Errorf("'b' expected 2:1, got %d:%d", tokens[1].Span.Start.Line, tokens[1].Span.Start.Col)
 	}
 }
 
@@ -669,24 +703,42 @@ func TestNextToken_NoWhitespace(t *testing.T) {
 // ---------- LexError structure -----------------------------------------------
 
 func TestDiagnostic_ErrorMessage(t *testing.T) {
-	e := diagnostic.New(ErrUnexpectedChar, 5, 10, "unexpected character: %q", "@")
-	want := "5:10: E1001: unexpected character: \"@\""
+	e := diagnostic.Diagnostic{
+		Severity: diagnostic.SeverityError,
+		Code:     CodeUnexpectedChar,
+		Category: "Illegal Character",
+		Span: diagnostic.Span{
+			Start: diagnostic.Pos{Line: 5, Col: 10},
+			End:   diagnostic.Pos{Line: 5, Col: 11},
+		},
+		Msg: `unexpected character "@"`,
+	}
+	want := `5:10: error [E1001] Illegal Character: unexpected character "@"`
 	if e.Error() != want {
 		t.Errorf("got %q, want %q", e.Error(), want)
 	}
 }
 
 func TestDiagnostic_Unwrap(t *testing.T) {
-	e := diagnostic.New(ErrUnterminatedString, 1, 1, "detail")
-	if !errors.Is(e, ErrUnterminatedString) {
+	e := diagnostic.Diagnostic{
+		Severity: diagnostic.SeverityError,
+		Code:     CodeUnterminatedString,
+		Category: "Unterminated String",
+		Span: diagnostic.Span{
+			Start: diagnostic.Pos{Line: 1, Col: 1},
+			End:   diagnostic.Pos{Line: 1, Col: 2},
+		},
+		Msg: "detail",
+	}
+	if !errors.Is(e, CodeUnterminatedString) {
 		t.Error("errors.Is should match sentinel Code")
 	}
 	var diag diagnostic.Diagnostic
 	if !errors.As(e, &diag) {
 		t.Error("errors.As should succeed for diagnostic.Diagnostic")
 	}
-	if diag.Line != 1 || diag.Col != 1 {
-		t.Errorf("position: got %d:%d, want 1:1", diag.Line, diag.Col)
+	if diag.Span.Start.Line != 1 || diag.Span.Start.Col != 1 {
+		t.Errorf("position: got %d:%d, want 1:1", diag.Span.Start.Line, diag.Span.Start.Col)
 	}
 }
 
@@ -1174,10 +1226,10 @@ func TestNextToken_KeywordAsPrefix(t *testing.T) {
 func TestNextToken_MultiLineString(t *testing.T) {
 	// Strings can span newlines.
 	input := "'line1\nline2'"
-	l := NewLexer(input)
-	token, err := l.NextToken()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	l := NewLexer("test", input)
+	token := l.NextToken()
+	if l.Diagnostics().HasErrors() {
+		t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 	}
 	if token.Type != TOKEN_STRING {
 		t.Fatalf("expected TOKEN_STRING, got %v", token.Type)
@@ -1278,16 +1330,16 @@ func TestNextToken_NegativeNumberContext(t *testing.T) {
 func TestNextToken_ErrorRecovery(t *testing.T) {
 	// After hitting an illegal character, the lexer should still be able to
 	// produce subsequent tokens.
-	l := NewLexer("@ SELECT")
-	token, err := l.NextToken()
-	if err == nil || token.Type != TOKEN_ILLEGAL {
-		t.Fatalf("expected ILLEGAL token with error, got %v, err=%v", token, err)
+	l := NewLexer("test", "@ SELECT")
+	token := l.NextToken()
+	if token.Type != TOKEN_ILLEGAL {
+		t.Fatalf("expected ILLEGAL token, got %v", token)
+	}
+	if !l.Diagnostics().HasErrors() {
+		t.Fatal("expected diagnostic error")
 	}
 	// The next call should produce SELECT.
-	token, err = l.NextToken()
-	if err != nil {
-		t.Fatalf("unexpected error after recovery: %v", err)
-	}
+	token = l.NextToken()
 	if token.Type != TOKEN_SELECT {
 		t.Fatalf("expected SELECT after recovery, got %v", token.Type)
 	}
