@@ -113,7 +113,13 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 // | Index Offset | Bloom Offset | Bloom NumHashes | Entry Count | Magic     |
 // | (8 bytes)    | (8 bytes)    | (1 byte)        | (4 bytes)   | (4 bytes) |
 // +--------------+--------------+-----------------+-------------+-----------+
-func (w *Writer) Close() error {
+func (w *Writer) Close() (closeErr error) {
+	defer func() {
+		if err := w.file.Close(); closeErr == nil {
+			closeErr = err
+		}
+	}()
+
 	indexOffset := w.offset
 
 	for _, entry := range w.index {
@@ -153,9 +159,6 @@ func (w *Writer) Close() error {
 	if err := w.writer.Flush(); err != nil {
 		return err
 	}
-	if err := w.file.Sync(); err != nil {
-		return err
-	}
 
-	return w.file.Close()
+	return w.file.Sync()
 }

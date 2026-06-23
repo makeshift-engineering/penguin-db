@@ -1,6 +1,7 @@
 package sstable
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -1593,5 +1594,103 @@ func TestWriter_MaxKeyLengthAccepted(t *testing.T) {
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+// mockFailWriter is a writer that always returns an error, used to simulate
+// write failures during Close.
+type mockFailWriter struct{}
+
+func (*mockFailWriter) Write([]byte) (int, error) {
+	return 0, errors.New("injected write failure")
+}
+
+// TestWriter_CloseReleasesFileOnWriteError verifies that Close always releases
+// the underlying file descriptor even when writing the index/bloom/footer
+// fails. Before the fix this was a file descriptor leak.
+func TestWriter_CloseReleasesFileOnWriteError(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "leak.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	// Add an entry so there is index data to write during Close.
+	if err := w.Add([]byte("k"), []byte("v"), OpcodePut); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Sabotage the buffered writer so all writes inside Close fail.
+	w.writer = bufio.NewWriter(&mockFailWriter{})
+
+	// Close must return an error from the failing writer...
+	if err := w.Close(); err == nil {
+		t.Fatal("expected Close to return an error from the failing writer")
+	}
+
+	// ...but the underlying file must still be closed (defer guarantee).
+	// Attempting Sync on a closed file must fail.
+	if err := w.file.Sync(); err == nil {
+		t.Error("file.Sync() succeeded after Close; file descriptor was leaked")
+	}
+}
+
+// TestWriter_CloseReturnsWriteErrorOverCloseError verifies that when a write
+// error occurs AND the file close also errors, the original write error is the
+// one surfaced to the caller.
+func TestWriter_CloseReturnsWriteErrorOverCloseError(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "err_priority.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	if err := w.Add([]byte("k"), []byte("v"), OpcodePut); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Close the file early so that the deferred file.Close() also errors.
+	w.file.Close()
+
+	// Sabotage the writer so Close hits a write error first.
+	w.writer = bufio.NewWriter(&mockFailWriter{})
+
+	err = w.Close()
+	if err == nil {
+		t.Fatal("expected Close to return an error")
+	}
+
+	// The returned error must be the write error, not the double-close error.
+	if !strings.Contains(err.Error(), "injected write failure") {
+		t.Errorf("expected write error to take precedence, got: %v", err)
+	}
+}
+
+// TestWriter_CloseReleasesFileOnSuccess verifies that after a successful Close
+// the file descriptor is no longer open (sanity check for the defer path).
+func TestWriter_CloseReleasesFileOnSuccess(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "closed.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	if err := w.Add([]byte("k"), []byte("v"), OpcodePut); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The file must be closed; Sync on a closed file must fail.
+	if err := w.file.Sync(); err == nil {
+		t.Error("file.Sync() succeeded after successful Close; fd not released")
 	}
 }
