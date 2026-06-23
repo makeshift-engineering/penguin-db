@@ -96,6 +96,20 @@ func (f *BloomFilter) NumHashes() uint8 {
 	return f.numHashes
 }
 
+// NewBloomFilterFromBytes reconstructs a BloomFilter from a serialised bit
+// vector and hash count. This is used when reading an SSTable to restore the
+// filter from the Bloom Block without re-inserting every key.
+func NewBloomFilterFromBytes(data []byte, numHashes uint8) *BloomFilter {
+	bits := make([]byte, len(data))
+	copy(bits, data)
+
+	return &BloomFilter{
+		bits:          bits,
+		numHashes:     numHashes,
+		totalBitCount: len(bits) * 8,
+	}
+}
+
 // hash is an internal helper to generate the two base hashes using FNV-1a.
 func (f *BloomFilter) hash(key []byte) (h1, h2 uint32) {
 	hasher := fnv.New32a()

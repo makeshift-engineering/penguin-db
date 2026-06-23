@@ -14,4 +14,17 @@ var (
 	// ErrValueTooLarge is returned when the value exceeds the maximum
 	// representable length (math.MaxUint32 bytes) in the on-disk data entry format.
 	ErrValueTooLarge = errors.New("sstable entry rejected: value length exceeds maximum of " + strconv.FormatUint(math.MaxUint32, 10) + " bytes")
+
+	// ErrInvalidMagic is returned when the SSTable footer does not contain the
+	// expected magic number (0x50454E47 / "PENG"), indicating the file is not a
+	// valid SSTable or has been truncated.
+	ErrInvalidMagic = errors.New("sstable: invalid magic number")
+
+	// ErrCorrupted is returned when structural invariants of the SSTable are
+	// violated (e.g., offsets exceed file size, entry counts mismatch).
+	ErrCorrupted = errors.New("sstable: data corruption detected")
+
+	// ErrReaderClosed is returned when a read operation is attempted on a
+	// Reader whose underlying file has already been closed.
+	ErrReaderClosed = errors.New("sstable: reader is closed")
 )
