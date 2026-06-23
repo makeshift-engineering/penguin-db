@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1526,5 +1527,71 @@ func TestWriter_IndexEntryHeaderSizeConstant(t *testing.T) {
 	expected := 2 + 8 // keyLen + dataOffset
 	if indexEntryHeaderSize != expected {
 		t.Errorf("indexEntryHeaderSize: got %d, want %d", indexEntryHeaderSize, expected)
+	}
+}
+
+// TestWriter_KeyTooLarge verifies that Add returns ErrKeyTooLarge when the key
+// exceeds math.MaxUint16 bytes (the maximum representable in the 2-byte key
+// length header field).
+func TestWriter_KeyTooLarge(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "key_too_large.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close()
+
+	oversizedKey := bytes.Repeat([]byte("K"), math.MaxUint16+1)
+	err = w.Add(oversizedKey, []byte("v"), OpcodePut)
+	if !errors.Is(err, ErrKeyTooLarge) {
+		t.Errorf("expected ErrKeyTooLarge, got: %v", err)
+	}
+}
+
+// TestWriter_ValueTooLarge verifies that Add returns ErrValueTooLarge when the
+// value exceeds math.MaxUint32 bytes (the maximum representable in the 4-byte
+// value length header field).
+//
+// This test is skipped by default because it allocates >4 GiB of memory.
+func TestWriter_ValueTooLarge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: allocates >4 GiB")
+	}
+
+	dir := testDir(t)
+	path := filepath.Join(dir, "value_too_large.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer w.Close()
+
+	oversizedValue := make([]byte, math.MaxUint32+1)
+	err = w.Add([]byte("k"), oversizedValue, OpcodePut)
+	if !errors.Is(err, ErrValueTooLarge) {
+		t.Errorf("expected ErrValueTooLarge, got: %v", err)
+	}
+}
+
+// TestWriter_MaxKeyLengthAccepted verifies that a key of exactly
+// math.MaxUint16 bytes is accepted (boundary test).
+func TestWriter_MaxKeyLengthAccepted(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "max_key.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	maxKey := bytes.Repeat([]byte("K"), math.MaxUint16)
+	if err := w.Add(maxKey, []byte("v"), OpcodePut); err != nil {
+		t.Fatalf("Add with max-length key should succeed, got: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }

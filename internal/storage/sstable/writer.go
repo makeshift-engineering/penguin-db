@@ -3,6 +3,7 @@ package sstable
 import (
 	"bufio"
 	"encoding/binary"
+	"math"
 	"os"
 )
 
@@ -56,6 +57,13 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 // | (2 bytes)  | (4 bytes)    | (1 byte) | (n bytes) | (m bytes) |
 // +------------+--------------+----------+-----------+-----------+
 func (w *Writer) Add(key, value []byte, opcode uint8) error {
+	if len(key) > math.MaxUint16 {
+		return ErrKeyTooLarge
+	}
+	if uint64(len(value)) > math.MaxUint32 {
+		return ErrValueTooLarge
+	}
+
 	// Record the offset for the index before writing.
 	w.index = append(w.index, indexEntry{
 		key:    key,
