@@ -98,7 +98,7 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 
 <select_list>       ::= <select_column> | <select_column> <symbol_comma> <select_list>
 <select_column>     ::= <symbol_star> | <select_expression> | <select_expression> <keyword_as> <identifier>
-<select_expression> ::= <expression> | <condition>
+<select_expression> ::= <expression> | <expression> <predicate_tail>
 
 <table_references>   ::= <table_reference> | <table_reference> <symbol_comma> <table_references>
 <table_reference>    ::= <table_primary> | <symbol_lparen> <table_reference> <join_clauses> <symbol_rparen>
@@ -131,21 +131,23 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 
 <where_clause>      ::= <keyword_where> <condition>
 <condition>         ::= <or_condition>
-<or_condition>      ::= <and_condition> | <and_condition> <keyword_or> <or_condition>
-<and_condition>     ::= <not_condition> | <not_condition> <keyword_and> <and_condition>
+<or_condition>      ::= <and_condition> | <and_condition> <or_tail>
+<or_tail>           ::= <keyword_or> <and_condition> | <keyword_or> <and_condition> <or_tail>
+<and_condition>     ::= <not_condition> | <not_condition> <and_tail>
+<and_tail>          ::= <keyword_and> <not_condition> | <keyword_and> <not_condition> <and_tail>
 <not_condition>     ::= <condition_primary> | <keyword_not> <not_condition>
 <condition_primary> ::= <predicate> | <symbol_lparen> <condition> <symbol_rparen>
-<predicate>         ::= <comparison_predicate> | <like_predicate> | <null_predicate> | <in_predicate> | <between_predicate>
-
-<comparison_predicate> ::= <expression> <comparison_operator> <expression>
-<like_predicate>       ::= <expression> <keyword_like> <expression>
-                         | <expression> <keyword_not> <keyword_like> <expression>
-<null_predicate>       ::= <expression> <keyword_is> <keyword_null>
-                         | <expression> <keyword_is> <keyword_not> <keyword_null>
-<in_predicate>         ::= <expression> <keyword_in> <symbol_lparen> <value_list> <symbol_rparen>
-                         | <expression> <keyword_not> <keyword_in> <symbol_lparen> <value_list> <symbol_rparen>
-<between_predicate>    ::= <expression> <keyword_between> <expression> <keyword_and> <expression>
-                         | <expression> <keyword_not> <keyword_between> <expression> <keyword_and> <expression>
+<predicate>      ::= <expression> <predicate_tail>
+<predicate_tail> ::= <comparison_operator> <expression>
+                   | <keyword_like> <expression>
+                   | <keyword_is> <keyword_null>
+                   | <keyword_is> <keyword_not> <keyword_null>
+                   | <keyword_in> <symbol_lparen> <value_list> <symbol_rparen>
+                   | <keyword_between> <expression> <keyword_and> <expression>
+                   | <keyword_not> <predicate_not_tail>
+<predicate_not_tail> ::= <keyword_like> <expression>
+                       | <keyword_in> <symbol_lparen> <value_list> <symbol_rparen>
+                       | <keyword_between> <expression> <keyword_and> <expression>
 
 <comparison_operator> ::= <symbol_equal>
                         | <symbol_not_equal>
@@ -165,17 +167,23 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <limit_clause> ::= <keyword_limit> <integer_literal>
                  | <keyword_limit> <integer_literal> <keyword_offset> <integer_literal>
 
-<expression> ::= <term> | <term> <symbol_plus> <expression> | <term> <symbol_minus> <expression>
-<term>       ::= <factor> | <factor> <symbol_star> <term> | <factor> <symbol_slash> <term> | <factor> <symbol_percent> <term>
-<factor>     ::= <literal> | <qualified_identifier> | <function_call>
-               | <symbol_lparen> <expression> <symbol_rparen>
-               | <symbol_minus> <factor> | <symbol_plus> <factor>
+<expression>          ::= <term> | <term> <additive_tail>
+<additive_tail>       ::= <symbol_plus>  <term>
+                        | <symbol_minus> <term>
+                        | <symbol_plus>  <term> <additive_tail>
+                        | <symbol_minus> <term> <additive_tail>
+
+<term>                ::= <factor> | <factor> <multiplicative_tail>
+<multiplicative_tail> ::= <symbol_star>    <factor>
+                        | <symbol_slash>   <factor>
+                        | <symbol_percent> <factor>
+                        | <symbol_star>    <factor> <multiplicative_tail>
+                        | <symbol_slash>   <factor> <multiplicative_tail>
+                        | <symbol_percent> <factor> <multiplicative_tail>
 
 <function_call>    ::= <identifier> <symbol_lparen> <symbol_rparen>
                      | <identifier> <symbol_lparen> <function_args> <symbol_rparen>
-<function_args>    ::= <symbol_star>
-                     | <select_expression> | <select_expression> <symbol_comma> <function_arg_tail>
-                     | <keyword_distinct> <select_expression> | <keyword_distinct> <select_expression> <symbol_comma> <function_arg_tail>
+<function_args>     ::= <symbol_star> | <function_arg_tail> | <keyword_distinct> <function_arg_tail>
 <function_arg_tail> ::= <select_expression> | <select_expression> <symbol_comma> <function_arg_tail>
 
 <qualified_identifier> ::= <identifier> | <identifier> <symbol_dot> <identifier>
@@ -349,13 +357,13 @@ ForeignConstraint    ::= 'REFERENCES' Identifier '(' Identifier ')'
 
 SignedLiteral        ::= Literal | ( '+' | '-' ) NumericLiteral
 
-SelectStatement     ::= 'SELECT' ( 'DISTINCT' | 'ALL' )? SelectList
-                        'FROM' TableReference ( ',' TableReference )*
-                        WhereClause?
-                        GroupByClause?
-                        HavingClause?
-                        OrderByClause?
-                        LimitClause?
+SelectStatement ::= 'SELECT' ( 'DISTINCT' | 'ALL' )? SelectList
+                    'FROM' TableReference ( ',' TableReference )*
+                    SelectClauses?
+SelectClauses    ::= WhereClause PostWhereClauses? | GroupByClause PostGroupByClauses? | OrderByClause LimitClause? | LimitClause
+PostWhereClauses    ::= GroupByClause PostGroupByClauses? | OrderByClause LimitClause? | LimitClause
+PostGroupByClauses  ::= HavingClause PostHavingClauses? | OrderByClause LimitClause? | LimitClause
+PostHavingClauses   ::= OrderByClause LimitClause? | LimitClause
 SelectList          ::= SelectColumn ( ',' SelectColumn )*
 SelectColumn        ::= '*' | SelectExpression ( 'AS' Identifier )?
 SelectExpression    ::= Expression | Condition
