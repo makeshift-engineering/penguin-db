@@ -32,13 +32,13 @@ const (
 
 // Footer field sizes
 const (
-	footerIndexOffsetSize    = 8
-	footerBloomOffsetSize    = 8
-	footerBloomNumHashesSize = 1
-	footerEntryCountSize     = 4
-	footerMagicSize          = 4
-	footerSize               = footerIndexOffsetSize + footerBloomOffsetSize + footerBloomNumHashesSize + footerEntryCountSize + footerMagicSize
-	magicNumber        uint32 = 0x50454E47 // "PENG"
+	footerIndexOffsetSize           = 8
+	footerBloomOffsetSize           = 8
+	footerBloomNumHashesSize        = 1
+	footerEntryCountSize            = 4
+	footerMagicSize                 = 4
+	footerSize                      = footerIndexOffsetSize + footerBloomOffsetSize + footerBloomNumHashesSize + footerEntryCountSize + footerMagicSize
+	magicNumber              uint32 = 0x50454E47 // "PENG"
 )
 
 // Footer field offsets
