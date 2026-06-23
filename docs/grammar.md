@@ -101,13 +101,13 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <select_expression> ::= <expression> | <condition>
 
 <table_references>   ::= <table_reference> | <table_reference> <symbol_comma> <table_references>
-<table_reference>    ::= <table_primary> | <table_primary> <join_clauses>
+<table_reference>    ::= <table_primary> | <symbol_lparen> <table_reference> <join_clauses> <symbol_rparen>
 <table_primary>      ::= <identifier> | <identifier> <keyword_as> <identifier> | <identifier> <identifier>
 <join_clauses>       ::= <join_clause> | <join_clause> <join_clauses>
 <join_clause>        ::= <keyword_join> <table_primary> <keyword_on> <condition>
-                       | <join_type> <keyword_join> <table_primary> <keyword_on> <condition>
+                       | <qualified_join_type> <keyword_join> <table_primary> <keyword_on> <condition>
                        | <keyword_cross> <keyword_join> <table_primary>
-<join_type>          ::= <keyword_inner>
+<qualified_join_type> ::= <keyword_inner>
                        | <keyword_left> | <keyword_left> <keyword_outer>
                        | <keyword_right> | <keyword_right> <keyword_outer>
                        | <keyword_full> | <keyword_full> <keyword_outer>
@@ -174,9 +174,9 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <function_call>    ::= <identifier> <symbol_lparen> <symbol_rparen>
                      | <identifier> <symbol_lparen> <function_args> <symbol_rparen>
 <function_args>    ::= <symbol_star>
-                     | <expression> | <expression> <symbol_comma> <function_arg_tail>
-                     | <keyword_distinct> <expression> | <keyword_distinct> <expression> <symbol_comma> <function_arg_tail>
-<function_arg_tail> ::= <expression> | <expression> <symbol_comma> <function_arg_tail>
+                     | <select_expression> | <select_expression> <symbol_comma> <function_arg_tail>
+                     | <keyword_distinct> <select_expression> | <keyword_distinct> <select_expression> <symbol_comma> <function_arg_tail>
+<function_arg_tail> ::= <select_expression> | <select_expression> <symbol_comma> <function_arg_tail>
 
 <qualified_identifier> ::= <identifier> | <identifier> <symbol_dot> <identifier>
 
@@ -371,10 +371,12 @@ SetItem              ::= QualifiedIdentifier '=' Expression
 
 DeleteStatement      ::= 'DELETE' 'FROM' Identifier WhereClause?
 
-TableReference       ::= TablePrimary ( JoinClause )*
+TableReference       ::= TablePrimary
+                       | '(' TableReference ( JoinClause )+ ')'
 TablePrimary         ::= Identifier ( ( 'AS' )? Identifier )?
-JoinClause           ::= JoinType? 'JOIN' TablePrimary 'ON' Condition
-JoinType             ::= 'INNER' | 'LEFT' 'OUTER'? | 'RIGHT' 'OUTER'? | 'FULL' 'OUTER'? | 'CROSS'
+JoinClause           ::= QualifiedJoinType? 'JOIN' TablePrimary 'ON' Condition
+                       | 'CROSS' 'JOIN' TablePrimary
+QualifiedJoinType    ::= 'INNER' | 'LEFT' 'OUTER'? | 'RIGHT' 'OUTER'? | 'FULL' 'OUTER'?
 
 WhereClause          ::= 'WHERE' Condition
 Condition            ::= OrCondition
@@ -409,7 +411,7 @@ Factor               ::= Literal
                        | ( '+' | '-' ) Factor
 
 FunctionCall         ::= Identifier '(' FunctionArgs? ')'
-FunctionArgs         ::= '*' | ( 'DISTINCT' )? Expression ( ',' Expression )*
+FunctionArgs         ::= '*' | ( 'DISTINCT' )? SelectExpression ( ',' SelectExpression )*
 
 QualifiedIdentifier  ::= Identifier ( '.' Identifier )?
 
@@ -453,12 +455,12 @@ Digit                ::= '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '
 - **SignedLiteral**: Supports both unary `+` and `-` for numeric literals in `DEFAULT` values: `DEFAULT -1`, `DEFAULT +5`.
 - **SelectStatement**: Supports an optional `DISTINCT` or `ALL` quantifier after `SELECT`, absorbed directly into the four `<select_statement>` alternatives rather than via a nullable rule. The optional clause tail is expressed through four non-nullable helper rules — `<select_clauses>`, `<post_where_clauses>`, `<post_group_by_clauses>`, and `<post_having_clauses>` — each enumerating only the valid non-empty suffixes that may follow a given clause. Together they cover all 23 valid non-empty clause combinations while enforcing canonical ordering (`WHERE → GROUP BY → HAVING → ORDER BY → LIMIT`). `HAVING` is only reachable through `<post_group_by_clauses>`, so `GROUP BY` before `HAVING` is structurally guaranteed. No nullable rules are used anywhere in the BNF.
 - **SelectList / SelectColumn / SelectExpression**: Each item in a select list is independently a `SelectColumn`, which can be a bare `*` or any `SelectExpression` with an optional `AS` alias. A `SelectExpression` may be an arithmetic `Expression` or a boolean `Condition`.
-- **TableReference / JoinClause**: A `TableReference` is a `TablePrimary` (an identifier with an optional alias) followed by zero or more `JoinClause`s. Supported join types are: `INNER`, `LEFT [OUTER]`, `RIGHT [OUTER]`, `FULL [OUTER]`, and `CROSS`. All non-cross joins require an `ON` condition.
+- **TableReference / JoinClause**: A `TableReference` is either a bare `TablePrimary` (an identifier with an optional alias) or a parenthesized group of a `TableReference` with one or more `JoinClause`s. The recursive structure allows joins to be applied between a concrete table and an intermediate joined result, e.g. `(orders JOIN (users JOIN roles ON ...) ON ...)`. Qualified join types (`INNER`, `LEFT [OUTER]`, `RIGHT [OUTER]`, `FULL [OUTER]`) require an `ON` condition. `CROSS JOIN` produces a cartesian product and does not accept an `ON` condition.
 - **Predicate**: The grammar supports five predicate types: `ComparisonPredicate` (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), `LikePredicate` (`LIKE` / `NOT LIKE`), `NullPredicate` (`IS NULL` / `IS NOT NULL`), `InPredicate` (`IN` / `NOT IN`), and `BetweenPredicate` (`BETWEEN ... AND ...` / `NOT BETWEEN ... AND ...`).
 - **GROUP BY / HAVING**: `GROUP BY` accepts a comma-separated list of qualified identifiers. `HAVING` filters groups using a condition and may only appear after `GROUP BY`.
 - **ORDER BY**: Accepts a comma-separated list of order items. Each item is an expression with an optional `ASC` (ascending, default) or `DESC` (descending) direction.
 - **LIMIT / OFFSET**: `LIMIT` restricts the result set size. An optional `OFFSET` clause skips a specified number of rows before returning results. Both accept only `IntegerLiteral` values.
-- **FunctionCall**: Supports general function call syntax: `identifier(args)`. Function arguments can be a bare `*` (for `COUNT(*)`), or one or more expressions optionally preceded by `DISTINCT` (for `COUNT(DISTINCT col)`). This covers all standard aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`) and any future scalar functions.
+- **FunctionCall**: Supports general function call syntax: `identifier(args)`. Function arguments can be a bare `*` (for `COUNT(*)`), or one or more `SelectExpression`s (which may be arithmetic expressions or boolean conditions) optionally preceded by `DISTINCT` (for `COUNT(DISTINCT col)`). Using `SelectExpression` rather than plain `Expression` enables aggregate calls over boolean conditions such as `SUM(price > 100)`. This covers all standard aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`) and any future scalar functions.
 - **ColumnConstraints**: Supports four constraint types — key, null, default, and foreign — each of which may appear at most once per column. Constraints must be written in canonical order: `KeyConstraint` → `NullConstraint` → `DefaultConstraint` → `ForeignConstraint`. The grammar encodes all 15 valid non-empty subsets of these four types in that fixed order. **Parser note**: the parser must verify at semantic analysis time that no constraint type is duplicated; the grammar structure alone enforces canonical ordering but does not prevent a user from writing the same constraint twice if the grammar were extended permissively.
 - **NullConstraint**: Accepts both `NOT NULL` and explicit `NULL`. While `NULL` is the default column behavior, explicitly stating it is valid SQL and commonly used in schema definitions.
 - **ForeignConstraint**: Column-level referential constraint. Syntax: `REFERENCES table_name (column_name)`, pointing to exactly one column in another table.
