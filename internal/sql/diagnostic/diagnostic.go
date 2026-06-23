@@ -118,12 +118,16 @@ func (d *Diagnostic) Snippet() string {
 		return ""
 	}
 
-	pad := strings.Repeat(" ", d.Span.Start.Col-1)
+	startCol := d.Span.Start.Col
+	if startCol < 1 {
+		startCol = 1
+	}
+	pad := strings.Repeat(" ", startCol-1)
 	var width int
 	if d.Span.Start.Line != d.Span.End.Line {
-		width = len([]rune(line)) - d.Span.Start.Col + 1
+		width = len([]rune(line)) - startCol + 1
 	} else {
-		width = d.Span.End.Col - d.Span.Start.Col
+		width = d.Span.End.Col - startCol
 	}
 	if width < 1 {
 		width = 1
@@ -179,5 +183,8 @@ func (l List) Unwrap() []error {
 
 // Append adds a diagnostic directly to the list.
 func (l *List) Append(d *Diagnostic) {
+	if d == nil {
+		return
+	}
 	*l = append(*l, d)
 }

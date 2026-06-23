@@ -239,6 +239,21 @@ func TestDiagnostic_Snippet(t *testing.T) {
 			t.Errorf("expected empty string, got %q", d.Snippet())
 		}
 	})
+
+	t.Run("zero-value coordinates do not panic", func(t *testing.T) {
+		d := &Diagnostic{
+			Span: Span{
+				Start: Pos{Line: 1, Col: 0},
+				End:   Pos{Line: 1, Col: 0},
+			},
+			Source: src,
+		}
+		expected := "  SELECT * FROM users\n  ^"
+		got := d.Snippet()
+		if got != expected {
+			t.Errorf("Snippet() = %q, want %q", got, expected)
+		}
+	})
 }
 
 // TestDiagnostic_FullString tests diagnostic full string.
@@ -332,6 +347,14 @@ func TestList(t *testing.T) {
 		}
 		if errors.Is(l, Code(9999)) {
 			t.Error("errors.Is matched non-existent E9999")
+		}
+	})
+
+	t.Run("Append nil diagnostic is ignored", func(t *testing.T) {
+		var l List
+		l.Append(nil)
+		if len(l) != 0 {
+			t.Errorf("expected empty list, got length %d", len(l))
 		}
 	})
 }
