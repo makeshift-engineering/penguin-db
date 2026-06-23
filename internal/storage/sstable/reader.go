@@ -167,7 +167,7 @@ func (r *Reader) BloomMayContain(key []byte) bool {
 //   - (nil,   true, true,  nil)  : key found but it is a tombstone (deleted)
 //   - (nil,   false, false, nil) : key not present in this SSTable
 //   - (nil,   false, false, err) : an I/O or corruption error occurred
-func (r *Reader) Get(key []byte) (value []byte, found bool, deleted bool, err error) {
+func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) {
 	if r.closed {
 		return nil, false, false, ErrReaderClosed
 	}

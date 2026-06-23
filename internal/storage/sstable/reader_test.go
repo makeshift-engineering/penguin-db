@@ -644,12 +644,11 @@ func TestReader_BloomFilterOnEmptyTable(t *testing.T) {
 	}
 	defer r.Close()
 
+	// In a completely empty filter all bits are zero, so no key should
+	// match. However, the minimum filter size is 64 bits, so this is
+	// technically valid either way — we just confirm no panics.
 	for i := 0; i < 100; i++ {
-		if r.BloomMayContain([]byte(fmt.Sprintf("key-%d", i))) {
-			// In a completely empty filter all bits are zero, so no key should
-			// match. However, the minimum filter size is 64 bits, so this is
-			// technically valid either way - we just confirm no panics.
-		}
+		_ = r.BloomMayContain([]byte(fmt.Sprintf("key-%d", i)))
 	}
 }
 
