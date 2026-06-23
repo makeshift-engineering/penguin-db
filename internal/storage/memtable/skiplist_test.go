@@ -3,7 +3,12 @@ package memtable
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"math/rand"
+	"sort"
+	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestSkipList_Basic verifies the fundamental read and write contract of the skip
@@ -173,6 +178,104 @@ func TestSkipList_EmptyAndNil(t *testing.T) {
 	err = skipList.Delete([]byte(""))
 	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Delete with empty key, got %v", err)
+	}
+}
+
+// TestSkipList_StrictConcurrency verifies that a single writer goroutine and
+// multiple concurrent reader goroutines operating on the same key never observe
+// a corrupted or malformed value, confirming read-write lock correctness.
+func TestSkipList_StrictConcurrency(t *testing.T) {
+	skipList := NewSkipList(100000, 12)
+	var waitGroup sync.WaitGroup
+	key := []byte("shared-key")
+
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		for i := 0; i < 1000; i++ {
+			val := []byte(fmt.Sprintf("val-%d", i))
+			_ = skipList.Put(key, val)
+		}
+	}()
+
+	for r := 0; r < 5; r++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for i := 0; i < 1000; i++ {
+				val, err := skipList.Get(key)
+				if err != nil && !errors.Is(err, ErrKeyNotFound) {
+					t.Errorf("unexpected error on Get: %v", err)
+				}
+				if err == nil {
+					if !bytes.HasPrefix(val, []byte("val-")) {
+						t.Errorf("corrupted value: %s", val)
+					}
+				}
+			}
+		}()
+	}
+
+	waitGroup.Wait()
+}
+
+// TestSkipList_Concurrency is a broad stress test that runs concurrent Puts,
+// Deletes, and Iterator traversals across disjoint key ranges simultaneously,
+// verifying that no deadlock, panic, or data corruption occurs under contention.
+func TestSkipList_Concurrency(t *testing.T) {
+	skipList := NewSkipList(100000, 12)
+	var waitGroup sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		waitGroup.Add(1)
+		go func(id int) {
+			defer waitGroup.Done()
+			key := []byte(fmt.Sprintf("key-%03d", id))
+			val := []byte(fmt.Sprintf("val-%03d", id))
+			if err := skipList.Put(key, val); err != nil {
+				t.Errorf("put failed for %s: %v", key, err)
+			}
+		}(i)
+	}
+
+	for i := 100; i < 200; i++ {
+		waitGroup.Add(1)
+		go func(id int) {
+			defer waitGroup.Done()
+			key := []byte(fmt.Sprintf("key-%03d", id))
+			if err := skipList.Delete(key); err != nil {
+				t.Errorf("delete failed for %s: %v", key, err)
+			}
+		}(i)
+	}
+
+	for i := 0; i < 20; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			iterator := skipList.NewIterator()
+			for iterator.Valid() {
+				_, _, _ = iterator.Next()
+			}
+		}()
+	}
+
+	waitGroup.Wait()
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		expected := []byte(fmt.Sprintf("val-%03d", i))
+		got, err := skipList.Get(key)
+		if err != nil || !bytes.Equal(got, expected) {
+			t.Fatalf("unexpected state for %s: got (%q, %v), want (%q, nil)", key, got, err, expected)
+		}
+	}
+
+	for i := 100; i < 200; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		if _, err := skipList.Get(key); !errors.Is(err, ErrKeyNotFound) {
+			t.Fatalf("expected ErrKeyNotFound for deleted/tombstoned key %s, got %v", key, err)
+		}
 	}
 }
 
@@ -347,4 +450,258 @@ func TestSkipList_ConfigurableMaxLevel(t *testing.T) {
 	if !bytes.Equal(val, []byte("value")) {
 		t.Fatalf("expected value, got %s", val)
 	}
+}
+
+// unicodeRuneRanges defines unicode blocks used to generate random multi-byte
+// keys and values. Each range is a [lo, hi) pair of rune values.
+var unicodeRuneRanges = []struct{ lo, hi rune }{
+	{0x0041, 0x005B},   // Basic Latin uppercase A-Z
+	{0x00C0, 0x0100},   // Latin Extended (accented characters)
+	{0x0400, 0x0450},   // Cyrillic
+	{0x0600, 0x0640},   // Arabic
+	{0x0900, 0x0950},   // Devanagari
+	{0x3040, 0x3097},   // Hiragana
+	{0x4E00, 0x4F00},   // CJK Unified Ideographs (subset)
+	{0xAC00, 0xAC80},   // Hangul Syllables (subset)
+	{0x1F600, 0x1F650}, // Emoticons / Emoji
+}
+
+// randomUnicodeString generates a random string of n runes drawn uniformly from
+// the unicode blocks defined in unicodeRuneRanges.
+func randomUnicodeString(rng *rand.Rand, n int) string {
+	buf := make([]byte, 0, n*4)
+	for i := 0; i < n; i++ {
+		block := unicodeRuneRanges[rng.Intn(len(unicodeRuneRanges))]
+		r := block.lo + rng.Int31n(block.hi-block.lo)
+		buf = utf8.AppendRune(buf, r)
+	}
+	return string(buf)
+}
+
+// TestSkipList_UnicodeKeys verifies that the skip list correctly handles
+// arbitrary multi-byte UTF-8 encoded keys and values across Put, Get, Delete,
+// and Iterator operations. It covers characters from Latin Extended, Cyrillic,
+// Arabic, Devanagari, Hiragana, CJK, Hangul, and Emoji blocks.
+func TestSkipList_UnicodeKeys(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+
+	t.Run("PutGetRoundtrip", func(t *testing.T) {
+		skipList := NewSkipList(100000, 12)
+
+		// Fixed multi-script keys that exercise different byte widths.
+		entries := map[string]string{
+			"日本語テスト":   "値一",              // CJK + Hiragana (3-byte runes)
+			"Привет":   "Мир",             // Cyrillic (2-byte runes)
+			"مفتاح":    "قيمة",            // Arabic (2-byte runes)
+			"हिंदी":    "मान",             // Devanagari (3-byte runes)
+			"한국어":      "값",               // Hangul (3-byte runes)
+			"🦊🐧🔥":      "🎉🚀",              // Emoji (4-byte runes)
+			"café":     "résumé",          // Latin with accents (mixed 1-2 byte runes)
+			"mix混合кл🎮": "val値ue🧪",         // Mixed scripts in single key
+			"Z̤̈":      "combining-marks", // Latin + combining diacriticals
+			"a\x00b":   "embedded-null",   // Embedded null byte in key
+		}
+
+		for k, v := range entries {
+			if err := skipList.Put([]byte(k), []byte(v)); err != nil {
+				t.Fatalf("Put(%q) failed: %v", k, err)
+			}
+		}
+
+		for k, expectedVal := range entries {
+			got, err := skipList.Get([]byte(k))
+			if err != nil {
+				t.Fatalf("Get(%q) failed: %v", k, err)
+			}
+			if !bytes.Equal(got, []byte(expectedVal)) {
+				t.Errorf("Get(%q) = %q, want %q", k, got, expectedVal)
+			}
+		}
+	})
+
+	t.Run("UpdateUnicodeValue", func(t *testing.T) {
+		skipList := NewSkipList(100000, 12)
+		key := []byte("更新キー")
+		original := []byte("元の値")
+		updated := []byte("新しい値🆕")
+
+		if err := skipList.Put(key, original); err != nil {
+			t.Fatalf("Put original failed: %v", err)
+		}
+		if err := skipList.Put(key, updated); err != nil {
+			t.Fatalf("Put update failed: %v", err)
+		}
+
+		got, err := skipList.Get(key)
+		if err != nil {
+			t.Fatalf("Get after update failed: %v", err)
+		}
+		if !bytes.Equal(got, updated) {
+			t.Errorf("Get = %q, want %q", got, updated)
+		}
+	})
+
+	t.Run("DeleteUnicodeKey", func(t *testing.T) {
+		skipList := NewSkipList(100000, 12)
+		key := []byte("удалить🗑️")
+
+		if err := skipList.Put(key, []byte("存在する")); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+		if err := skipList.Delete(key); err != nil {
+			t.Fatalf("Delete failed: %v", err)
+		}
+
+		_, err := skipList.Get(key)
+		if !errors.Is(err, ErrKeyNotFound) {
+			t.Errorf("expected ErrKeyNotFound after Delete, got %v", err)
+		}
+
+		// Verify tombstone is visible to iterator.
+		iter := skipList.NewIterator()
+		if !iter.Valid() {
+			t.Fatal("expected iterator to be valid (tombstone should be present)")
+		}
+		k, v, deleted := iter.Next()
+		if !bytes.Equal(k, key) {
+			t.Errorf("iterator key = %q, want %q", k, key)
+		}
+		if !deleted {
+			t.Error("expected tombstone marker on deleted unicode key")
+		}
+		if len(v) != 0 {
+			t.Errorf("expected nil/empty value for tombstone, got %q", v)
+		}
+	})
+
+	t.Run("SortedOrderByBytes", func(t *testing.T) {
+		skipList := NewSkipList(100000, 12)
+		keys := []string{
+			"🦊emoji",      // starts with F0 9F A6 8A (4-byte)
+			"Яcyrillic",   // starts with D0 AF (2-byte)
+			"ascii-first", // starts with 61 (1-byte)
+			"日cjk",        // starts with E6 97 A5 (3-byte)
+			"àlatin-ext",  // starts with C3 A0 (2-byte)
+		}
+
+		for _, k := range keys {
+			if err := skipList.Put([]byte(k), []byte("v")); err != nil {
+				t.Fatalf("Put(%q) failed: %v", k, err)
+			}
+		}
+
+		// Expected order: byte-level lexicographic sort.
+		sorted := make([]string, len(keys))
+		copy(sorted, keys)
+		sort.Slice(sorted, func(i, j int) bool {
+			return bytes.Compare([]byte(sorted[i]), []byte(sorted[j])) < 0
+		})
+
+		iter := skipList.NewIterator()
+		for idx, expected := range sorted {
+			if !iter.Valid() {
+				t.Fatalf("iterator exhausted at index %d, expected key %q", idx, expected)
+			}
+			k, _, _ := iter.Next()
+			if !bytes.Equal(k, []byte(expected)) {
+				t.Errorf("position %d: got key %q, want %q", idx, k, expected)
+			}
+		}
+		if iter.Valid() {
+			t.Error("iterator has extra elements after consuming all expected keys")
+		}
+	})
+
+	t.Run("SizeTrackingMultiByte", func(t *testing.T) {
+		skipList := NewSkipList(100000, 12)
+
+		key := []byte("π") // U+03C0 → 2 bytes in UTF-8
+		val := []byte("🎲") // U+1F3B2 → 4 bytes in UTF-8
+
+		if err := skipList.Put(key, val); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+
+		expectedSize := int64(len(key) + len(val)) // 2 + 4 = 6
+		if skipList.currentSizeBytes != expectedSize {
+			t.Errorf("size = %d, want %d (key %d bytes + val %d bytes)",
+				skipList.currentSizeBytes, expectedSize, len(key), len(val))
+		}
+	})
+
+	t.Run("RandomUnicodeBulk", func(t *testing.T) {
+		skipList := NewSkipList(500000, 12)
+		const numEntries = 200
+		entries := make(map[string]string, numEntries)
+
+		// Generate unique random unicode keys and values.
+		for len(entries) < numEntries {
+			k := randomUnicodeString(rng, 3+rng.Intn(8))
+			v := randomUnicodeString(rng, 1+rng.Intn(12))
+			entries[k] = v
+		}
+
+		for k, v := range entries {
+			if err := skipList.Put([]byte(k), []byte(v)); err != nil {
+				t.Fatalf("Put(%q) failed: %v", k, err)
+			}
+		}
+
+		for k, expectedVal := range entries {
+			got, err := skipList.Get([]byte(k))
+			if err != nil {
+				t.Errorf("Get(%q) failed: %v", k, err)
+				continue
+			}
+			if !bytes.Equal(got, []byte(expectedVal)) {
+				t.Errorf("Get(%q) = %q, want %q", k, got, expectedVal)
+			}
+		}
+
+		// Verify iterator produces keys in byte-sorted order.
+		iter := skipList.NewIterator()
+		var prev []byte
+		count := 0
+		for iter.Valid() {
+			k, _, _ := iter.Next()
+			if prev != nil && bytes.Compare(prev, k) >= 0 {
+				t.Errorf("iterator order violation: %q >= %q", prev, k)
+			}
+			prev = k
+			count++
+		}
+		if count != numEntries {
+			t.Errorf("iterator yielded %d entries, want %d", count, numEntries)
+		}
+	})
+
+	t.Run("ConcurrentUnicode", func(t *testing.T) {
+		skipList := NewSkipList(500000, 12)
+		const goroutines = 10
+		const opsPerGoroutine = 100
+		var wg sync.WaitGroup
+
+		wg.Add(goroutines)
+		for g := 0; g < goroutines; g++ {
+			go func(id int) {
+				defer wg.Done()
+				localRng := rand.New(rand.NewSource(int64(id * 1000)))
+				for i := 0; i < opsPerGoroutine; i++ {
+					k := []byte(fmt.Sprintf("г%d-키%d-%s", id, i, randomUnicodeString(localRng, 2)))
+					v := []byte(randomUnicodeString(localRng, 3))
+					_ = skipList.Put(k, v)
+
+					got, err := skipList.Get(k)
+					if err != nil {
+						t.Errorf("goroutine %d: Get(%q) failed: %v", id, k, err)
+						continue
+					}
+					if !bytes.Equal(got, v) {
+						t.Errorf("goroutine %d: Get(%q) = %q, want %q", id, k, got, v)
+					}
+				}
+			}(g)
+		}
+		wg.Wait()
+	})
 }
