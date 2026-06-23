@@ -181,7 +181,6 @@ func (l List) AsError() error {
 	return l
 }
 
-
 // Unwrap enables errors.Is to traverse the list (Go 1.20+).
 func (l List) Unwrap() []error {
 	errs := make([]error, len(l))
