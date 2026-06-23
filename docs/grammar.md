@@ -98,7 +98,7 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 
 <select_list>       ::= <select_column> | <select_column> <symbol_comma> <select_list>
 <select_column>     ::= <symbol_star> | <select_expression> | <select_expression> <keyword_as> <identifier>
-<select_expression> ::= <expression> | <expression> <predicate_tail>
+<select_expression> ::= <expression> | <condition>
 
 <table_references>   ::= <table_reference> | <table_reference> <symbol_comma> <table_references>
 <table_reference>    ::= <table_primary> | <symbol_lparen> <table_reference> <join_clauses> <symbol_rparen>
@@ -392,16 +392,17 @@ OrCondition          ::= AndCondition ( 'OR' AndCondition )*
 AndCondition         ::= NotCondition ( 'AND' NotCondition )*
 NotCondition         ::= ConditionPrimary | 'NOT' NotCondition
 ConditionPrimary     ::= Predicate | '(' Condition ')'
-Predicate            ::= ComparisonPredicate
-                       | LikePredicate
-                       | NullPredicate
-                       | InPredicate
-                       | BetweenPredicate
-ComparisonPredicate  ::= Expression ComparisonOperator Expression
-LikePredicate        ::= Expression 'NOT'? 'LIKE' Expression
-NullPredicate        ::= Expression 'IS' 'NOT'? 'NULL'
-InPredicate          ::= Expression 'NOT'? 'IN' '(' Expression ( ',' Expression )* ')'
-BetweenPredicate     ::= Expression 'NOT'? 'BETWEEN' Expression 'AND' Expression
+Predicate    ::= Expression PredicateTail
+PredicateTail ::= ComparisonOperator Expression
+               | 'LIKE' Expression
+               | 'IS' 'NOT'? 'NULL'
+               | 'IN' '(' Expression ( ',' Expression )* ')'
+               | 'BETWEEN' Expression 'AND' Expression
+               | 'NOT' PredicateNotTail
+
+PredicateNotTail ::= 'LIKE' Expression
+                   | 'IN' '(' Expression ( ',' Expression )* ')'
+                   | 'BETWEEN' Expression 'AND' Expression
 ComparisonOperator   ::= '=' | '!=' | '<>' | '<' | '>' | '<=' | '>='
 
 GroupByClause        ::= 'GROUP' 'BY' QualifiedIdentifier ( ',' QualifiedIdentifier )*
