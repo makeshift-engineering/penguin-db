@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -1118,7 +1119,7 @@ func TestReader_EntryCount(t *testing.T) {
 			entries := make([]testEntry, n)
 			for i := 0; i < n; i++ {
 				entries[i] = testEntry{
-					key:    []byte(fmt.Sprintf("key-%d", i)),
+					key:    []byte(fmt.Sprintf("key-%04d", i)),
 					value:  []byte("v"),
 					opcode: OpcodePut,
 				}
@@ -1377,33 +1378,28 @@ func TestReader_CloseAndReopen(t *testing.T) {
 	}
 }
 
-// TestReader_DuplicateKeys writes duplicate keys (which the Writer allows) and
-// verifies Get returns the first occurrence (lowest index offset wins in binary
-// search due to sort.Search semantics).
+// TestReader_DuplicateKeys verifies the Writer rejects duplicate keys with
+// ErrKeysOutOfOrder, since keys must be in strictly ascending order.
 func TestReader_DuplicateKeys(t *testing.T) {
 	dir := t.TempDir()
-	entries := []testEntry{
-		{key: []byte("dup"), value: []byte("first"), opcode: OpcodePut},
-		{key: []byte("dup"), value: []byte("second"), opcode: OpcodePut},
-	}
-	path := writeTestSSTable(t, dir, "dupes.sst", entries)
+	path := filepath.Join(dir, "dupes.sst")
 
-	r, err := Open(path)
+	w, err := NewWriter(path, 2)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("NewWriter: %v", err)
 	}
-	defer r.Close()
 
-	val, found, _, err := r.Get([]byte("dup"))
-	if err != nil {
-		t.Fatalf("Get: %v", err)
+	if err := w.Add([]byte("dup"), []byte("first"), OpcodePut); err != nil {
+		t.Fatalf("first Add: %v", err)
 	}
-	if !found {
-		t.Fatal("expected found=true")
+	err = w.Add([]byte("dup"), []byte("second"), OpcodePut)
+	if err == nil {
+		w.Close()
+		t.Fatal("expected error for duplicate key, got nil")
 	}
-	// sort.Search returns the first index where key >= target, which will be
-	// the first "dup" entry.
-	if !bytes.Equal(val, []byte("first")) {
-		t.Errorf("value: got %q, want %q (first occurrence)", val, "first")
+	if !errors.Is(err, ErrKeysOutOfOrder) {
+		w.Close()
+		t.Fatalf("expected ErrKeysOutOfOrder, got: %v", err)
 	}
+	w.Close()
 }

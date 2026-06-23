@@ -682,9 +682,9 @@ func TestWriter_BinaryKeys(t *testing.T) {
 
 	binaryKeys := [][]byte{
 		{0x00, 0x00, 0x00},
-		{0xFF, 0xFE, 0xFD},
 		{0x00, 0xFF, 0x00, 0xFF},
 		{0x01, 0x02, 0x03, 0x04, 0x05},
+		{0xFF, 0xFE, 0xFD},
 	}
 
 	w, err := NewWriter(path, len(binaryKeys))
@@ -730,8 +730,8 @@ func TestWriter_UnicodeKeys(t *testing.T) {
 	path := filepath.Join(dir, "unicode.sst")
 
 	keys := [][]byte{
-		[]byte("日本語"),
 		[]byte("中文"),
+		[]byte("日本語"),
 		[]byte("한국어"),
 		[]byte("🐧"),
 	}
@@ -894,7 +894,7 @@ func TestWriter_EntryCountTracking(t *testing.T) {
 				t.Fatalf("NewWriter: %v", err)
 			}
 			for i := 0; i < n; i++ {
-				key := []byte(fmt.Sprintf("key-%d", i))
+				key := []byte(fmt.Sprintf("key-%04d", i))
 				opcode := OpcodePut
 				if i%3 == 0 {
 					opcode = OpcodeDelete
@@ -921,9 +921,8 @@ func TestWriter_EntryCountTracking(t *testing.T) {
 	}
 }
 
-// TestWriter_DuplicateKeys verifies the Writer does not reject duplicate keys
-// (it is the caller's responsibility to avoid duplicates; the Writer is a
-// low-level component). Both entries should appear in the data block.
+// TestWriter_DuplicateKeys verifies the Writer rejects duplicate keys with
+// ErrKeysOutOfOrder, since keys must be in strictly ascending order.
 func TestWriter_DuplicateKeys(t *testing.T) {
 	dir := testDir(t)
 	path := filepath.Join(dir, "dupes.sst")
@@ -935,42 +934,18 @@ func TestWriter_DuplicateKeys(t *testing.T) {
 
 	key := []byte("same-key")
 	if err := w.Add(key, []byte("first"), OpcodePut); err != nil {
-		t.Fatalf("Add: %v", err)
+		t.Fatalf("first Add: %v", err)
 	}
-	if err := w.Add(key, []byte("second"), OpcodePut); err != nil {
-		t.Fatalf("Add: %v", err)
+	err = w.Add(key, []byte("second"), OpcodePut)
+	if err == nil {
+		w.Close()
+		t.Fatal("expected error for duplicate key, got nil")
 	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if !errors.Is(err, ErrKeysOutOfOrder) {
+		w.Close()
+		t.Fatalf("expected ErrKeysOutOfOrder, got: %v", err)
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-
-	footer := data[len(data)-footerSize:]
-	entryCount := binary.LittleEndian.Uint32(footer[footerEntryCountOffset:footerMagicOffset])
-	if entryCount != 2 {
-		t.Errorf("entry count: got %d, want 2", entryCount)
-	}
-
-	// Both values should be present in the data block
-	pos := 0
-	for i, expectedVal := range []string{"first", "second"} {
-		kl := binary.LittleEndian.Uint16(data[pos : pos+keyLenSize])
-		pos += keyLenSize
-		vl := binary.LittleEndian.Uint32(data[pos : pos+valueLenSize])
-		pos += valueLenSize
-		pos++ // opcode
-		pos += int(kl)
-		gotVal := string(data[pos : pos+int(vl)])
-		pos += int(vl)
-
-		if gotVal != expectedVal {
-			t.Errorf("entry[%d] value: got %q, want %q", i, gotVal, expectedVal)
-		}
-	}
+	w.Close()
 }
 
 // TestWriter_CreatesFileIfNotExists verifies that NewWriter creates the file

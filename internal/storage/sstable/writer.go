@@ -2,7 +2,9 @@ package sstable
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
 )
@@ -25,15 +27,20 @@ type Writer struct {
 	offset      uint64       // running byte offset within the data block
 	entryCount  uint32       // total number of entries written
 	index       []indexEntry // in-memory index built during Add calls
+	lastKey     []byte       // last key added, used to enforce sorted order
 }
 
 // NewWriter creates a new Writer that will write an SSTable to filePath.
 // expectedKeys is used to size the Bloom Filter (10 bits per key).
 func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
+	if expectedKeys < 0 {
+		return nil, fmt.Errorf("%w: got %d", ErrInvalidExpectedKeys, expectedKeys)
+	}
+
 	file, err := os.OpenFile(
 		filePath,
 		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
-		0o666,
+		0o644,
 	)
 	if err != nil {
 		return nil, err
@@ -62,6 +69,9 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 	}
 	if uint64(len(value)) > math.MaxUint32 {
 		return ErrValueTooLarge
+	}
+	if len(w.lastKey) > 0 && bytes.Compare(w.lastKey, key) >= 0 {
+		return fmt.Errorf("%w: last %q >= new %q", ErrKeysOutOfOrder, w.lastKey, key)
 	}
 
 	// Record the offset for the index before writing.
@@ -94,6 +104,10 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 
 	// Add key to the Bloom Filter for later lookup acceleration.
 	w.bloomFilter.Add(key)
+
+	// Track last key for sorted-order enforcement.
+	w.lastKey = make([]byte, len(key))
+	copy(w.lastKey, key)
 
 	return nil
 }
