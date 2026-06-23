@@ -9,7 +9,7 @@ import (
 type Pos struct {
 	Line   int // 1-based
 	Col    int // 1-based
-	Offset int // 0-based rune index from start of input
+	Offset int // 0-based byte offset from start of input
 }
 
 // Span covers the range [Start, End) in the source.
@@ -119,7 +119,12 @@ func (d *Diagnostic) Snippet() string {
 	}
 
 	pad := strings.Repeat(" ", d.Span.Start.Col-1)
-	width := d.Span.End.Col - d.Span.Start.Col
+	var width int
+	if d.Span.Start.Line != d.Span.End.Line {
+		width = len([]rune(line)) - d.Span.Start.Col + 1
+	} else {
+		width = d.Span.End.Col - d.Span.Start.Col
+	}
 	if width < 1 {
 		width = 1
 	}

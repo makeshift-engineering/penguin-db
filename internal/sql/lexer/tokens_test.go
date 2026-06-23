@@ -7,11 +7,12 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
-// ---------- TokenType.String() -----------------------------------------------
-
+// TestTokenType_String_KnownTypes tests token type string known types.
 func TestTokenType_String_KnownTypes(t *testing.T) {
-	// Every entry in the tokenNames map should be returned by String().
-	for tt, name := range tokenNames {
+	// Every entry in the tokenTable should be returned by String().
+	for i := 0; i < int(tokenTypeSentinel); i++ {
+		tt := TokenType(i)
+		name := tokenTable[i].name
 		t.Run(name, func(t *testing.T) {
 			got := tt.String()
 			if got != name {
@@ -21,6 +22,7 @@ func TestTokenType_String_KnownTypes(t *testing.T) {
 	}
 }
 
+// TestTokenType_String_UnknownType tests token type string unknown type.
 func TestTokenType_String_UnknownType(t *testing.T) {
 	unknown := TokenType(9999)
 	got := unknown.String()
@@ -30,10 +32,8 @@ func TestTokenType_String_UnknownType(t *testing.T) {
 	}
 }
 
+// TestTokenType_String_AllTokenTypesHaveNames tests token type string all token types have names.
 func TestTokenType_String_AllTokenTypesHaveNames(t *testing.T) {
-	// Walk through the iota range to ensure no gaps in the tokenNames map.
-	// This uses the fact that all token types are contiguous iota values
-	// from TOKEN_EOF (0) to TOKEN_SEMICOLON.
 	allTokenTypes := []TokenType{
 		TOKEN_EOF, TOKEN_ILLEGAL,
 		TOKEN_IDENT, TOKEN_INTEGER, TOKEN_FLOAT, TOKEN_STRING,
@@ -59,15 +59,14 @@ func TestTokenType_String_AllTokenTypesHaveNames(t *testing.T) {
 	}
 	for _, tt := range allTokenTypes {
 		name := tt.String()
-		// The fallback is "TokenType(<int>)". If we see that, the map is incomplete.
+		// The fallback is "TokenType(<int>)". If we see that, the definition is incomplete.
 		if name == fmt.Sprintf("TokenType(%d)", int(tt)) {
-			t.Errorf("TokenType %d has no human-readable name in tokenNames", int(tt))
+			t.Errorf("TokenType %d has no human-readable name in tokenTable", int(tt))
 		}
 	}
 }
 
-// ---------- Token.String() ---------------------------------------------------
-
+// TestToken_String tests token string.
 func TestToken_String(t *testing.T) {
 	tests := []struct {
 		token Token
@@ -139,8 +138,7 @@ func TestToken_String(t *testing.T) {
 	}
 }
 
-// ---------- lookupIdent (keywords.go) ----------------------------------------
-
+// TestLookupIdent_ReturnsKeywordType tests lookup ident returns keyword type.
 func TestLookupIdent_ReturnsKeywordType(t *testing.T) {
 	for word, expected := range keywords {
 		got := lookupIdent(word)
@@ -150,6 +148,7 @@ func TestLookupIdent_ReturnsKeywordType(t *testing.T) {
 	}
 }
 
+// TestLookupIdent_CaseInsensitive tests lookup ident case insensitive.
 func TestLookupIdent_CaseInsensitive(t *testing.T) {
 	tests := []struct {
 		input string
@@ -172,6 +171,7 @@ func TestLookupIdent_CaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestLookupIdent_ReturnsIdentForNonKeywords tests lookup ident returns ident for non keywords.
 func TestLookupIdent_ReturnsIdentForNonKeywords(t *testing.T) {
 	nonKeywords := []string{
 		"foo", "bar", "my_table", "userId", "x", "_private",
@@ -182,5 +182,50 @@ func TestLookupIdent_ReturnsIdentForNonKeywords(t *testing.T) {
 		if got != TOKEN_IDENT {
 			t.Errorf("lookupIdent(%q) = %v, want TOKEN_IDENT", word, got)
 		}
+	}
+}
+
+// TestTokenType_Classifications tests token type classifications.
+func TestTokenType_Classifications(t *testing.T) {
+	tests := []struct {
+		name       string
+		tokenType  TokenType
+		isKeyword  bool
+		isLiteral  bool
+		isOperator bool
+		isPunct    bool
+		isSpecial  bool
+	}{
+		{"EOF", TOKEN_EOF, false, false, false, false, true},
+		{"ILLEGAL", TOKEN_ILLEGAL, false, false, false, false, true},
+		{"IDENT", TOKEN_IDENT, false, true, false, false, false},
+		{"INTEGER", TOKEN_INTEGER, false, true, false, false, false},
+		{"CREATE", TOKEN_CREATE, true, false, false, false, false},
+		{"SELECT", TOKEN_SELECT, true, false, false, false, false},
+		{"EQ", TOKEN_EQ, false, false, true, false, false},
+		{"PLUS", TOKEN_PLUS, false, false, true, false, false},
+		{"LPAREN", TOKEN_LPAREN, false, false, false, true, false},
+		{"SEMICOLON", TOKEN_SEMICOLON, false, false, false, true, false},
+		{"UNKNOWN", TokenType(9999), false, false, false, false, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.tokenType.IsKeyword(); got != tc.isKeyword {
+				t.Errorf("IsKeyword() = %v, want %v", got, tc.isKeyword)
+			}
+			if got := tc.tokenType.IsLiteral(); got != tc.isLiteral {
+				t.Errorf("IsLiteral() = %v, want %v", got, tc.isLiteral)
+			}
+			if got := tc.tokenType.IsOperator(); got != tc.isOperator {
+				t.Errorf("IsOperator() = %v, want %v", got, tc.isOperator)
+			}
+			if got := tc.tokenType.IsPunct(); got != tc.isPunct {
+				t.Errorf("IsPunct() = %v, want %v", got, tc.isPunct)
+			}
+			if got := tc.tokenType.IsSpecial(); got != tc.isSpecial {
+				t.Errorf("IsSpecial() = %v, want %v", got, tc.isSpecial)
+			}
+		})
 	}
 }

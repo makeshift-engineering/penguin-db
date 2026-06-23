@@ -26,25 +26,25 @@ func unexpectedChar(span diagnostic.Span, src *diagnostic.Source, ch rune) *diag
 }
 
 // unterminatedString creates a diagnostic for an unterminated string literal.
-func unterminatedString(span diagnostic.Span, src *diagnostic.Source, openPos diagnostic.Pos) *diagnostic.Diagnostic {
+func unterminatedString(span diagnostic.Span, src *diagnostic.Source) *diagnostic.Diagnostic {
 	return &diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
 		Code:     CodeUnterminatedString,
 		Category: "Unterminated String",
 		Span:     span,
-		Msg:      fmt.Sprintf("string literal opened at %d:%d was never closed", openPos.Line, openPos.Col),
+		Msg:      fmt.Sprintf("string literal opened at %d:%d was never closed", span.Start.Line, span.Start.Col),
 		Source:   src,
 	}
 }
 
 // unterminatedComment creates a diagnostic for an unterminated block comment.
-func unterminatedComment(span diagnostic.Span, src *diagnostic.Source, openPos diagnostic.Pos) *diagnostic.Diagnostic {
+func unterminatedComment(span diagnostic.Span, src *diagnostic.Source) *diagnostic.Diagnostic {
 	return &diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
 		Code:     CodeUnterminatedComment,
 		Category: "Unterminated Comment",
 		Span:     span,
-		Msg:      fmt.Sprintf("block comment opened at %d:%d was never closed", openPos.Line, openPos.Col),
+		Msg:      fmt.Sprintf("block comment opened at %d:%d was never closed", span.Start.Line, span.Start.Col),
 		Source:   src,
 	}
 }

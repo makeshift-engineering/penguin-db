@@ -6,8 +6,7 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
 )
 
-// ---------- LookaheadIterator ------------------------------------------------
-
+// TestLookaheadIterator_BasicNextAndPeek tests lookahead iterator basic next and peek.
 func TestLookaheadIterator_BasicNextAndPeek(t *testing.T) {
 	seq := []int{10, 20, 30}
 	idx := 0
@@ -56,6 +55,7 @@ func TestLookaheadIterator_BasicNextAndPeek(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_NextWithoutPeek tests lookahead iterator next without peek.
 func TestLookaheadIterator_NextWithoutPeek(t *testing.T) {
 	calls := 0
 	iter := NewLookaheadIterator(func() int {
@@ -75,6 +75,7 @@ func TestLookaheadIterator_NextWithoutPeek(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_PeekDoesNotCallNextFnTwice tests lookahead iterator peek does not call next fn twice.
 func TestLookaheadIterator_PeekDoesNotCallNextFnTwice(t *testing.T) {
 	calls := 0
 	iter := NewLookaheadIterator(func() string {
@@ -91,6 +92,7 @@ func TestLookaheadIterator_PeekDoesNotCallNextFnTwice(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_Consumed_StartsAtZero tests lookahead iterator consumed starts at zero.
 func TestLookaheadIterator_Consumed_StartsAtZero(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 0 })
 	if iter.Consumed() != 0 {
@@ -98,6 +100,7 @@ func TestLookaheadIterator_Consumed_StartsAtZero(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_Consumed_IncrementedByNext tests lookahead iterator consumed incremented by next.
 func TestLookaheadIterator_Consumed_IncrementedByNext(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 42 })
 	for i := 1; i <= 5; i++ {
@@ -108,6 +111,7 @@ func TestLookaheadIterator_Consumed_IncrementedByNext(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_Consumed_NotIncrementedByPeek tests lookahead iterator consumed not incremented by peek.
 func TestLookaheadIterator_Consumed_NotIncrementedByPeek(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 1 })
 	iter.Peek()
@@ -117,8 +121,7 @@ func TestLookaheadIterator_Consumed_NotIncrementedByPeek(t *testing.T) {
 	}
 }
 
-// ---------- ExpectNextValue --------------------------------------------------
-
+// TestLookaheadIterator_ExpectNextValue_Match tests lookahead iterator expect next value match.
 func TestLookaheadIterator_ExpectNextValue_Match(t *testing.T) {
 	seq := []int{5, 10, 15}
 	idx := 0
@@ -142,6 +145,7 @@ func TestLookaheadIterator_ExpectNextValue_Match(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextValue_NoMatch tests lookahead iterator expect next value no match.
 func TestLookaheadIterator_ExpectNextValue_NoMatch(t *testing.T) {
 	seq := []int{5, 10}
 	idx := 0
@@ -167,6 +171,7 @@ func TestLookaheadIterator_ExpectNextValue_NoMatch(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextValue_ConsecutiveMatches tests lookahead iterator expect next value consecutive matches.
 func TestLookaheadIterator_ExpectNextValue_ConsecutiveMatches(t *testing.T) {
 	seq := []int{1, 2, 3}
 	idx := 0
@@ -192,6 +197,7 @@ func TestLookaheadIterator_ExpectNextValue_ConsecutiveMatches(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextValue_FailThenSucceed tests lookahead iterator expect next value fail then succeed.
 func TestLookaheadIterator_ExpectNextValue_FailThenSucceed(t *testing.T) {
 	seq := []int{1, 2}
 	idx := 0
@@ -215,8 +221,7 @@ func TestLookaheadIterator_ExpectNextValue_FailThenSucceed(t *testing.T) {
 	}
 }
 
-// ---------- ExpectNextMatches ------------------------------------------------
-
+// TestLookaheadIterator_ExpectNextMatches_PredicateTrue tests lookahead iterator expect next matches predicate true.
 func TestLookaheadIterator_ExpectNextMatches_PredicateTrue(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 42 })
 
@@ -232,6 +237,7 @@ func TestLookaheadIterator_ExpectNextMatches_PredicateTrue(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextMatches_PredicateFalse tests lookahead iterator expect next matches predicate false.
 func TestLookaheadIterator_ExpectNextMatches_PredicateFalse(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 42 })
 
@@ -244,6 +250,7 @@ func TestLookaheadIterator_ExpectNextMatches_PredicateFalse(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextMatches_PredicateCalledOnce tests lookahead iterator expect next matches predicate called once.
 func TestLookaheadIterator_ExpectNextMatches_PredicateCalledOnce(t *testing.T) {
 	iter := NewLookaheadIterator(func() int { return 1 })
 	calls := 0
@@ -256,6 +263,7 @@ func TestLookaheadIterator_ExpectNextMatches_PredicateCalledOnce(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextMatches_DoesNotConsumeOnMismatch tests lookahead iterator expect next matches does not consume on mismatch.
 func TestLookaheadIterator_ExpectNextMatches_DoesNotConsumeOnMismatch(t *testing.T) {
 	seq := []string{"hello", "world"}
 	idx := 0
@@ -278,8 +286,7 @@ func TestLookaheadIterator_ExpectNextMatches_DoesNotConsumeOnMismatch(t *testing
 	}
 }
 
-// ---------- Generic type support (strings) -----------------------------------
-
+// TestLookaheadIterator_WithStrings tests lookahead iterator with strings.
 func TestLookaheadIterator_WithStrings(t *testing.T) {
 	words := []string{"SELECT", "FROM", "WHERE"}
 	idx := 0
@@ -309,8 +316,7 @@ func TestLookaheadIterator_WithStrings(t *testing.T) {
 	}
 }
 
-// ---------- Integration: LookaheadIterator wrapping the Lexer ----------------
-
+// TestLookaheadIterator_WithLexer tests lookahead iterator with lexer.
 func TestLookaheadIterator_WithLexer(t *testing.T) {
 	l := lexer.NewLexer("test", "SELECT * FROM t;")
 	iter := NewLookaheadIterator(func() lexer.Token {
@@ -379,6 +385,7 @@ func TestLookaheadIterator_WithLexer(t *testing.T) {
 	}
 }
 
+// TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer tests lookahead iterator expect next value no match does not advance lexer.
 func TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer(t *testing.T) {
 	l := lexer.NewLexer("test", "SELECT FROM")
 	iter := NewLookaheadIterator(func() lexer.Token {
@@ -400,13 +407,12 @@ func TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer(t *testing
 	}
 }
 
-// ---------- Edge: struct types with LookaheadIterator ------------------------
-
 type testPair struct {
 	key   string
 	value int
 }
 
+// TestLookaheadIterator_WithStructs tests lookahead iterator with structs.
 func TestLookaheadIterator_WithStructs(t *testing.T) {
 	pairs := []testPair{
 		{"a", 1},

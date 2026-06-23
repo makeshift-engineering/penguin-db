@@ -65,8 +65,3 @@ func (p *LookaheadIterator[T]) ExpectNextMatches(predicate func(T) bool) (T, boo
 func (p *LookaheadIterator[T]) Consumed() int {
 	return p.consumed
 }
-
-// Count is a deprecated alias for Consumed, provided for backwards compatibility.
-func (p *LookaheadIterator[T]) Count() int {
-	return p.Consumed()
-}

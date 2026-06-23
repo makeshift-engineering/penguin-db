@@ -8,16 +8,42 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
-// ---------- helpers ----------------------------------------------------------
-
 // tok is a compact constructor for expected Token values in table-driven tests.
 func tok(typ TokenType, lit string, line, col int) Token {
+	endLine := line
+	endCol := col
+
+	if typ == TOKEN_STRING {
+		endCol++
+		for _, ch := range lit {
+			switch ch {
+			case '\n':
+				endLine++
+				endCol = 1
+			case '\'':
+				endCol += 2
+			default:
+				endCol++
+			}
+		}
+		endCol++
+	} else {
+		for _, ch := range lit {
+			if ch == '\n' {
+				endLine++
+				endCol = 1
+			} else {
+				endCol++
+			}
+		}
+	}
+
 	return Token{
 		Type:    typ,
 		Literal: lit,
 		Span: diagnostic.Span{
 			Start: diagnostic.Pos{Line: line, Col: col},
-			End:   diagnostic.Pos{Line: line, Col: col + len(lit)},
+			End:   diagnostic.Pos{Line: endLine, Col: endCol},
 		},
 	}
 }
@@ -53,7 +79,9 @@ func requireTokens(t *testing.T, input string, want []Token) {
 	for i := range want {
 		g := got[i]
 		w := want[i]
-		if g.Type != w.Type || g.Literal != w.Literal || g.Span.Start.Line != w.Span.Start.Line || g.Span.Start.Col != w.Span.Start.Col {
+		if g.Type != w.Type || g.Literal != w.Literal ||
+			g.Span.Start.Line != w.Span.Start.Line || g.Span.Start.Col != w.Span.Start.Col ||
+			g.Span.End.Line != w.Span.End.Line || g.Span.End.Col != w.Span.End.Col {
 			t.Errorf("token[%d]: got %v, want %v", i, g, w)
 		}
 	}
@@ -86,20 +114,21 @@ func requireError(t *testing.T, input string, sentinel error) {
 	}
 }
 
-// ---------- EOF & empty input ------------------------------------------------
-
+// TestNextToken_EmptyInput tests next token empty input.
 func TestNextToken_EmptyInput(t *testing.T) {
 	requireTokens(t, "", []Token{
 		tok(TOKEN_EOF, "", 1, 1),
 	})
 }
 
+// TestNextToken_OnlyWhitespace tests next token only whitespace.
 func TestNextToken_OnlyWhitespace(t *testing.T) {
 	requireTokens(t, "   \t \r\n  \n  ", []Token{
 		tok(TOKEN_EOF, "", 3, 3),
 	})
 }
 
+// TestNextToken_RepeatedEOF tests next token repeated eof.
 func TestNextToken_RepeatedEOF(t *testing.T) {
 	l := NewLexer("test", "")
 	for i := 0; i < 5; i++ {
@@ -113,8 +142,7 @@ func TestNextToken_RepeatedEOF(t *testing.T) {
 	}
 }
 
-// ---------- Single-character punctuation -------------------------------------
-
+// TestNextToken_Punctuation tests next token punctuation.
 func TestNextToken_Punctuation(t *testing.T) {
 	tests := []struct {
 		input string
@@ -136,8 +164,7 @@ func TestNextToken_Punctuation(t *testing.T) {
 	}
 }
 
-// ---------- Arithmetic operators ---------------------------------------------
-
+// TestNextToken_ArithmeticOperators tests next token arithmetic operators.
 func TestNextToken_ArithmeticOperators(t *testing.T) {
 	tests := []struct {
 		input string
@@ -159,8 +186,7 @@ func TestNextToken_ArithmeticOperators(t *testing.T) {
 	}
 }
 
-// ---------- Comparison operators (single & multi-char) -----------------------
-
+// TestNextToken_ComparisonOperators tests next token comparison operators.
 func TestNextToken_ComparisonOperators(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -203,8 +229,7 @@ func TestNextToken_ComparisonOperators(t *testing.T) {
 	}
 }
 
-// ---------- Lone bang (!) is ILLEGAL -----------------------------------------
-
+// TestNextToken_LoneBang_IsIllegal tests next token lone bang is illegal.
 func TestNextToken_LoneBang_IsIllegal(t *testing.T) {
 	l := NewLexer("test", "!")
 	token := l.NextToken()
@@ -229,8 +254,7 @@ func TestNextToken_LoneBang_IsIllegal(t *testing.T) {
 	}
 }
 
-// ---------- Integer literals -------------------------------------------------
-
+// TestNextToken_Integers tests next token integers.
 func TestNextToken_Integers(t *testing.T) {
 	tests := []struct {
 		input string
@@ -251,8 +275,7 @@ func TestNextToken_Integers(t *testing.T) {
 	}
 }
 
-// ---------- Float literals ---------------------------------------------------
-
+// TestNextToken_Floats tests next token floats.
 func TestNextToken_Floats(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -275,8 +298,7 @@ func TestNextToken_Floats(t *testing.T) {
 	}
 }
 
-// ---------- Dot-disambiguation (dot vs float) --------------------------------
-
+// TestNextToken_DotVsFloat tests next token dot vs float.
 func TestNextToken_DotVsFloat(t *testing.T) {
 	t.Run("dot_followed_by_identifier", func(t *testing.T) {
 		// "t.id" → IDENT "t", DOT ".", IDENT "id"
@@ -324,8 +346,7 @@ func TestNextToken_DotVsFloat(t *testing.T) {
 	})
 }
 
-// ---------- String literals --------------------------------------------------
-
+// TestNextToken_Strings tests next token strings.
 func TestNextToken_Strings(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -360,6 +381,7 @@ func TestNextToken_Strings(t *testing.T) {
 	}
 }
 
+// TestNextToken_UnterminatedString tests next token unterminated string.
 func TestNextToken_UnterminatedString(t *testing.T) {
 	inputs := []string{
 		"'hello",
@@ -374,8 +396,7 @@ func TestNextToken_UnterminatedString(t *testing.T) {
 	}
 }
 
-// ---------- Identifiers ------------------------------------------------------
-
+// TestNextToken_Identifiers tests next token identifiers.
 func TestNextToken_Identifiers(t *testing.T) {
 	tests := []struct {
 		input string
@@ -400,8 +421,7 @@ func TestNextToken_Identifiers(t *testing.T) {
 	}
 }
 
-// ---------- Keywords (case-insensitive) --------------------------------------
-
+// TestNextToken_AllKeywords tests next token all keywords.
 func TestNextToken_AllKeywords(t *testing.T) {
 	// Exhaustive coverage of every keyword in the keywords map.
 	// Each entry tests UPPER, lower, and MiXeD casing.
@@ -486,6 +506,7 @@ func TestNextToken_AllKeywords(t *testing.T) {
 	}
 }
 
+// TestNextToken_KeywordsCaseInsensitive tests next token keywords case insensitive.
 func TestNextToken_KeywordsCaseInsensitive(t *testing.T) {
 	// Verify that the literal preserves original casing while the type is correct.
 	cases := []struct {
@@ -519,8 +540,7 @@ func TestNextToken_KeywordsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// ---------- Comments ---------------------------------------------------------
-
+// TestNextToken_LineComment tests next token line comment.
 func TestNextToken_LineComment(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -550,6 +570,7 @@ func TestNextToken_LineComment(t *testing.T) {
 	}
 }
 
+// TestNextToken_BlockComment tests next token block comment.
 func TestNextToken_BlockComment(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -583,11 +604,13 @@ func TestNextToken_BlockComment(t *testing.T) {
 	}
 }
 
+// TestNextToken_UnterminatedBlockComment tests next token unterminated block comment.
 func TestNextToken_UnterminatedBlockComment(t *testing.T) {
 	inputs := []string{
 		"/* unclosed",
 		"/* also \n unclosed",
 		"/*",
+		"/* *",
 	}
 	for _, input := range inputs {
 		t.Run(fmt.Sprintf("%q", input), func(t *testing.T) {
@@ -596,6 +619,7 @@ func TestNextToken_UnterminatedBlockComment(t *testing.T) {
 	}
 }
 
+// TestNextToken_MixedComments tests next token mixed comments.
 func TestNextToken_MixedComments(t *testing.T) {
 	input := "-- line\n/* block */ SELECT"
 	requireTokens(t, input, []Token{
@@ -604,8 +628,7 @@ func TestNextToken_MixedComments(t *testing.T) {
 	})
 }
 
-// ---------- Illegal characters -----------------------------------------------
-
+// TestNextToken_IllegalCharacters tests next token illegal characters.
 func TestNextToken_IllegalCharacters(t *testing.T) {
 	illegals := []string{"@", "#", "$", "^", "&", "~", "\\", "`", "?", "|"}
 	for _, ch := range illegals {
@@ -635,8 +658,7 @@ func TestNextToken_IllegalCharacters(t *testing.T) {
 	}
 }
 
-// ---------- Line/column tracking ---------------------------------------------
-
+// TestNextToken_LineColTracking tests next token line col tracking.
 func TestNextToken_LineColTracking(t *testing.T) {
 	input := "SELECT\n  *\nFROM t"
 	requireTokens(t, input, []Token{
@@ -648,6 +670,7 @@ func TestNextToken_LineColTracking(t *testing.T) {
 	})
 }
 
+// TestNextToken_TabTracking tests next token tab tracking.
 func TestNextToken_TabTracking(t *testing.T) {
 	// Tabs count as single column advances.
 	input := "\tSELECT"
@@ -657,6 +680,7 @@ func TestNextToken_TabTracking(t *testing.T) {
 	}
 }
 
+// TestNextToken_MultipleNewlines tests next token multiple newlines.
 func TestNextToken_MultipleNewlines(t *testing.T) {
 	input := "\n\n\n42"
 	tokens := collectAll(t, input)
@@ -665,6 +689,7 @@ func TestNextToken_MultipleNewlines(t *testing.T) {
 	}
 }
 
+// TestNextToken_CarriageReturnLineFeed tests next token carriage return line feed.
 func TestNextToken_CarriageReturnLineFeed(t *testing.T) {
 	// \r is treated as whitespace but doesn't increment line; only \n does.
 	input := "a\r\nb"
@@ -679,8 +704,7 @@ func TestNextToken_CarriageReturnLineFeed(t *testing.T) {
 	}
 }
 
-// ---------- Whitespace sensitivity -------------------------------------------
-
+// TestNextToken_MultipleSpaces tests next token multiple spaces.
 func TestNextToken_MultipleSpaces(t *testing.T) {
 	input := "a     b"
 	requireTokens(t, input, []Token{
@@ -690,6 +714,7 @@ func TestNextToken_MultipleSpaces(t *testing.T) {
 	})
 }
 
+// TestNextToken_NoWhitespace tests next token no whitespace.
 func TestNextToken_NoWhitespace(t *testing.T) {
 	input := "a+b"
 	requireTokens(t, input, []Token{
@@ -700,8 +725,7 @@ func TestNextToken_NoWhitespace(t *testing.T) {
 	})
 }
 
-// ---------- LexError structure -----------------------------------------------
-
+// TestDiagnostic_ErrorMessage tests diagnostic error message.
 func TestDiagnostic_ErrorMessage(t *testing.T) {
 	e := diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
@@ -719,6 +743,7 @@ func TestDiagnostic_ErrorMessage(t *testing.T) {
 	}
 }
 
+// TestDiagnostic_Unwrap tests diagnostic unwrap.
 func TestDiagnostic_Unwrap(t *testing.T) {
 	e := diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
@@ -742,8 +767,7 @@ func TestDiagnostic_Unwrap(t *testing.T) {
 	}
 }
 
-// ---------- Full SQL statements (integration) --------------------------------
-
+// TestNextToken_SelectStatement tests next token select statement.
 func TestNextToken_SelectStatement(t *testing.T) {
 	input := "SELECT id, name FROM users WHERE age >= 18;"
 	requireTokens(t, input, []Token{
@@ -762,6 +786,7 @@ func TestNextToken_SelectStatement(t *testing.T) {
 	})
 }
 
+// TestNextToken_InsertStatement tests next token insert statement.
 func TestNextToken_InsertStatement(t *testing.T) {
 	input := "INSERT INTO users (name, age) VALUES ('Alice', 30);"
 	requireTokens(t, input, []Token{
@@ -784,6 +809,7 @@ func TestNextToken_InsertStatement(t *testing.T) {
 	})
 }
 
+// TestNextToken_CreateTable tests next token create table.
 func TestNextToken_CreateTable(t *testing.T) {
 	input := `CREATE TABLE users (
     id INT PRIMARY KEY,
@@ -819,6 +845,7 @@ func TestNextToken_CreateTable(t *testing.T) {
 	})
 }
 
+// TestNextToken_UpdateStatement tests next token update statement.
 func TestNextToken_UpdateStatement(t *testing.T) {
 	input := "UPDATE users SET name = 'Bob' WHERE id = 1;"
 	requireTokens(t, input, []Token{
@@ -837,6 +864,7 @@ func TestNextToken_UpdateStatement(t *testing.T) {
 	})
 }
 
+// TestNextToken_DeleteStatement tests next token delete statement.
 func TestNextToken_DeleteStatement(t *testing.T) {
 	input := "DELETE FROM users WHERE id = 1;"
 	requireTokens(t, input, []Token{
@@ -852,6 +880,7 @@ func TestNextToken_DeleteStatement(t *testing.T) {
 	})
 }
 
+// TestNextToken_JoinQuery tests next token join query.
 func TestNextToken_JoinQuery(t *testing.T) {
 	input := "SELECT a.id FROM a INNER JOIN b ON a.id = b.a_id"
 	requireTokens(t, input, []Token{
@@ -876,6 +905,7 @@ func TestNextToken_JoinQuery(t *testing.T) {
 	})
 }
 
+// TestNextToken_GroupByHavingOrderBy tests next token group by having order by.
 func TestNextToken_GroupByHavingOrderBy(t *testing.T) {
 	input := "SELECT dept, COUNT(*) FROM emp GROUP BY dept HAVING COUNT(*) > 5 ORDER BY dept ASC LIMIT 10 OFFSET 5"
 	requireTokens(t, input, []Token{
@@ -910,6 +940,7 @@ func TestNextToken_GroupByHavingOrderBy(t *testing.T) {
 	})
 }
 
+// TestNextToken_ComplexExpression tests next token complex expression.
 func TestNextToken_ComplexExpression(t *testing.T) {
 	input := "WHERE x BETWEEN 1 AND 10 AND name LIKE 'foo%' OR val IS NOT NULL AND id IN (1, 2, 3)"
 	requireTokens(t, input, []Token{
@@ -942,6 +973,7 @@ func TestNextToken_ComplexExpression(t *testing.T) {
 	})
 }
 
+// TestNextToken_AlterTable tests next token alter table.
 func TestNextToken_AlterTable(t *testing.T) {
 	input := "ALTER TABLE users ADD COLUMN email TEXT UNIQUE"
 	requireTokens(t, input, []Token{
@@ -957,6 +989,7 @@ func TestNextToken_AlterTable(t *testing.T) {
 	})
 }
 
+// TestNextToken_DropIfExists tests next token drop if exists.
 func TestNextToken_DropIfExists(t *testing.T) {
 	input := "DROP TABLE IF EXISTS users;"
 	requireTokens(t, input, []Token{
@@ -970,6 +1003,7 @@ func TestNextToken_DropIfExists(t *testing.T) {
 	})
 }
 
+// TestNextToken_CreateDatabase tests next token create database.
 func TestNextToken_CreateDatabase(t *testing.T) {
 	input := "CREATE DATABASE mydb;"
 	requireTokens(t, input, []Token{
@@ -981,6 +1015,7 @@ func TestNextToken_CreateDatabase(t *testing.T) {
 	})
 }
 
+// TestNextToken_UseDatabase tests next token use database.
 func TestNextToken_UseDatabase(t *testing.T) {
 	input := "USE mydb;"
 	requireTokens(t, input, []Token{
@@ -991,6 +1026,7 @@ func TestNextToken_UseDatabase(t *testing.T) {
 	})
 }
 
+// TestNextToken_RenameTable tests next token rename table.
 func TestNextToken_RenameTable(t *testing.T) {
 	input := "ALTER TABLE old_name RENAME TO new_name;"
 	requireTokens(t, input, []Token{
@@ -1005,6 +1041,7 @@ func TestNextToken_RenameTable(t *testing.T) {
 	})
 }
 
+// TestNextToken_SelectWithAlias tests next token select with alias.
 func TestNextToken_SelectWithAlias(t *testing.T) {
 	input := "SELECT DISTINCT name AS n FROM users"
 	requireTokens(t, input, []Token{
@@ -1019,6 +1056,7 @@ func TestNextToken_SelectWithAlias(t *testing.T) {
 	})
 }
 
+// TestNextToken_SelectAllJoins tests next token select all joins.
 func TestNextToken_SelectAllJoins(t *testing.T) {
 	input := "LEFT OUTER JOIN RIGHT OUTER JOIN FULL OUTER JOIN CROSS JOIN"
 	requireTokens(t, input, []Token{
@@ -1037,6 +1075,7 @@ func TestNextToken_SelectAllJoins(t *testing.T) {
 	})
 }
 
+// TestNextToken_ForeignKeyReference tests next token foreign key reference.
 func TestNextToken_ForeignKeyReference(t *testing.T) {
 	input := "user_id BIGINT REFERENCES users(id)"
 	requireTokens(t, input, []Token{
@@ -1051,6 +1090,7 @@ func TestNextToken_ForeignKeyReference(t *testing.T) {
 	})
 }
 
+// TestNextToken_TimestampColumn tests next token timestamp column.
 func TestNextToken_TimestampColumn(t *testing.T) {
 	input := "created_at TIMESTAMP NOT NULL DEFAULT '2024-01-01'"
 	requireTokens(t, input, []Token{
@@ -1064,6 +1104,7 @@ func TestNextToken_TimestampColumn(t *testing.T) {
 	})
 }
 
+// TestNextToken_ArithmeticExpression tests next token arithmetic expression.
 func TestNextToken_ArithmeticExpression(t *testing.T) {
 	input := "a + b - c * d / e % f"
 	requireTokens(t, input, []Token{
@@ -1082,6 +1123,7 @@ func TestNextToken_ArithmeticExpression(t *testing.T) {
 	})
 }
 
+// TestNextToken_SelectAll tests next token select all.
 func TestNextToken_SelectAll(t *testing.T) {
 	input := "SELECT ALL * FROM t"
 	requireTokens(t, input, []Token{
@@ -1094,6 +1136,7 @@ func TestNextToken_SelectAll(t *testing.T) {
 	})
 }
 
+// TestNextToken_DescOrder tests next token desc order.
 func TestNextToken_DescOrder(t *testing.T) {
 	input := "ORDER BY col DESC"
 	requireTokens(t, input, []Token{
@@ -1105,8 +1148,7 @@ func TestNextToken_DescOrder(t *testing.T) {
 	})
 }
 
-// ---------- Edge cases -------------------------------------------------------
-
+// TestNextToken_MinusVsLineComment tests next token minus vs line comment.
 func TestNextToken_MinusVsLineComment(t *testing.T) {
 	// Single minus is TOKEN_MINUS; double minus is a line comment.
 	t.Run("single_minus", func(t *testing.T) {
@@ -1125,6 +1167,7 @@ func TestNextToken_MinusVsLineComment(t *testing.T) {
 	})
 }
 
+// TestNextToken_SlashVsBlockComment tests next token slash vs block comment.
 func TestNextToken_SlashVsBlockComment(t *testing.T) {
 	// Single slash is TOKEN_SLASH; /* starts a block comment.
 	t.Run("single_slash", func(t *testing.T) {
@@ -1145,6 +1188,7 @@ func TestNextToken_SlashVsBlockComment(t *testing.T) {
 	})
 }
 
+// TestNextToken_LessThanAmbiguity tests next token less than ambiguity.
 func TestNextToken_LessThanAmbiguity(t *testing.T) {
 	// < alone, <=, <>
 	t.Run("lt_followed_by_space", func(t *testing.T) {
@@ -1173,6 +1217,7 @@ func TestNextToken_LessThanAmbiguity(t *testing.T) {
 	})
 }
 
+// TestNextToken_ConsecutiveOperators tests next token consecutive operators.
 func TestNextToken_ConsecutiveOperators(t *testing.T) {
 	input := ">=<="
 	requireTokens(t, input, []Token{
@@ -1182,6 +1227,7 @@ func TestNextToken_ConsecutiveOperators(t *testing.T) {
 	})
 }
 
+// TestNextToken_StringInContext tests next token string in context.
 func TestNextToken_StringInContext(t *testing.T) {
 	input := "WHERE name = 'O''Brien'"
 	requireTokens(t, input, []Token{
@@ -1193,6 +1239,7 @@ func TestNextToken_StringInContext(t *testing.T) {
 	})
 }
 
+// TestNextToken_FloatInExpression tests next token float in expression.
 func TestNextToken_FloatInExpression(t *testing.T) {
 	input := "price * 1.08 + .5"
 	requireTokens(t, input, []Token{
@@ -1205,6 +1252,7 @@ func TestNextToken_FloatInExpression(t *testing.T) {
 	})
 }
 
+// TestNextToken_IdentStartingWithUnderscore tests next token ident starting with underscore.
 func TestNextToken_IdentStartingWithUnderscore(t *testing.T) {
 	input := "_foo _123 __"
 	requireTokens(t, input, []Token{
@@ -1215,6 +1263,7 @@ func TestNextToken_IdentStartingWithUnderscore(t *testing.T) {
 	})
 }
 
+// TestNextToken_KeywordAsPrefix tests next token keyword as prefix.
 func TestNextToken_KeywordAsPrefix(t *testing.T) {
 	// "selection" should be IDENT, not SELECT + "ion"
 	requireTokens(t, "selection", []Token{
@@ -1223,6 +1272,7 @@ func TestNextToken_KeywordAsPrefix(t *testing.T) {
 	})
 }
 
+// TestNextToken_MultiLineString tests next token multi line string.
 func TestNextToken_MultiLineString(t *testing.T) {
 	// Strings can span newlines.
 	input := "'line1\nline2'"
@@ -1239,6 +1289,7 @@ func TestNextToken_MultiLineString(t *testing.T) {
 	}
 }
 
+// TestNextToken_NumberFollowedByDotFollowedByNumber tests next token number followed by dot followed by number.
 func TestNextToken_NumberFollowedByDotFollowedByNumber(t *testing.T) {
 	// "1.2.3" → FLOAT "1.2", then ".3" starts a leading-dot float.
 	requireTokens(t, "1.2.3", []Token{
@@ -1248,6 +1299,7 @@ func TestNextToken_NumberFollowedByDotFollowedByNumber(t *testing.T) {
 	})
 }
 
+// TestNextToken_ModifyKeyword tests next token modify keyword.
 func TestNextToken_ModifyKeyword(t *testing.T) {
 	input := "ALTER TABLE t MODIFY COLUMN c INT;"
 	requireTokens(t, input, []Token{
@@ -1263,6 +1315,7 @@ func TestNextToken_ModifyKeyword(t *testing.T) {
 	})
 }
 
+// TestNextToken_SelectWithComments tests next token select with comments.
 func TestNextToken_SelectWithComments(t *testing.T) {
 	input := `SELECT -- column list
     id, /* primary key */
@@ -1280,6 +1333,7 @@ FROM users;`
 	})
 }
 
+// TestNextToken_OperatorsWithNoSpaces tests next token operators with no spaces.
 func TestNextToken_OperatorsWithNoSpaces(t *testing.T) {
 	input := "(a+b)*(c-d)"
 	requireTokens(t, input, []Token{
@@ -1298,6 +1352,7 @@ func TestNextToken_OperatorsWithNoSpaces(t *testing.T) {
 	})
 }
 
+// TestNextToken_NumberAtEndOfInput tests next token number at end of input.
 func TestNextToken_NumberAtEndOfInput(t *testing.T) {
 	// Number followed immediately by EOF, with trailing dot.
 	requireTokens(t, "42.", []Token{
@@ -1306,6 +1361,7 @@ func TestNextToken_NumberAtEndOfInput(t *testing.T) {
 	})
 }
 
+// TestNextToken_SelectStar tests next token select star.
 func TestNextToken_SelectStar(t *testing.T) {
 	input := "SELECT * FROM t;"
 	requireTokens(t, input, []Token{
@@ -1318,6 +1374,7 @@ func TestNextToken_SelectStar(t *testing.T) {
 	})
 }
 
+// TestNextToken_NegativeNumberContext tests next token negative number context.
 func TestNextToken_NegativeNumberContext(t *testing.T) {
 	// Minus is a separate token; the parser handles negation semantically.
 	requireTokens(t, "-42", []Token{
@@ -1327,6 +1384,7 @@ func TestNextToken_NegativeNumberContext(t *testing.T) {
 	})
 }
 
+// TestNextToken_ErrorRecovery tests next token error recovery.
 func TestNextToken_ErrorRecovery(t *testing.T) {
 	// After hitting an illegal character, the lexer should still be able to
 	// produce subsequent tokens.
@@ -1342,5 +1400,104 @@ func TestNextToken_ErrorRecovery(t *testing.T) {
 	token = l.NextToken()
 	if token.Type != TOKEN_SELECT {
 		t.Fatalf("expected SELECT after recovery, got %v", token.Type)
+	}
+}
+
+// TestNextToken_ScientificNotation tests next token scientific notation.
+func TestNextToken_ScientificNotation(t *testing.T) {
+	t.Run("basic", func(t *testing.T) {
+		requireTokens(t, "1.5E6", []Token{
+			tok(TOKEN_FLOAT, "1.5E6", 1, 1),
+			tok(TOKEN_EOF, "", 1, 6),
+		})
+	})
+	t.Run("negative exponent", func(t *testing.T) {
+		requireTokens(t, "2.5E-3", []Token{
+			tok(TOKEN_FLOAT, "2.5E-3", 1, 1),
+			tok(TOKEN_EOF, "", 1, 7),
+		})
+	})
+	t.Run("positive exponent", func(t *testing.T) {
+		requireTokens(t, "2e+4", []Token{
+			tok(TOKEN_FLOAT, "2e+4", 1, 1),
+			tok(TOKEN_EOF, "", 1, 5),
+		})
+	})
+	t.Run("integer base exponent", func(t *testing.T) {
+		requireTokens(t, "1e5", []Token{
+			tok(TOKEN_FLOAT, "1e5", 1, 1),
+			tok(TOKEN_EOF, "", 1, 4),
+		})
+	})
+	t.Run("invalid exponent is scanned separately", func(t *testing.T) {
+		requireTokens(t, "1e", []Token{
+			tok(TOKEN_INTEGER, "1", 1, 1),
+			tok(TOKEN_IDENT, "e", 1, 2),
+			tok(TOKEN_EOF, "", 1, 3),
+		})
+
+		requireTokens(t, "1.5e+", []Token{
+			tok(TOKEN_FLOAT, "1.5", 1, 1),
+			tok(TOKEN_IDENT, "e", 1, 4),
+			tok(TOKEN_PLUS, "+", 1, 5),
+			tok(TOKEN_EOF, "", 1, 6),
+		})
+	})
+}
+
+// TestNextToken_Unicode tests next token unicode.
+func TestNextToken_Unicode(t *testing.T) {
+	t.Run("unicode in string literal", func(t *testing.T) {
+		l := NewLexer("test", "'hello 🚀'")
+		token := l.NextToken()
+		if l.Diagnostics().HasErrors() {
+			t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
+		}
+		if token.Type != TOKEN_STRING {
+			t.Fatalf("expected TOKEN_STRING, got %v", token.Type)
+		}
+		if token.Literal != "hello 🚀" {
+			t.Fatalf("literal: got %q, want 'hello 🚀'", token.Literal)
+		}
+		if token.Span.Start.Line != 1 || token.Span.Start.Col != 1 {
+			t.Errorf("start position: got %d:%d, want 1:1", token.Span.Start.Line, token.Span.Start.Col)
+		}
+		if token.Span.End.Line != 1 || token.Span.End.Col != 10 {
+			t.Errorf("end position: got %d:%d, want 1:10", token.Span.End.Line, token.Span.End.Col)
+		}
+	})
+
+	t.Run("unicode character as illegal token", func(t *testing.T) {
+		l := NewLexer("test", "🚀")
+		token := l.NextToken()
+		if !l.Diagnostics().HasErrors() {
+			t.Fatal("expected error for unicode identifier character")
+		}
+		if token.Type != TOKEN_ILLEGAL {
+			t.Fatalf("expected TOKEN_ILLEGAL, got %v", token.Type)
+		}
+		if token.Literal != "🚀" {
+			t.Fatalf("literal: got %q, want '🚀'", token.Literal)
+		}
+		if token.Span.Start.Line != 1 || token.Span.Start.Col != 1 {
+			t.Errorf("start position: got %d:%d, want 1:1", token.Span.Start.Line, token.Span.Start.Col)
+		}
+		if token.Span.End.Line != 1 || token.Span.End.Col != 2 {
+			t.Errorf("end position: got %d:%d, want 1:2", token.Span.End.Line, token.Span.End.Col)
+		}
+	})
+}
+
+// TestLexer_EOFHelpers tests lexer peeking and advancing at EOF.
+func TestLexer_EOFHelpers(t *testing.T) {
+	l := NewLexer("test", "")
+	if got := l.peek(); got != 0 {
+		t.Errorf("peek() = %v, want 0 at EOF", got)
+	}
+	if got := l.peekNext(); got != 0 {
+		t.Errorf("peekNext() = %v, want 0 at EOF", got)
+	}
+	if got := l.advance(); got != 0 {
+		t.Errorf("advance() = %v, want 0 at EOF", got)
 	}
 }

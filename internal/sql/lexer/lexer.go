@@ -29,6 +29,9 @@ func (l *Lexer) Diagnostics() diagnostic.List {
 	return l.diag
 }
 
+// peek returns the rune at the current scanning position without consuming it.
+// If the position is at or beyond the end of the input, it returns 0 (EOF).
+// The rune is decoded on the fly using utf8.DecodeRuneInString to support multi-byte Unicode.
 func (l *Lexer) peek() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
@@ -37,6 +40,9 @@ func (l *Lexer) peek() rune {
 	return r
 }
 
+// peekNext returns the rune immediately following the current scanning position without consuming it.
+// If the next position is at or beyond the end of the input, it returns 0 (EOF).
+// It decodes the current rune to calculate its byte size before peeking at the next rune.
 func (l *Lexer) peekNext() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
@@ -49,6 +55,8 @@ func (l *Lexer) peekNext() rune {
 	return r
 }
 
+// advance consumes the current rune and returns it, advancing the scanner cursor
+// by the byte size of the consumed rune. If the cursor is at EOF, it returns 0 without advancing.
 func (l *Lexer) advance() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
@@ -78,12 +86,12 @@ func (l *Lexer) skipBlockComment(start diagnostic.Pos) bool {
 	// End of input without finding */
 	end := l.pos.snapshot()
 	span := diagnostic.Span{Start: start, End: end}
-	l.diag.Append(unterminatedComment(span, l.source, start))
+	l.diag.Append(unterminatedComment(span, l.source))
 	return false
 }
 
-// skipWhitespaceAndComments returns false if an unterminated block comment is encountered.
-func (l *Lexer) skipWhitespaceAndComments() bool {
+// skipWhitespaceAndComments skips spaces, tabs, newlines, and comments.
+func (l *Lexer) skipWhitespaceAndComments() {
 	for l.pos.index < len(l.src) {
 		ch := l.peek()
 		switch {
@@ -100,14 +108,13 @@ func (l *Lexer) skipWhitespaceAndComments() bool {
 			l.advance()
 			l.advance()
 			if !l.skipBlockComment(start) {
-				return false
+				return
 			}
 
 		default:
-			return true
+			return
 		}
 	}
-	return true
 }
 
 // makeToken is a convenience to build a Token with the given fields.
@@ -175,6 +182,30 @@ func (l *Lexer) scanNumber() Token {
 		}
 	}
 
+	if l.peek() == 'e' || l.peek() == 'E' {
+		hasExpDigits := false
+		nextCh := l.peekNext()
+		if nextCh == '+' || nextCh == '-' {
+			if l.pos.index+2 < len(l.src) {
+				thirdCh := rune(l.src[l.pos.index+2])
+				if isDigit(thirdCh) {
+					hasExpDigits = true
+				}
+			}
+		} else if isDigit(nextCh) {
+			hasExpDigits = true
+		}
+
+		if hasExpDigits {
+			isFloat = true
+			l.advance()
+			if l.peek() == '+' || l.peek() == '-' {
+				l.advance()
+			}
+			l.scanDigits()
+		}
+	}
+
 	lit := l.src[startIndex:l.pos.index]
 	if isFloat {
 		return l.makeToken(TOKEN_FLOAT, lit, start)
@@ -191,7 +222,7 @@ func (l *Lexer) scanString() Token {
 		if l.pos.index >= len(l.src) {
 			end := l.pos.snapshot()
 			span := diagnostic.Span{Start: start, End: end}
-			l.diag.Append(unterminatedString(span, l.source, start))
+			l.diag.Append(unterminatedString(span, l.source))
 			return l.makeToken(TOKEN_ILLEGAL, buf.String(), start)
 		}
 
@@ -213,12 +244,9 @@ func (l *Lexer) scanString() Token {
 
 // NextToken scans and returns the next token.
 func (l *Lexer) NextToken() Token {
-	start := l.pos.snapshot()
-	if !l.skipWhitespaceAndComments() {
-		return l.makeToken(TOKEN_ILLEGAL, "", start)
-	}
+	l.skipWhitespaceAndComments()
 
-	start = l.pos.snapshot()
+	start := l.pos.snapshot()
 	if l.pos.index >= len(l.src) {
 		return l.makeToken(TOKEN_EOF, "", start)
 	}
