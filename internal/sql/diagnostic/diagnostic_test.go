@@ -334,6 +334,23 @@ func TestList(t *testing.T) {
 		}
 	})
 
+	t.Run("AsError check", func(t *testing.T) {
+		var l List
+		if err := l.AsError(); err != nil {
+			t.Errorf("empty list AsError() should be nil, got %v", err)
+		}
+
+		l.Append(d2)
+		if err := l.AsError(); err != nil {
+			t.Errorf("warning-only list AsError() should be nil, got %v", err)
+		}
+
+		l.Append(d1)
+		if err := l.AsError(); err == nil {
+			t.Error("error list AsError() should not be nil")
+		}
+	})
+
 	t.Run("Unwrap and errors.Is list traversal", func(t *testing.T) {
 		var l List
 		l.Append(d1)

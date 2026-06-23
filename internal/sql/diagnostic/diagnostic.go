@@ -172,6 +172,16 @@ func (l List) HasErrors() bool {
 	return false
 }
 
+// AsError returns nil if the list is empty or contains no fatal errors.
+// Otherwise, it returns the List as a standard error interface value.
+func (l List) AsError() error {
+	if !l.HasErrors() {
+		return nil
+	}
+	return l
+}
+
+
 // Unwrap enables errors.Is to traverse the list (Go 1.20+).
 func (l List) Unwrap() []error {
 	errs := make([]error, len(l))
