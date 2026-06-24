@@ -22,11 +22,11 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <use_db_statement>    ::= <keyword_use> <identifier>
 <drop_db_statement>   ::= <keyword_drop> <keyword_database> <identifier> | <keyword_drop> <keyword_database> <keyword_if> <keyword_exists> <identifier>
 
-<create_table_statement> ::= <keyword_create> <keyword_table> <identifier> <symbol_lparen> <column_definitions> <symbol_rparen>
-                           | <keyword_create> <keyword_table> <keyword_if> <keyword_not> <keyword_exists> <identifier> <symbol_lparen> <column_definitions> <symbol_rparen>
+<create_table_statement> ::= <keyword_create> <keyword_table> <qualified_identifier> <symbol_lparen> <column_definitions> <symbol_rparen>
+                           | <keyword_create> <keyword_table> <keyword_if> <keyword_not> <keyword_exists> <qualified_identifier> <symbol_lparen> <column_definitions> <symbol_rparen>
 <column_definitions>     ::= <column_definition> | <column_definition> <symbol_comma> <column_definitions>
 
-<alter_table_statement> ::= <keyword_alter> <keyword_table> <identifier> <alter_table_action>
+<alter_table_statement> ::= <keyword_alter> <keyword_table> <qualified_identifier> <alter_table_action>
 <alter_table_action>    ::= <alter_action_add> | <alter_action_modify> | <alter_action_rename> | <alter_action_drop>
 <alter_action_add>      ::= <keyword_add> <column_definition> | <keyword_add> <keyword_column> <column_definition>
 <alter_action_modify>   ::= <keyword_modify> <column_definition> | <keyword_modify> <keyword_column> <column_definition>
@@ -34,29 +34,12 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <rename_target>         ::= <keyword_to> <identifier> | <keyword_column> <identifier> <keyword_to> <identifier>
 <alter_action_drop>     ::= <keyword_drop> <keyword_column> <identifier>
 
-<drop_table_statement> ::= <keyword_drop> <keyword_table> <identifier> | <keyword_drop> <keyword_table> <keyword_if> <keyword_exists> <identifier>
+<drop_table_statement> ::= <keyword_drop> <keyword_table> <qualified_identifier> | <keyword_drop> <keyword_table> <keyword_if> <keyword_exists> <qualified_identifier>
 
 <column_definition> ::= <identifier> <data_type> | <identifier> <data_type> <column_constraints>
 
-<column_constraints>       ::= <key_constraint>
-                              | <key_constraint>     <after_key_constraint>
-                              | <null_constraint>
-                              | <null_constraint>    <after_null_constraint>
-                              | <default_constraint>
-                              | <default_constraint> <after_default_constraint>
-                              | <foreign_constraint>
-
-<after_key_constraint>     ::= <null_constraint>
-                              | <null_constraint>    <after_null_constraint>
-                              | <default_constraint>
-                              | <default_constraint> <after_default_constraint>
-                              | <foreign_constraint>
-
-<after_null_constraint>    ::= <default_constraint>
-                              | <default_constraint> <after_default_constraint>
-                              | <foreign_constraint>
-
-<after_default_constraint> ::= <foreign_constraint>
+<column_constraints> ::= <column_constraint> | <column_constraint> <column_constraints>
+<column_constraint>  ::= <key_constraint> | <null_constraint> | <default_constraint> | <foreign_constraint>
 
 <key_constraint>     ::= <keyword_primary> <keyword_key> | <keyword_unique>
 <null_constraint>    ::= <keyword_not> <keyword_null> | <keyword_null>
@@ -65,45 +48,47 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 
 <signed_literal> ::= <literal> | <symbol_minus> <numeric_literal> | <symbol_plus> <numeric_literal>
 
-<select_statement> ::= <keyword_select>                   <select_list> <keyword_from> <table_references>
+<select_statement> ::= <keyword_select>                   <select_list>
+                     | <keyword_select> <select_modifier> <select_list>
+                     | <keyword_select>                   <select_list> <select_clauses>
+                     | <keyword_select> <select_modifier> <select_list> <select_clauses>
+                     | <keyword_select>                   <select_list> <keyword_from> <table_references>
                      | <keyword_select> <select_modifier> <select_list> <keyword_from> <table_references>
                      | <keyword_select>                   <select_list> <keyword_from> <table_references> <select_clauses>
                      | <keyword_select> <select_modifier> <select_list> <keyword_from> <table_references> <select_clauses>
 
 <select_modifier>       ::= <keyword_distinct> | <keyword_all>
 
-<select_clauses>        ::= <where_clause>
-                          | <where_clause>    <post_where_clauses>
-                          | <group_by_clause>
-                          | <group_by_clause> <post_group_by_clauses>
-                          | <order_by_clause>
-                          | <order_by_clause> <limit_clause>
+<select_clauses>        ::= <where_clause>    | <where_clause> <post_where_clauses>
+                          | <group_by_clause> | <group_by_clause> <post_group_by_clauses>
+                          | <having_clause>   | <having_clause> <post_having_clauses>
+                          | <order_by_clause> | <order_by_clause> <limit_clause>
                           | <limit_clause>
 
-<post_where_clauses>    ::= <group_by_clause>
-                          | <group_by_clause> <post_group_by_clauses>
-                          | <order_by_clause>
-                          | <order_by_clause> <limit_clause>
+<post_where_clauses>    ::= <group_by_clause> | <group_by_clause> <post_group_by_clauses>
+                          | <having_clause>   | <having_clause> <post_having_clauses>
+                          | <order_by_clause> | <order_by_clause> <limit_clause>
                           | <limit_clause>
 
-<post_group_by_clauses> ::= <having_clause>
-                          | <having_clause>   <post_having_clauses>
-                          | <order_by_clause>
-                          | <order_by_clause> <limit_clause>
+<post_group_by_clauses> ::= <having_clause>   | <having_clause> <post_having_clauses>
+                          | <order_by_clause> | <order_by_clause> <limit_clause>
                           | <limit_clause>
 
-<post_having_clauses>   ::= <order_by_clause>
-                          | <order_by_clause> <limit_clause>
+<post_having_clauses>   ::= <order_by_clause> | <order_by_clause> <limit_clause>
                           | <limit_clause>
 
 <select_list>       ::= <select_column> | <select_column> <symbol_comma> <select_list>
-<select_column>     ::= <symbol_star> | <select_expression> | <select_expression> <keyword_as> <identifier>
+<select_column>     ::= <symbol_star> 
+                      | <qualified_identifier> <symbol_dot> <symbol_star>
+                      | <select_expression> 
+                      | <select_expression> <keyword_as> <identifier>
 <select_expression> ::= <expression> | <condition>
 
 <table_references>   ::= <table_reference> | <table_reference> <symbol_comma> <table_references>
-<table_reference>    ::= <table_primary> | <symbol_lparen> <table_reference> <join_clauses> <symbol_rparen>
-<table_primary>      ::= <identifier> | <identifier> <keyword_as> <identifier> | <identifier> <identifier>
-<join_clauses>       ::= <join_clause> | <join_clause> <join_clauses>
+<table_reference>    ::= <table_primary>
+                       | <table_reference> <join_clause>
+                       | <symbol_lparen> <table_reference> <symbol_rparen>
+<table_primary>      ::= <qualified_identifier> | <qualified_identifier> <keyword_as> <identifier> | <qualified_identifier> <identifier>
 <join_clause>        ::= <keyword_join> <table_primary> <keyword_on> <condition>
                        | <qualified_join_type> <keyword_join> <table_primary> <keyword_on> <condition>
                        | <keyword_cross> <keyword_join> <table_primary>
@@ -112,22 +97,24 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
                        | <keyword_right> | <keyword_right> <keyword_outer>
                        | <keyword_full> | <keyword_full> <keyword_outer>
 
-<insert_statement> ::= <keyword_insert> <keyword_into> <identifier> <keyword_values> <value_rows>
-                     | <keyword_insert> <keyword_into> <identifier> <symbol_lparen> <column_list> <symbol_rparen> <keyword_values> <value_rows>
+<insert_statement> ::= <keyword_insert> <keyword_into> <qualified_identifier> <keyword_values> <value_rows>
+                     | <keyword_insert> <keyword_into> <qualified_identifier> <symbol_lparen> <column_list> <symbol_rparen> <keyword_values> <value_rows>
+                     | <keyword_insert> <keyword_into> <qualified_identifier> <select_statement>
+                     | <keyword_insert> <keyword_into> <qualified_identifier> <symbol_lparen> <column_list> <symbol_rparen> <select_statement>
 
 <column_list> ::= <identifier> | <identifier> <symbol_comma> <column_list>
 <value_rows>  ::= <value_row> | <value_row> <symbol_comma> <value_rows>
 <value_row>   ::= <symbol_lparen> <value_list> <symbol_rparen>
 <value_list>  ::= <expression> | <expression> <symbol_comma> <value_list>
 
-<update_statement> ::= <keyword_update> <identifier> <keyword_set> <set_list>
-                     | <keyword_update> <identifier> <keyword_set> <set_list> <where_clause>
+<update_statement> ::= <keyword_update> <qualified_identifier> <keyword_set> <set_list>
+                     | <keyword_update> <qualified_identifier> <keyword_set> <set_list> <where_clause>
 
 <set_list> ::= <set_item> | <set_item> <symbol_comma> <set_list>
 <set_item> ::= <qualified_identifier> <symbol_equal> <expression>
 
-<delete_statement> ::= <keyword_delete> <keyword_from> <identifier>
-                     | <keyword_delete> <keyword_from> <identifier> <where_clause>
+<delete_statement> ::= <keyword_delete> <keyword_from> <qualified_identifier>
+                     | <keyword_delete> <keyword_from> <qualified_identifier> <where_clause>
 
 <where_clause>      ::= <keyword_where> <condition>
 <condition>         ::= <or_condition>
@@ -136,7 +123,7 @@ All SQL keywords and unquoted identifiers are case-insensitive. For example, key
 <and_condition>     ::= <not_condition> | <not_condition> <and_tail>
 <and_tail>          ::= <keyword_and> <not_condition> | <keyword_and> <not_condition> <and_tail>
 <not_condition>     ::= <condition_primary> | <keyword_not> <not_condition>
-<condition_primary> ::= <predicate> | <symbol_lparen> <condition> <symbol_rparen>
+<condition_primary> ::= <predicate> | <expression> | <symbol_lparen> <condition> <symbol_rparen>
 <predicate>      ::= <expression> <predicate_tail>
 <predicate_tail> ::= <comparison_operator> <expression>
                    | <keyword_like> <expression>
@@ -334,21 +321,18 @@ DbManipulationStatement    ::= 'CREATE' 'DATABASE' ( 'IF' 'NOT' 'EXISTS' )? Iden
 TableManipulationStatement ::= CreateTableStatement | AlterTableStatement | DropTableStatement
 DataManipulationStatement  ::= InsertStatement | SelectStatement | UpdateStatement | DeleteStatement
 
-CreateTableStatement ::= 'CREATE' 'TABLE' ( 'IF' 'NOT' 'EXISTS' )? Identifier '(' ColumnDefinition ( ',' ColumnDefinition )* ')'
+CreateTableStatement ::= 'CREATE' 'TABLE' ( 'IF' 'NOT' 'EXISTS' )? QualifiedIdentifier '(' ColumnDefinition ( ',' ColumnDefinition )* ')'
 
-AlterTableStatement  ::= 'ALTER' 'TABLE' Identifier AlterAction
+AlterTableStatement  ::= 'ALTER' 'TABLE' QualifiedIdentifier AlterAction
 AlterAction          ::= ( 'ADD' | 'MODIFY' ) 'COLUMN'? ColumnDefinition
                        | 'RENAME' ( 'TO' Identifier | 'COLUMN' Identifier 'TO' Identifier )
                        | 'DROP' 'COLUMN' Identifier
 
-DropTableStatement   ::= 'DROP' 'TABLE' ( 'IF' 'EXISTS' )? Identifier
+DropTableStatement   ::= 'DROP' 'TABLE' ( 'IF' 'EXISTS' )? QualifiedIdentifier
 
 ColumnDefinition  ::= Identifier DataType ColumnConstraints?
 
-ColumnConstraints ::= KeyConstraint     NullConstraint? DefaultConstraint? ForeignConstraint?
-                    | NullConstraint    DefaultConstraint? ForeignConstraint?
-                    | DefaultConstraint ForeignConstraint?
-                    | ForeignConstraint
+ColumnConstraints ::= ( KeyConstraint | NullConstraint | DefaultConstraint | ForeignConstraint )+
 
 KeyConstraint        ::= 'PRIMARY' 'KEY' | 'UNIQUE'
 NullConstraint       ::= 'NOT' 'NULL' | 'NULL'
@@ -358,30 +342,27 @@ ForeignConstraint    ::= 'REFERENCES' Identifier '(' Identifier ')'
 SignedLiteral        ::= Literal | ( '+' | '-' ) NumericLiteral
 
 SelectStatement ::= 'SELECT' ( 'DISTINCT' | 'ALL' )? SelectList
-                    'FROM' TableReference ( ',' TableReference )*
+                    ( 'FROM' TableReference ( ',' TableReference )* )?
                     SelectClauses?
-SelectClauses    ::= WhereClause PostWhereClauses? | GroupByClause PostGroupByClauses? | OrderByClause LimitClause? | LimitClause
-PostWhereClauses    ::= GroupByClause PostGroupByClauses? | OrderByClause LimitClause? | LimitClause
-PostGroupByClauses  ::= HavingClause PostHavingClauses? | OrderByClause LimitClause? | LimitClause
-PostHavingClauses   ::= OrderByClause LimitClause? | LimitClause
+SelectClauses    ::= WhereClause? GroupByClause? HavingClause? OrderByClause? LimitClause?
 SelectList          ::= SelectColumn ( ',' SelectColumn )*
-SelectColumn        ::= '*' | SelectExpression ( 'AS' Identifier )?
+SelectColumn        ::= '*' | QualifiedIdentifier '.' '*' | SelectExpression ( 'AS' Identifier )?
 SelectExpression    ::= Expression | Condition
 
-InsertStatement      ::= 'INSERT' 'INTO' Identifier
+InsertStatement      ::= 'INSERT' 'INTO' QualifiedIdentifier
                          ( '(' Identifier ( ',' Identifier )* ')' )?
-                         'VALUES' ValueRow ( ',' ValueRow )*
+                         ( 'VALUES' ValueRow ( ',' ValueRow )* | SelectStatement )
 
 ValueRow             ::= '(' Expression ( ',' Expression )* ')'
 
-UpdateStatement      ::= 'UPDATE' Identifier 'SET' SetItem ( ',' SetItem )* WhereClause?
+UpdateStatement      ::= 'UPDATE' QualifiedIdentifier 'SET' SetItem ( ',' SetItem )* WhereClause?
 SetItem              ::= QualifiedIdentifier '=' Expression
 
-DeleteStatement      ::= 'DELETE' 'FROM' Identifier WhereClause?
+DeleteStatement      ::= 'DELETE' 'FROM' QualifiedIdentifier WhereClause?
 
-TableReference       ::= TablePrimary
-                       | '(' TableReference ( JoinClause )+ ')'
-TablePrimary         ::= Identifier ( ( 'AS' )? Identifier )?
+TableReference       ::= TablePrimary ( JoinClause )*
+                       | '(' TableReference ')'
+TablePrimary         ::= QualifiedIdentifier ( ( 'AS' )? Identifier )?
 JoinClause           ::= QualifiedJoinType? 'JOIN' TablePrimary 'ON' Condition
                        | 'CROSS' 'JOIN' TablePrimary
 QualifiedJoinType    ::= 'INNER' | 'LEFT' 'OUTER'? | 'RIGHT' 'OUTER'? | 'FULL' 'OUTER'?
@@ -391,7 +372,7 @@ Condition            ::= OrCondition
 OrCondition          ::= AndCondition ( 'OR' AndCondition )*
 AndCondition         ::= NotCondition ( 'AND' NotCondition )*
 NotCondition         ::= ConditionPrimary | 'NOT' NotCondition
-ConditionPrimary     ::= Predicate | '(' Condition ')'
+ConditionPrimary     ::= Predicate | Expression | '(' Condition ')'
 Predicate    ::= Expression PredicateTail
 PredicateTail ::= ComparisonOperator Expression
                | 'LIKE' Expression
@@ -420,7 +401,7 @@ Factor               ::= Literal
                        | ( '+' | '-' ) Factor
 
 FunctionCall         ::= Identifier '(' FunctionArgs? ')'
-FunctionArgs         ::= '*' | ( 'DISTINCT' )? SelectExpression ( ',' SelectExpression )*
+FunctionArgs         ::= '*' | 'DISTINCT'? SelectExpression ( ',' SelectExpression )*
 
 QualifiedIdentifier  ::= Identifier ( '.' Identifier )?
 
@@ -449,28 +430,27 @@ LowercaseLetter      ::= 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | '
 UppercaseLetter      ::= 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M'
                        | 'N' | 'O' | 'P' | 'Q' | 'R' | 'S' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z'
 Digit                ::= '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
-
 ```
 
 ### Notes
 
 - **Program**: The top-level rule. A program is one or more semicolon-terminated statements, enabling scripts with multiple SQL statements separated by `;`.
 - **IF EXISTS / IF NOT EXISTS**: `CREATE DATABASE`, `CREATE TABLE` accept an optional `IF NOT EXISTS` clause to suppress errors when the target already exists. `DROP DATABASE`, `DROP TABLE` accept an optional `IF EXISTS` clause to suppress errors when the target does not exist.
-- **Identifier / QualifiedIdentifier**: `Identifier` governs database, table, and column names. Must begin with a letter and may include letters, digits, and underscores. `QualifiedIdentifier` extends this to support dot-separated `table.column` references such as `users.id` or `orders.total`. Qualified identifiers are used in `Factor`, `SetItem`, and `GROUP BY`.
+- **Identifier / QualifiedIdentifier**: `Identifier` governs database, table, and column names. Must begin with a letter and may include letters, digits, and underscores. The EBNF version also supports double-quoted identifiers (e.g. `"limit"`), enabling reserved keywords to be used as identifiers. `QualifiedIdentifier` extends this to support dot-separated `table.column` references such as `users.id` or `orders.total`. Qualified identifiers are used in `Factor`, `SetItem`, and `GROUP BY`.
 - **Literal**: Denotes fixed data values.
 - **NullLiteral / BooleanLiteral**: Captures SQL boolean flags (`TRUE`/`FALSE`) and the missing-data marker (`NULL`).
 - **NumericLiteral / IntegerLiteral / FloatLiteral**: Governs integer and fractional digits. `FloatLiteral` accepts all three forms SQL allows: standard (`3.14`), leading-dot (`.14`), and trailing-dot (`10.`). Only `IntegerLiteral` is accepted by `LIMIT`, `OFFSET`, and `VARCHAR`.
 - **StringLiteral / NonQuoteCharacter**: Resolves single-quoted text values. An empty string `''` is valid. To embed a literal single quote inside a string, double it: `'it''s'` represents `it's`. Per the SQL standard, `NonQuoteCharacter` is any character from the source character set except the single-quote delimiter. In the grammar this is expressed via `StringChar ::= NonQuoteCharacter | "''"`, where `''` is treated as a single escaped-quote unit by the lexer using a greedy longest-match rule.
 - **SignedLiteral**: Supports both unary `+` and `-` for numeric literals in `DEFAULT` values: `DEFAULT -1`, `DEFAULT +5`.
-- **SelectStatement**: Supports an optional `DISTINCT` or `ALL` quantifier after `SELECT`, absorbed directly into the four `<select_statement>` alternatives rather than via a nullable rule. The optional clause tail is expressed through four non-nullable helper rules — `<select_clauses>`, `<post_where_clauses>`, `<post_group_by_clauses>`, and `<post_having_clauses>` — each enumerating only the valid non-empty suffixes that may follow a given clause. Together they cover all 23 valid non-empty clause combinations while enforcing canonical ordering (`WHERE → GROUP BY → HAVING → ORDER BY → LIMIT`). `HAVING` is only reachable through `<post_group_by_clauses>`, so `GROUP BY` before `HAVING` is structurally guaranteed. No nullable rules are used anywhere in the BNF.
-- **SelectList / SelectColumn / SelectExpression**: Each item in a select list is independently a `SelectColumn`, which can be a bare `*` or any `SelectExpression` with an optional `AS` alias. A `SelectExpression` may be an arithmetic `Expression` or a boolean `Condition`.
-- **TableReference / JoinClause**: A `TableReference` is either a bare `TablePrimary` (an identifier with an optional alias) or a parenthesized group of a `TableReference` with one or more `JoinClause`s. The recursive structure allows joins to be applied between a concrete table and an intermediate joined result, e.g. `(orders JOIN (users JOIN roles ON ...) ON ...)`. Qualified join types (`INNER`, `LEFT [OUTER]`, `RIGHT [OUTER]`, `FULL [OUTER]`) require an `ON` condition. `CROSS JOIN` produces a cartesian product and does not accept an `ON` condition.
+- **SelectStatement**: Supports an optional `DISTINCT` or `ALL` quantifier after `SELECT`. To avoid nullable rules in the BNF, this is absorbed directly into eight `<select_statement>` alternatives (covering all combinations of modifier presence, `FROM` clause presence, and select clauses presence). In the EBNF, the structure is simplified to use optional groups for the `FROM` clause and the tail select clauses.
+- **SelectList / SelectColumn / SelectExpression**: Each item in a select list is independently a `SelectColumn`, which can be a bare `*`, a qualified wildcard (e.g., `table.*` or `db.table.*`), or any `SelectExpression` with an optional `AS` alias. A `SelectExpression` may be an arithmetic `Expression` or a boolean `Condition`.
+- **TableReference / JoinClause**: Both the BNF and EBNF support standard linear joins (e.g., `t1 JOIN t2 JOIN t3`) without mandatory parenthesization. The recursive structure also allows nesting joins inside parentheses when explicit grouping is required. Qualified join types require an `ON` condition. `CROSS JOIN` produces a cartesian product and does not accept an `ON` condition.
 - **Predicate**: The grammar supports five predicate types: `ComparisonPredicate` (`=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`), `LikePredicate` (`LIKE` / `NOT LIKE`), `NullPredicate` (`IS NULL` / `IS NOT NULL`), `InPredicate` (`IN` / `NOT IN`), and `BetweenPredicate` (`BETWEEN ... AND ...` / `NOT BETWEEN ... AND ...`).
-- **GROUP BY / HAVING**: `GROUP BY` accepts a comma-separated list of qualified identifiers. `HAVING` filters groups using a condition and may only appear after `GROUP BY`.
+- **GROUP BY / HAVING**: `GROUP BY` accepts a comma-separated list of qualified identifiers. `HAVING` filters groups using a condition. Both versions allow `HAVING` to be used independently of `GROUP BY` (treating the entire table as a single group).
 - **ORDER BY**: Accepts a comma-separated list of order items. Each item is an expression with an optional `ASC` (ascending, default) or `DESC` (descending) direction.
 - **LIMIT / OFFSET**: `LIMIT` restricts the result set size. An optional `OFFSET` clause skips a specified number of rows before returning results. Both accept only `IntegerLiteral` values.
 - **FunctionCall**: Supports general function call syntax: `identifier(args)`. Function arguments can be a bare `*` (for `COUNT(*)`), or one or more `SelectExpression`s (which may be arithmetic expressions or boolean conditions) optionally preceded by `DISTINCT` (for `COUNT(DISTINCT col)`). Using `SelectExpression` rather than plain `Expression` enables aggregate calls over boolean conditions such as `SUM(price > 100)`. This covers all standard aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`) and any future scalar functions.
-- **ColumnConstraints**: Supports four constraint types — key, null, default, and foreign — each of which may appear at most once per column. Constraints must be written in canonical order: `KeyConstraint` → `NullConstraint` → `DefaultConstraint` → `ForeignConstraint`. The grammar encodes all 15 valid non-empty subsets of these four types in that fixed order. **Parser note**: the parser must verify at semantic analysis time that no constraint type is duplicated; the grammar structure alone enforces canonical ordering but does not prevent a user from writing the same constraint twice if the grammar were extended permissively.
+- **ColumnConstraints**: Supports four constraint types — key, null, default, and foreign — each of which may appear at most once per column. Both the BNF and EBNF allow constraints to be specified in any order, leaving duplicate and semantic validation to analysis/compilation time.
 - **NullConstraint**: Accepts both `NOT NULL` and explicit `NULL`. While `NULL` is the default column behavior, explicitly stating it is valid SQL and commonly used in schema definitions.
 - **ForeignConstraint**: Column-level referential constraint. Syntax: `REFERENCES table_name (column_name)`, pointing to exactly one column in another table.
 - **Letter / Digit**: Fundamental character classes for identifiers.
