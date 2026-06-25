@@ -18,6 +18,7 @@ type Reader struct {
 	index       []indexEntry
 	entryCount  uint32
 	fileSize    int64
+	indexOffset uint64
 	closed      bool
 }
 
@@ -112,6 +113,7 @@ func Open(filePath string) (*Reader, error) {
 		index:       index,
 		entryCount:  entryCount,
 		fileSize:    fileSize,
+		indexOffset: indexOffset,
 	}, nil
 }
 
@@ -204,6 +206,10 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 	keyLen := binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset])
 	valLen := binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset])
 	opcode := header[opcodeOffset]
+
+	if dataOffset+int64(entryHeaderSize)+int64(keyLen)+int64(valLen) > int64(r.indexOffset) {
+		return nil, false, false, fmt.Errorf("%w: entry sizes exceed data block boundary", ErrCorrupted)
+	}
 
 	// Read the key from disk and verify it matches.
 	entryKey := make([]byte, keyLen)

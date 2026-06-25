@@ -248,6 +248,50 @@ func TestOpen_CorruptedEntryCount_OOM(t *testing.T) {
 	}
 }
 
+// TestReader_Get_CorruptedEntrySize verifies Get returns ErrCorrupted when the
+// data entry sizes decoded from the header exceed the data block boundary.
+func TestReader_Get_CorruptedEntrySize(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSSTable(t, dir, "corrupted_size.sst", []testEntry{
+		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
+	})
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	dataOffset := int64(r.index[0].offset)
+	r.Close()
+
+	// Open the file for writing to corrupt the entry header.
+	f, err := os.OpenFile(path, os.O_RDWR, 0o666)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	var header [entryHeaderSize]byte
+	if _, err := f.ReadAt(header[:], dataOffset); err != nil {
+		t.Fatalf("ReadAt: %v", err)
+	}
+	binary.LittleEndian.PutUint32(header[valueLenOffset:opcodeOffset], math.MaxUint32)
+	if _, err := f.WriteAt(header[:], dataOffset); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	f.Close()
+
+	r, err = Open(path)
+	if err != nil {
+		t.Fatalf("Open (re-open): %v", err)
+	}
+	defer r.Close()
+
+	_, _, _, err = r.Get([]byte("k"))
+	if err == nil {
+		t.Fatal("expected error for corrupted entry size, got nil")
+	}
+	if !strings.Contains(err.Error(), "data corruption detected") {
+		t.Errorf("expected ErrCorrupted, got: %v", err)
+	}
+}
 
 // TestReader_GetHitSingle verifies a single entry round-trips through Write, Open, and Get.
 func TestReader_GetHitSingle(t *testing.T) {
