@@ -1043,9 +1043,9 @@ func TestReader_DoubleClose(t *testing.T) {
 	}
 }
 
-// TestReader_BloomMayContainAfterClose does not panic when called after Close.
-// The bloom filter is in-memory, so it technically still works, but we just
-// want to ensure no crash.
+// TestReader_BloomMayContainAfterClose verifies that BloomMayContain safely
+// returns false when called on a closed reader, protecting against operations
+// on closed objects.
 func TestReader_BloomMayContainAfterClose(t *testing.T) {
 	dir := t.TempDir()
 	path := writeTestSSTable(t, dir, "bloom_after_close.sst", []testEntry{
@@ -1058,8 +1058,10 @@ func TestReader_BloomMayContainAfterClose(t *testing.T) {
 	}
 	r.Close()
 
-	// Should not panic. The bloom filter is in-memory.
-	_ = r.BloomMayContain([]byte("k"))
+	// Should return false because operations on a closed reader are not allowed.
+	if r.BloomMayContain([]byte("k")) {
+		t.Fatal("expected BloomMayContain to return false after Close")
+	}
 }
 
 // TestReader_HighEntryCount writes 10,000 entries and verifies random-access

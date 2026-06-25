@@ -168,6 +168,9 @@ func parseIndex(data []byte, expectedCount uint32, indexOffset uint64) ([]indexE
 // BloomMayContain returns true if the key might exist in this SSTable
 // according to the Bloom Filter. A false return guarantees the key is absent.
 func (r *Reader) BloomMayContain(key []byte) bool {
+	if r.closed {
+		return false
+	}
 	return r.bloomFilter.MayContain(key)
 }
 
