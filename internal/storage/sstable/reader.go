@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 )
@@ -202,6 +203,12 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 	}
 
 	// Found a candidate in the index, read the data entry from disk.
+	if r.index[i].offset >= r.indexOffset {
+		return nil, false, false, fmt.Errorf("%w: index entry offset %d exceeds index offset %d", ErrCorrupted, r.index[i].offset, r.indexOffset)
+	}
+	if r.index[i].offset > uint64(math.MaxInt64) {
+		return nil, false, false, fmt.Errorf("%w: index entry offset %d exceeds max int64", ErrCorrupted, r.index[i].offset)
+	}
 	dataOffset := int64(r.index[i].offset)
 
 	// Read the fixed-size entry header.
@@ -214,7 +221,7 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 	valLen := binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset])
 	opcode := header[opcodeOffset]
 
-	if dataOffset+int64(entryHeaderSize)+int64(keyLen)+int64(valLen) > int64(r.indexOffset) {
+	if uint64(dataOffset)+uint64(entryHeaderSize)+uint64(keyLen)+uint64(valLen) > r.indexOffset {
 		return nil, false, false, fmt.Errorf("%w: entry sizes exceed data block boundary", ErrCorrupted)
 	}
 
@@ -236,6 +243,9 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 	}
 
 	// Read the value.
+	if uint64(valLen) > r.indexOffset-uint64(dataOffset)-uint64(entryHeaderSize)-uint64(keyLen) {
+		return nil, false, false, fmt.Errorf("%w: value length %d exceeds available data block space", ErrCorrupted, valLen)
+	}
 	val := make([]byte, valLen)
 	if valLen > 0 {
 		if _, err := r.file.ReadAt(val, dataOffset+int64(entryHeaderSize)+int64(keyLen)); err != nil {

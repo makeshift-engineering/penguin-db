@@ -1490,4 +1490,98 @@ func TestReader_CloseAndReopen(t *testing.T) {
 	}
 }
 
+// TestReader_Get_CorruptedIndexOffsetInMemory verifies that Get returns an error
+// if the in-memory index is mutated to contain an out-of-bounds offset,
+// ensuring defense-in-depth against offset corruption bypassing bounds checks.
+func TestReader_Get_CorruptedIndexOffsetInMemory(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSSTable(t, dir, "mem_corrupt_offset.sst", []testEntry{
+		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
+	})
 
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	// Mutate the index offset in memory to bypass the Open-time validation,
+	// but exceed the indexOffset bounds.
+	originalOffset := r.index[0].offset
+	r.index[0].offset = r.indexOffset + 1
+
+	_, _, _, err = r.Get([]byte("k"))
+	if err == nil {
+		t.Fatal("expected error for offset >= indexOffset, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds index offset") {
+		t.Errorf("expected exceeds index offset error, got: %v", err)
+	}
+
+	// Mutate the index offset to exceed math.MaxInt64.
+	// We also artificially inflate r.indexOffset so it bypasses the first check.
+	originalIndexOffset := r.indexOffset
+	r.indexOffset = uint64(math.MaxInt64) + 2
+	r.index[0].offset = uint64(math.MaxInt64) + 1
+	_, _, _, err = r.Get([]byte("k"))
+	if err == nil {
+		t.Fatal("expected error for offset > math.MaxInt64, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds max int64") {
+		t.Errorf("expected exceeds max int64 error, got: %v", err)
+	}
+
+	// Restore offsets.
+	r.index[0].offset = originalOffset
+	r.indexOffset = originalIndexOffset
+}
+
+// TestReader_Get_CorruptedValLen_OOMPrevention verifies that Get explicitly
+// rejects a valLen that would exceed the available space before attempting
+// to allocate memory for the value.
+func TestReader_Get_CorruptedValLen_OOMPrevention(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSSTable(t, dir, "corrupt_vallen.sst", []testEntry{
+		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
+	})
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	dataOffset := int64(r.index[0].offset)
+	r.Close()
+
+	// Open the file for writing to corrupt the entry header.
+	f, err := os.OpenFile(path, os.O_RDWR, 0o666)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	var header [entryHeaderSize]byte
+	if _, err := f.ReadAt(header[:], dataOffset); err != nil {
+		t.Fatalf("ReadAt: %v", err)
+	}
+	
+	// Set valLen to just beyond the remaining file size, ensuring it triggers
+	// the allocation prevention check rather than just a total size overflow.
+	// Since r.indexOffset is small for this file, 500 is out of bounds.
+	binary.LittleEndian.PutUint32(header[valueLenOffset:opcodeOffset], 500)
+	if _, err := f.WriteAt(header[:], dataOffset); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	f.Close()
+
+	r, err = Open(path)
+	if err != nil {
+		t.Fatalf("Open (re-open): %v", err)
+	}
+	defer r.Close()
+
+	_, _, _, err = r.Get([]byte("k"))
+	if err == nil {
+		t.Fatal("expected error for corrupted valLen, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds available data block space") && !strings.Contains(err.Error(), "entry sizes exceed data block boundary") {
+		t.Errorf("expected bounds error, got: %v", err)
+	}
+}
