@@ -1585,3 +1585,24 @@ func TestReader_Get_CorruptedValLen_OOMPrevention(t *testing.T) {
 		t.Errorf("expected bounds error, got: %v", err)
 	}
 }
+
+func TestReader_Get_UnknownOpcode(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSSTable(t, dir, "unknown_opcode.sst", []testEntry{
+		{key: []byte("k"), value: []byte("v"), opcode: 0xFF},
+	})
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	_, _, _, err = r.Get([]byte("k"))
+	if err == nil {
+		t.Fatal("expected error for unknown opcode, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown opcode") {
+		t.Errorf("expected unknown opcode error, got: %v", err)
+	}
+}

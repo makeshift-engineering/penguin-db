@@ -240,6 +240,8 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 
 	if opcode == OpcodeDelete {
 		return nil, true, true, nil
+	} else if opcode != OpcodePut {
+		return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, opcode, dataOffset)
 	}
 
 	// Read the value.
