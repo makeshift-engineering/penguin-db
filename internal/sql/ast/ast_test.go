@@ -70,11 +70,13 @@ var _ ast.Node = (*ast.Program)(nil)
 var _ ast.Node = (*ast.SelectExpression)(nil)
 
 // helpers to build base structs with a span
-func eb(s diagnostic.Span) ast.ExprBase   { return ast.ExprBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
-func cb(s diagnostic.Span) ast.CondBase   { return ast.CondBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
-func sb(s diagnostic.Span) ast.StmtBase   { return ast.StmtBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
-func clb(s diagnostic.Span) ast.ClauseBase { return ast.ClauseBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
-func nb(s diagnostic.Span) ast.NodeBase    { return ast.NodeBase{NodeSpan: s} }
+func eb(s diagnostic.Span) ast.ExprBase { return ast.ExprBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+func cb(s diagnostic.Span) ast.CondBase { return ast.CondBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+func sb(s diagnostic.Span) ast.StmtBase { return ast.StmtBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+func clb(s diagnostic.Span) ast.ClauseBase {
+	return ast.ClauseBase{NodeBase: ast.NodeBase{NodeSpan: s}}
+}
+func nb(s diagnostic.Span) ast.NodeBase { return ast.NodeBase{NodeSpan: s} }
 
 func TestSpan_ReturnsStoredSpan(t *testing.T) {
 	span := diagnostic.Span{

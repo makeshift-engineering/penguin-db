@@ -1,22 +1,26 @@
 package ast
 
+// CreateDatabaseStmt represents: CREATE DATABASE [IF NOT EXISTS] Name.
 type CreateDatabaseStmt struct {
 	StmtBase
 	Name        string
 	IfNotExists bool
 }
 
+// UseDatabaseStmt represents: USE Name.
 type UseDatabaseStmt struct {
 	StmtBase
 	Name string
 }
 
+// DropDatabaseStmt represents: DROP DATABASE [IF EXISTS] Name.
 type DropDatabaseStmt struct {
 	StmtBase
 	Name     string
 	IfExists bool
 }
 
+// CreateTableStmt represents: CREATE TABLE [IF NOT EXISTS] Table ( Columns... ).
 type CreateTableStmt struct {
 	StmtBase
 	Table       *Identifier
@@ -24,18 +28,23 @@ type CreateTableStmt struct {
 	Columns     []*ColumnDef
 }
 
+// AlterTableStmt represents: ALTER TABLE Table Action.
 type AlterTableStmt struct {
 	StmtBase
 	Table  *Identifier
 	Action *AlterAction
 }
 
+// DropTableStmt represents: DROP TABLE [IF EXISTS] Table.
 type DropTableStmt struct {
 	StmtBase
 	Table    *Identifier
 	IfExists bool
 }
 
+// SelectStmt represents a full SELECT query. From is nil when the query
+// has no FROM clause (e.g. SELECT 1+1). Distinct and All are mutually
+// exclusive; both false means neither modifier was specified.
 type SelectStmt struct {
 	StmtBase
 	Distinct bool
@@ -49,6 +58,8 @@ type SelectStmt struct {
 	Limit    *LimitClause
 }
 
+// InsertStmt represents an INSERT statement. Exactly one of Rows or Source
+// is non-nil: Rows for INSERT ... VALUES, Source for INSERT ... SELECT.
 type InsertStmt struct {
 	StmtBase
 	Table   *Identifier
@@ -57,6 +68,7 @@ type InsertStmt struct {
 	Source  *SelectStmt
 }
 
+// UpdateStmt represents: UPDATE Table SET assignments [WHERE cond].
 type UpdateStmt struct {
 	StmtBase
 	Table *Identifier
@@ -64,6 +76,7 @@ type UpdateStmt struct {
 	Where *WhereClause
 }
 
+// DeleteStmt represents: DELETE FROM Table [WHERE cond].
 type DeleteStmt struct {
 	StmtBase
 	Table *Identifier
