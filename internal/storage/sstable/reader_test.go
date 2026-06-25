@@ -1562,7 +1562,7 @@ func TestReader_Get_CorruptedValLen_OOMPrevention(t *testing.T) {
 	if _, err := f.ReadAt(header[:], dataOffset); err != nil {
 		t.Fatalf("ReadAt: %v", err)
 	}
-	
+
 	// Set valLen to just beyond the remaining file size, ensuring it triggers
 	// the allocation prevention check rather than just a total size overflow.
 	// Since r.indexOffset is small for this file, 500 is out of bounds.

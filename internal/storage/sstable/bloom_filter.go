@@ -32,7 +32,7 @@ func NewBloomFilter(numKeys, bitsPerKey int) *BloomFilter {
 	k := int(float64(bitsPerKey) * math.Ln2)
 
 	// Clamp the number of hash functions to a reasonable range.
-	// At least 1 hash function is required. A maximum of 30 prevents excessive 
+	// At least 1 hash function is required. A maximum of 30 prevents excessive
 	// CPU usage during hashing while providing diminishing returns beyond that.
 	if k < 1 {
 		k = 1
@@ -140,9 +140,9 @@ func (f *BloomFilter) hash(key []byte) (h1, h2 uint32) {
 
 	hasher.Write(h1Bytes)
 	h2 = hasher.Sum32()
-	
-	// If h2 is exactly 0, the combined hash function (h1 + i*h2) would just equal h1 
-	// for all iterations, effectively degrading the filter to use only a single hash 
+
+	// If h2 is exactly 0, the combined hash function (h1 + i*h2) would just equal h1
+	// for all iterations, effectively degrading the filter to use only a single hash
 	// function. Setting h2 to 1 prevents this edge case.
 	if h2 == 0 {
 		h2 = 1
