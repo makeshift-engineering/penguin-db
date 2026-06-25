@@ -117,6 +117,13 @@ func Open(filePath string) (*Reader, error) {
 
 // parseIndex decodes the raw index block bytes into a slice of indexEntry.
 func parseIndex(data []byte, expectedCount uint32) ([]indexEntry, error) {
+	// Each entry requires at least indexEntryHeaderSize bytes.
+	// If the declared count can't possibly fit in the index block, the
+	// footer is corrupt — fail fast instead of silently capping.
+	if uint64(expectedCount)*uint64(indexEntryHeaderSize) > uint64(len(data)) {
+		return nil, fmt.Errorf("%w: expected %d entries but index block is only %d bytes",
+			ErrCorrupted, expectedCount, len(data))
+	}
 	entries := make([]indexEntry, 0, expectedCount)
 	pos := 0
 

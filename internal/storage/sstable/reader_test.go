@@ -217,6 +217,38 @@ func TestOpen_CorruptedBloomOffset(t *testing.T) {
 	}
 }
 
+// TestOpen_CorruptedEntryCount_OOM verifies Open returns ErrCorrupted when the
+// footer's entry count is impossibly large relative to the index block size,
+// preventing an OOM.
+func TestOpen_CorruptedEntryCount_OOM(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSSTable(t, dir, "oom_count.sst", []testEntry{
+		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
+	})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// Overwrite entry count in the footer with MaxUint32.
+	footerStart := len(data) - footerSize
+	binary.LittleEndian.PutUint32(data[footerStart+footerEntryCountOffset:], math.MaxUint32)
+
+	if err := os.WriteFile(path, data, 0o666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err = Open(path)
+	if err == nil {
+		t.Fatal("expected error for impossibly large entry count, got nil")
+	}
+	if !strings.Contains(err.Error(), "data corruption detected") {
+		t.Errorf("expected ErrCorrupted, got: %v", err)
+	}
+}
+
+
 // TestReader_GetHitSingle verifies a single entry round-trips through Write, Open, and Get.
 func TestReader_GetHitSingle(t *testing.T) {
 	dir := t.TempDir()
