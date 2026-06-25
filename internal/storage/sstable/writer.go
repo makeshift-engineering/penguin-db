@@ -75,8 +75,10 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 	}
 
 	// Record the offset for the index before writing.
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
 	w.index = append(w.index, indexEntry{
-		key:    key,
+		key:    keyCopy,
 		offset: w.offset,
 	})
 
