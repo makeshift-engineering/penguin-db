@@ -1021,7 +1021,7 @@ func TestWriter_OverwritesExistingFile(t *testing.T) {
 // TestWriter_InvalidPath verifies that NewWriter returns an error when given
 // an invalid file path (e.g., non-existent directory).
 func TestWriter_InvalidPath(t *testing.T) {
-	path := filepath.Join("nonexistent", "dir", "test.sst")
+	path := filepath.Join(t.TempDir(), "nonexistent", "dir", "test.sst")
 	_, err := NewWriter(path, 0)
 	if err == nil {
 		t.Fatalf("expected error for invalid path, got nil")
