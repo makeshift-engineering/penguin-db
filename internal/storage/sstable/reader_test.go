@@ -293,6 +293,40 @@ func TestReader_Get_CorruptedEntrySize(t *testing.T) {
 	}
 }
 
+// TestOpen_CorruptedIndexEntryOffset verifies Open returns ErrCorrupted when an
+// index entry's offset points past the data block (e.g. into the index block itself).
+func TestOpen_CorruptedIndexEntryOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSSTable(t, dir, "bad_index_entry_offset.sst", []testEntry{
+		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
+	})
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	footerStart := len(data) - footerSize
+	indexOff := binary.LittleEndian.Uint64(data[footerStart+footerIndexOffsetOffset:])
+
+	// Corrupt the offset in the first index entry to point to math.MaxUint64
+	// The index block begins at indexOff. The offset field is indexKeyLenSize bytes after the start.
+	offsetPos := int(indexOff) + indexKeyLenSize
+	binary.LittleEndian.PutUint64(data[offsetPos:], math.MaxUint64)
+
+	if err := os.WriteFile(path, data, 0o666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err = Open(path)
+	if err == nil {
+		t.Fatal("expected error for corrupted index entry offset, got nil")
+	}
+	if !strings.Contains(err.Error(), "data corruption detected") {
+		t.Errorf("expected ErrCorrupted, got: %v", err)
+	}
+}
+
 // TestReader_GetHitSingle verifies a single entry round-trips through Write, Open, and Get.
 func TestReader_GetHitSingle(t *testing.T) {
 	dir := t.TempDir()

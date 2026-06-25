@@ -89,7 +89,7 @@ func Open(filePath string) (*Reader, error) {
 		}
 	}
 
-	index, err := parseIndex(indexData, entryCount)
+	index, err := parseIndex(indexData, entryCount, indexOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func Open(filePath string) (*Reader, error) {
 }
 
 // parseIndex decodes the raw index block bytes into a slice of indexEntry.
-func parseIndex(data []byte, expectedCount uint32) ([]indexEntry, error) {
+func parseIndex(data []byte, expectedCount uint32, indexOffset uint64) ([]indexEntry, error) {
 	// Each entry requires at least indexEntryHeaderSize bytes.
 	// If the declared count can't possibly fit in the index block, the
 	// footer is corrupt — fail fast instead of silently capping.
@@ -139,6 +139,10 @@ func parseIndex(data []byte, expectedCount uint32) ([]indexEntry, error) {
 
 		offset := binary.LittleEndian.Uint64(data[pos : pos+indexOffsetSize])
 		pos += indexOffsetSize
+
+		if offset > indexOffset || indexOffset-offset < uint64(entryHeaderSize) {
+			return nil, fmt.Errorf("%w: offset %d exceeds data block boundary", ErrCorrupted, offset)
+		}
 
 		if pos+int(keyLen) > len(data) {
 			return nil, fmt.Errorf("%w: truncated index key at offset %d (keyLen=%d)", ErrCorrupted, pos, keyLen)
