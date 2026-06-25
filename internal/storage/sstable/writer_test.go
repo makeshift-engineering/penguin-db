@@ -1546,9 +1546,19 @@ func TestWriter_ValueTooLarge(t *testing.T) {
 		t.Skip("skipping: value size overflows maximum slice length on this architecture")
 	}
 
-	// Safely construct a slice pointing to nil with length math.MaxUint32+1
+	// Safely construct a slice with length math.MaxUint32+1
 	// to avoid actual 4 GiB allocation and compile-time constant overflow errors.
-	oversizedValue := unsafe.Slice((*byte)(nil), int(size))
+
+	var oversizedValue []byte
+	type sliceHeader struct {
+		Data uintptr
+		Len  int
+		Cap  int
+	}
+	hdr := (*sliceHeader)(unsafe.Pointer(&oversizedValue))
+	hdr.Data = 1 // Dummy non-zero pointer to bypass the runtime nil check
+	hdr.Len = int(size)
+	hdr.Cap = int(size)
 
 	err = w.Add([]byte("k"), oversizedValue, OpcodePut)
 	if !errors.Is(err, ErrValueTooLarge) {
