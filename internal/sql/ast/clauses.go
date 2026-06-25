@@ -9,7 +9,7 @@ const (
 	TypeVarchar                       // VARCHAR(n)
 	TypeBoolean                       // BOOLEAN
 	TypeText                          // TEXT
-	TypeTimestamp                      // TIMESTAMP
+	TypeTimestamp                     // TIMESTAMP
 )
 
 // DataType represents a column's SQL data type. VarcharLen is non-nil
@@ -115,10 +115,10 @@ type JoinType int
 
 const (
 	JoinInner JoinType = iota // [INNER] JOIN
-	JoinLeft                   // LEFT [OUTER] JOIN
-	JoinRight                  // RIGHT [OUTER] JOIN
-	JoinFull                   // FULL [OUTER] JOIN
-	JoinCross                  // CROSS JOIN
+	JoinLeft                  // LEFT [OUTER] JOIN
+	JoinRight                 // RIGHT [OUTER] JOIN
+	JoinFull                  // FULL [OUTER] JOIN
+	JoinCross                 // CROSS JOIN
 )
 
 // JoinClause represents a single JOIN operation chained after a [TablePrimary].
