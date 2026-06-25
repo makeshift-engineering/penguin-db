@@ -109,6 +109,14 @@ func NewBloomFilterFromBytes(data []byte, numHashes uint8) *BloomFilter {
 	bits := make([]byte, len(data))
 	copy(bits, data)
 
+	// Clamp the number of hash functions to a reasonable range, identical to
+	// NewBloomFilter, to prevent excessive CPU usage from corrupted footers.
+	if numHashes < 1 {
+		numHashes = 1
+	} else if numHashes > 30 {
+		numHashes = 30
+	}
+
 	return &BloomFilter{
 		bits:          bits,
 		numHashes:     numHashes,

@@ -602,3 +602,30 @@ func TestBloomFilter_EmptyBitsSlice(t *testing.T) {
 		t.Errorf("MayContain with empty bits should return false")
 	}
 }
+
+// TestBloomFilter_NewFromBytes_ClampHashes verifies that reconstructing a
+// BloomFilter from bytes clamps the numHashes parameter to a safe range [1, 30].
+func TestBloomFilter_NewFromBytes_ClampHashes(t *testing.T) {
+	data := []byte{0x00, 0x01, 0x02} // Arbitrary data
+
+	tests := []struct {
+		name      string
+		numHashes uint8
+		expected  uint8
+	}{
+		{"Zero is clamped to 1", 0, 1},
+		{"Normal value is unchanged", 10, 10},
+		{"Max valid is unchanged", 30, 30},
+		{"Over max is clamped to 30", 31, 30},
+		{"Huge value is clamped to 30", 255, 30},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bf := NewBloomFilterFromBytes(data, tc.numHashes)
+			if bf.numHashes != tc.expected {
+				t.Errorf("expected numHashes %d, got %d", tc.expected, bf.numHashes)
+			}
+		})
+	}
+}
