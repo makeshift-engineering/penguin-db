@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 // testDir creates a temporary directory for SSTable test files and returns its
@@ -1529,13 +1530,7 @@ func TestWriter_KeyTooLarge(t *testing.T) {
 // TestWriter_ValueTooLarge verifies that Add returns ErrValueTooLarge when the
 // value exceeds math.MaxUint32 bytes (the maximum representable in the 4-byte
 // value length header field).
-//
-// This test is skipped by default because it allocates >4 GiB of memory.
 func TestWriter_ValueTooLarge(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping: allocates >4 GiB")
-	}
-
 	dir := testDir(t)
 	path := filepath.Join(dir, "value_too_large.sst")
 
@@ -1545,7 +1540,16 @@ func TestWriter_ValueTooLarge(t *testing.T) {
 	}
 	defer w.Close()
 
-	oversizedValue := make([]byte, math.MaxUint32+1)
+	limit := uint64(math.MaxUint32)
+	size := limit + 1
+	if size > uint64(^uint(0)>>1) {
+		t.Skip("skipping: value size overflows maximum slice length on this architecture")
+	}
+
+	// Safely construct a slice pointing to nil with length math.MaxUint32+1
+	// to avoid actual 4 GiB allocation and compile-time constant overflow errors.
+	oversizedValue := unsafe.Slice((*byte)(nil), int(size))
+
 	err = w.Add([]byte("k"), oversizedValue, OpcodePut)
 	if !errors.Is(err, ErrValueTooLarge) {
 		t.Errorf("expected ErrValueTooLarge, got: %v", err)
