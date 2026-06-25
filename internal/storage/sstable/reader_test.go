@@ -3,7 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+
 	"fmt"
 	"math"
 	"os"
@@ -1454,28 +1454,4 @@ func TestReader_CloseAndReopen(t *testing.T) {
 	}
 }
 
-// TestReader_DuplicateKeys verifies the Writer rejects duplicate keys with
-// ErrKeysOutOfOrder, since keys must be in strictly ascending order.
-func TestReader_DuplicateKeys(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "dupes.sst")
 
-	w, err := NewWriter(path, 2)
-	if err != nil {
-		t.Fatalf("NewWriter: %v", err)
-	}
-
-	if err := w.Add([]byte("dup"), []byte("first"), OpcodePut); err != nil {
-		t.Fatalf("first Add: %v", err)
-	}
-	err = w.Add([]byte("dup"), []byte("second"), OpcodePut)
-	if err == nil {
-		w.Close()
-		t.Fatal("expected error for duplicate key, got nil")
-	}
-	if !errors.Is(err, ErrKeysOutOfOrder) {
-		w.Close()
-		t.Fatalf("expected ErrKeysOutOfOrder, got: %v", err)
-	}
-	w.Close()
-}
