@@ -132,6 +132,13 @@ func (f *BloomFilter) hash(key []byte) (h1, h2 uint32) {
 
 	hasher.Write(h1Bytes)
 	h2 = hasher.Sum32()
+	
+	// If h2 is exactly 0, the combined hash function (h1 + i*h2) would just equal h1 
+	// for all iterations, effectively degrading the filter to use only a single hash 
+	// function. Setting h2 to 1 prevents this edge case.
+	if h2 == 0 {
+		h2 = 1
+	}
 
 	return h1, h2
 }
