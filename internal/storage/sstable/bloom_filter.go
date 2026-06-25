@@ -6,14 +6,14 @@ import (
 	"math"
 )
 
-// Filter holds the bit vector, number of hash functions, and total bit count.
+// BloomFilter holds the bit vector, number of hash functions, and total bit count.
 type BloomFilter struct {
 	bits          []byte
 	numHashes     uint8
 	totalBitCount int
 }
 
-// New creates a Bloom filter optimized for the given number of keys and bits per key.
+// NewBloomFilter creates a Bloom filter optimized for the given number of keys and bits per key.
 func NewBloomFilter(numKeys, bitsPerKey int) *BloomFilter {
 	if numKeys < 0 {
 		numKeys = 0
@@ -21,13 +21,19 @@ func NewBloomFilter(numKeys, bitsPerKey int) *BloomFilter {
 
 	totalBitCount := numKeys * bitsPerKey
 
-	// Ensure even an empty/small filter has a minimum size to avoid /0 or tiny vectors
+	// Ensure even an empty/small filter has a minimum size of 64 bits (8 bytes)
+	// to avoid division by zero or extremely poor false positive rates in tiny vectors.
 	if totalBitCount < 64 {
 		totalBitCount = 64
 	}
 
+	// Calculate the optimal number of hash functions (k) for the given bits per key.
+	// The formula k = (m/n) * ln(2) minimizes the false positive probability.
 	k := int(float64(bitsPerKey) * math.Ln2)
 
+	// Clamp the number of hash functions to a reasonable range.
+	// At least 1 hash function is required. A maximum of 30 prevents excessive 
+	// CPU usage during hashing while providing diminishing returns beyond that.
 	if k < 1 {
 		k = 1
 	} else if k > 30 {
