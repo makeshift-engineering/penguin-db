@@ -3,6 +3,7 @@ package sstable
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 
 	"fmt"
 	"math"
@@ -101,7 +102,7 @@ func TestOpen_InvalidMagic(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupted magic, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid magic number") {
+	if !errors.Is(err, ErrInvalidMagic) {
 		t.Errorf("expected ErrInvalidMagic, got: %v", err)
 	}
 }
@@ -119,7 +120,7 @@ func TestOpen_FileTooSmall(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for tiny file, got nil")
 	}
-	if !strings.Contains(err.Error(), "data corruption detected") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
@@ -147,7 +148,7 @@ func TestOpen_ExactlyFooterSizeFile(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	// Should fail on magic validation since all bytes are zero.
-	if !strings.Contains(err.Error(), "invalid magic number") {
+	if !errors.Is(err, ErrInvalidMagic) {
 		t.Errorf("expected magic validation error, got: %v", err)
 	}
 }
@@ -177,7 +178,7 @@ func TestOpen_CorruptedIndexOffset(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for bad index offset, got nil")
 	}
-	if !strings.Contains(err.Error(), "data corruption detected") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
@@ -243,7 +244,7 @@ func TestOpen_CorruptedEntryCount_OOM(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for impossibly large entry count, got nil")
 	}
-	if !strings.Contains(err.Error(), "data corruption detected") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
@@ -288,7 +289,7 @@ func TestReader_Get_CorruptedEntrySize(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupted entry size, got nil")
 	}
-	if !strings.Contains(err.Error(), "data corruption detected") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
@@ -322,7 +323,7 @@ func TestOpen_CorruptedIndexEntryOffset(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupted index entry offset, got nil")
 	}
-	if !strings.Contains(err.Error(), "data corruption detected") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
@@ -1017,7 +1018,7 @@ func TestReader_GetAfterClose(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after Close, got nil")
 	}
-	if !strings.Contains(err.Error(), "reader is closed") {
+	if !errors.Is(err, ErrReaderClosed) {
 		t.Errorf("expected ErrReaderClosed, got: %v", err)
 	}
 }
@@ -1390,7 +1391,7 @@ func TestReader_CorruptedEntryCount(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for mismatched entry count, got nil")
 	}
-	if !strings.Contains(err.Error(), "data corruption detected") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
@@ -1514,7 +1515,7 @@ func TestReader_Get_CorruptedIndexOffsetInMemory(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for offset >= indexOffset, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeds index offset") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected exceeds index offset error, got: %v", err)
 	}
 
@@ -1527,7 +1528,7 @@ func TestReader_Get_CorruptedIndexOffsetInMemory(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for offset > math.MaxInt64, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeds max int64") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected exceeds max int64 error, got: %v", err)
 	}
 
@@ -1581,7 +1582,7 @@ func TestReader_Get_CorruptedValLen_OOMPrevention(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupted valLen, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeds available data block space") && !strings.Contains(err.Error(), "entry sizes exceed data block boundary") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected bounds error, got: %v", err)
 	}
 }
@@ -1602,7 +1603,7 @@ func TestReader_Get_UnknownOpcode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown opcode, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown opcode") {
+	if !errors.Is(err, ErrCorrupted) {
 		t.Errorf("expected unknown opcode error, got: %v", err)
 	}
 }
