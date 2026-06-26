@@ -26,20 +26,40 @@ type ColumnDef struct {
 	ClauseBase
 	Name        string
 	Type        *DataType
-	Constraints *ColumnConstraints
+	Constraints []Clause
 }
 
-// ColumnConstraints holds the optional constraints for a column definition.
-// The grammar allows these in any order; duplicate and semantic validation
-// is deferred to analysis time.
-type ColumnConstraints struct {
+// PrimaryKeyConstraint represents a PRIMARY KEY constraint.
+type PrimaryKeyConstraint struct {
 	ClauseBase
-	PrimaryKey bool
-	Unique     bool
-	NotNull    bool
-	Null       bool
-	Default    *SignedLiteral
-	References *ForeignRef
+}
+
+// UniqueConstraint represents a UNIQUE constraint.
+type UniqueConstraint struct {
+	ClauseBase
+}
+
+// NotNullConstraint represents a NOT NULL constraint.
+type NotNullConstraint struct {
+	ClauseBase
+}
+
+// NullConstraint represents a NULL constraint.
+type NullConstraint struct {
+	ClauseBase
+}
+
+// DefaultConstraint represents a DEFAULT constraint with a signed literal.
+type DefaultConstraint struct {
+	ClauseBase
+	Value *SignedLiteral
+}
+
+// ReferencesConstraint represents a foreign key REFERENCE constraint.
+type ReferencesConstraint struct {
+	ClauseBase
+	Table  string
+	Column string
 }
 
 // SignedLiteral represents a literal value optionally preceded by a sign.
