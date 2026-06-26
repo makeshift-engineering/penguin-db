@@ -316,6 +316,31 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 	if iter3.Error() == nil || !errors.Is(iter3.Error(), io.ErrUnexpectedEOF) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter3.Error())
 	}
+
+	path4 := filepath.Join(dir, "err_opcode.dat")
+	var header4 [7]byte
+	binary.LittleEndian.PutUint16(header4[0:2], 0)
+	binary.LittleEndian.PutUint32(header4[2:6], 0)
+	header4[6] = 99
+	if err := os.WriteFile(path4, header4[:], 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f4, err := os.Open(path4)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f4.Close()
+	iter4 := &Iterator{
+		file:        f4,
+		reader:      bufio.NewReaderSize(f4, 100),
+		limitOffset: 7,
+	}
+	if iter4.Next() {
+		t.Error("expected Next to return false")
+	}
+	if iter4.Error() == nil || !errors.Is(iter4.Error(), ErrCorrupted) {
+		t.Errorf("expected ErrCorrupted, got %v", iter4.Error())
+	}
 }
 
 // TestIterator_HeaderEOF asserts that Next() sets an ErrUnexpectedEOF if the file stream

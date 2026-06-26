@@ -270,7 +270,7 @@ func TestCompactor_RunErrors(t *testing.T) {
 		t.Fatalf("failed to read file: %v", err)
 	}
 	binary.LittleEndian.PutUint32(corruptBytes[2:6], 999999)
-	if err := os.WriteFile(pathCorrupt, corruptBytes, 0666); err != nil {
+	if err := os.WriteFile(pathCorrupt, corruptBytes, 0o644); err != nil {
 		t.Fatalf("failed to write file: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestCompactor_RunErrors(t *testing.T) {
 		t.Fatalf("failed to read file: %v", err)
 	}
 	binary.LittleEndian.PutUint32(corruptBytes2[12:16], 999999)
-	if err := os.WriteFile(pathCorrupt2, corruptBytes2, 0666); err != nil {
+	if err := os.WriteFile(pathCorrupt2, corruptBytes2, 0o644); err != nil {
 		t.Fatalf("failed to write file: %v", err)
 	}
 
@@ -313,6 +313,10 @@ func TestCompactor_RunErrors(t *testing.T) {
 	}
 	if _, err := Run(task4); err == nil {
 		t.Error("expected error for corrupted input file during heap advance")
+	}
+	outPath := filepath.Join(dir, "000303.sst")
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Error("expected output file to be deleted on compaction failure")
 	}
 }
 
@@ -336,7 +340,7 @@ func TestCompactor_ValidateOutputDirectory(t *testing.T) {
 		OutputDirectory: filepath.Join(dir, "input1.sst"),
 		NextSegmentID:   100,
 	}
-	if err := os.WriteFile(task2.OutputDirectory, []byte{}, 0666); err != nil {
+	if err := os.WriteFile(task2.OutputDirectory, []byte{}, 0o644); err != nil {
 		t.Fatalf("failed to write file: %v", err)
 	}
 	if err := task2.Validate(); err == nil {

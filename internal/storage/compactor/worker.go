@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
@@ -46,7 +47,7 @@ func WithEstimatedKeys(keys int) Option {
 // It opens each input SSTable, merges and deduplicates their keys using a min-heap,
 // and writes the result to a new compacted SSTable file. In bottom-level compactions,
 // expired tombstone entries (Delete opcode) are elided.
-func Run(task *Task, opts ...Option) (*Result, error) {
+func Run(task *Task, opts ...Option) (res *Result, err error) {
 	if err := task.Validate(); err != nil {
 		return nil, err
 	}
@@ -109,6 +110,11 @@ func Run(task *Task, opts ...Option) (*Result, error) {
 	}
 	var writerClosed bool
 	defer func() {
+		if err != nil {
+			_ = writer.Close()
+			_ = os.Remove(outFilePath)
+			return
+		}
 		if !writerClosed {
 			_ = writer.Close()
 		}

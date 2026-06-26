@@ -121,6 +121,13 @@ func (iterator *Iterator) Next() bool {
 	valLen := binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset])
 	iterator.opcode = header[opcodeOffset]
 
+	switch iterator.opcode {
+	case OpcodePut, OpcodeDelete:
+	default:
+		iterator.err = fmt.Errorf("%w: invalid opcode %d at offset %d", ErrCorrupted, iterator.opcode, iterator.currOffset)
+		return false
+	}
+
 	if iterator.currOffset+uint64(entryHeaderSize)+uint64(keyLen)+uint64(valLen) > iterator.limitOffset {
 		iterator.err = fmt.Errorf("%w: entry sizes exceed data block boundary", ErrCorrupted)
 		return false
