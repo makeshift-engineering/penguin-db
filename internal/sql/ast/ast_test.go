@@ -1,6 +1,7 @@
 package ast_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -346,7 +347,7 @@ func TestSelectExpression_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.se.Validate()
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
@@ -391,7 +392,7 @@ func TestInsertStmt_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.stmt.Validate()
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})

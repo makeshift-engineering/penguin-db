@@ -1,6 +1,5 @@
 package ast
 
-
 // CreateDatabaseStmt represents: CREATE DATABASE [IF NOT EXISTS] Name.
 type CreateDatabaseStmt struct {
 	StmtBase
