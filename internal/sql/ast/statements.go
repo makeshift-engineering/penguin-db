@@ -1,5 +1,7 @@
 package ast
 
+import "errors"
+
 // CreateDatabaseStmt represents: CREATE DATABASE [IF NOT EXISTS] Name.
 type CreateDatabaseStmt struct {
 	StmtBase
@@ -66,6 +68,13 @@ type InsertStmt struct {
 	Columns []string
 	Rows    [][]*SelectExpression
 	Source  *SelectStmt
+}
+
+func (i *InsertStmt) Validate() error {
+	if (i.Rows == nil) == (i.Source == nil) {
+		return errors.New("InsertStmt must have exactly one of Rows or Source set")
+	}
+	return nil
 }
 
 // UpdateStmt represents: UPDATE Table SET assignments [WHERE cond].

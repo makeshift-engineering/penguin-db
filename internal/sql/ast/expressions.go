@@ -1,6 +1,10 @@
 package ast
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+import (
+	"errors"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+)
 
 // IntegerLiteral represents a whole-number literal (e.g. 42).
 type IntegerLiteral struct {
@@ -80,4 +84,11 @@ type SelectExpression struct {
 	NodeBase
 	Expr Expression
 	Cond Condition
+}
+
+func (s *SelectExpression) Validate() error {
+	if (s.Expr == nil) == (s.Cond == nil) {
+		return errors.New("SelectExpression must have exactly one of Expr or Cond set")
+	}
+	return nil
 }
