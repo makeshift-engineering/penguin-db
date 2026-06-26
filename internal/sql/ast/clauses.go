@@ -28,10 +28,9 @@ func (d *DataType) Validate() error {
 		if *d.VarcharLen <= 0 {
 			return ErrVarcharLengthInvalid
 		}
-	} else {
-		if d.VarcharLen != nil {
-			return ErrLengthNotSupported
-		}
+	} else if d.VarcharLen != nil {
+		return ErrLengthNotSupported
+
 	}
 	return nil
 }
