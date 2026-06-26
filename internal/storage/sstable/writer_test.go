@@ -1683,3 +1683,16 @@ func TestWriter_CloseReleasesFileOnSuccess(t *testing.T) {
 		t.Error("file.Sync() succeeded after successful Close; fd not released")
 	}
 }
+
+func TestWriter_InvalidExpectedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "invalid_keys.sst")
+
+	if _, err := NewWriter(path, -1); !errors.Is(err, ErrInvalidExpectedKeys) {
+		t.Errorf("expected ErrInvalidExpectedKeys, got %v", err)
+	}
+
+	if _, err := NewWriter(path, MaxWriterExpectedKeys+1); !errors.Is(err, ErrInvalidExpectedKeys) {
+		t.Errorf("expected ErrInvalidExpectedKeys, got %v", err)
+	}
+}

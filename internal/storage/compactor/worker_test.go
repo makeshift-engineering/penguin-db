@@ -303,3 +303,42 @@ func TestCompactor_RunErrors(t *testing.T) {
 	}
 }
 
+func TestCompactor_ValidateOutputDirectory(t *testing.T) {
+	dir := t.TempDir()
+	task1 := &Task{
+		InputFiles:      []string{"a.sst"},
+		FileIDs:         []int{1},
+		OutputDirectory: filepath.Join(dir, "nonexistent"),
+		NextSegmentID:   100,
+	}
+	if err := task1.Validate(); err == nil {
+		t.Error("expected error for non-existent output directory")
+	}
+
+	task2 := &Task{
+		InputFiles:      []string{"a.sst"},
+		FileIDs:         []int{1},
+		OutputDirectory: filepath.Join(dir, "input1.sst"),
+		NextSegmentID:   100,
+	}
+	if err := os.WriteFile(task2.OutputDirectory, []byte{}, 0666); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	if err := task2.Validate(); err == nil {
+		t.Error("expected error for directory path that is a file")
+	}
+}
+
+func TestCompactor_ValidateFileIDs(t *testing.T) {
+	dir := t.TempDir()
+	task := &Task{
+		InputFiles:      []string{"a.sst", "b.sst"},
+		FileIDs:         []int{1, 1},
+		OutputDirectory: dir,
+		NextSegmentID:   100,
+	}
+	if err := task.Validate(); err == nil {
+		t.Error("expected error for duplicate file IDs")
+	}
+}
+

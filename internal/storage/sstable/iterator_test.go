@@ -302,3 +302,27 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter3.Error())
 	}
 }
+
+func TestIterator_HeaderEOF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "eof_header.dat")
+	if err := os.WriteFile(path, []byte{}, 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	iter := &Iterator{
+		file:        f,
+		reader:      bufio.NewReader(f),
+		limitOffset: 7,
+	}
+	if iter.Next() {
+		t.Error("expected Next to return false")
+	}
+	if !errors.Is(iter.Error(), io.ErrUnexpectedEOF) {
+		t.Errorf("expected ErrUnexpectedEOF, got %v", iter.Error())
+	}
+}

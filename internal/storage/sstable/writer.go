@@ -30,10 +30,10 @@ type Writer struct {
 	lastKey     []byte       // last key added, used to enforce sorted order
 }
 
-// NewWriter creates a new Writer that will write an SSTable to filePath.
-// expectedKeys is used to size the Bloom Filter (10 bits per key).
+const MaxWriterExpectedKeys = 100000000
+
 func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
-	if expectedKeys < 0 {
+	if expectedKeys < 0 || expectedKeys > MaxWriterExpectedKeys {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidExpectedKeys, expectedKeys)
 	}
 

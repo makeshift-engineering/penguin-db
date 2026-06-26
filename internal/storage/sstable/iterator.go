@@ -99,6 +99,7 @@ func (iterator *Iterator) Next() bool {
 	var header [entryHeaderSize]byte
 	if _, err := io.ReadFull(iterator.reader, header[:]); err != nil {
 		if errors.Is(err, io.EOF) {
+			iterator.err = io.ErrUnexpectedEOF
 			return false
 		}
 		iterator.err = fmt.Errorf("failed to read entry header at offset %d: %w", iterator.currOffset, err)
