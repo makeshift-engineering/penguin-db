@@ -232,7 +232,7 @@ func TestIterator_FileOpenFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	
+
 	_ = r.file.Close()
 	_ = os.Remove(path)
 
