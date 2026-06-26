@@ -1,6 +1,18 @@
 package ast
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+import (
+	"errors"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+)
+
+var (
+	// ErrInvalidSelectExpression is returned when a SelectExpression does not have exactly one of Expr or Cond set.
+	ErrInvalidSelectExpression = errors.New("SelectExpression must have exactly one of Expr or Cond set")
+
+	// ErrInvalidInsertStmt is returned when an InsertStmt does not have exactly one of Rows or Source set.
+	ErrInvalidInsertStmt = errors.New("InsertStmt must have exactly one of Rows or Source set")
+)
 
 // Node is the root interface satisfied by every AST node. It provides source
 // location information through [diagnostic.Span].

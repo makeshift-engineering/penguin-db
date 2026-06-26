@@ -312,26 +312,26 @@ func TestSelectExpression_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
 		se      ast.SelectExpression
-		wantErr bool
+		wantErr error
 	}{
 		{
 			name: "valid expr only",
 			se: ast.SelectExpression{
 				Expr: &ast.IntegerLiteral{},
 			},
-			wantErr: false,
+			wantErr: nil,
 		},
 		{
 			name: "valid cond only",
 			se: ast.SelectExpression{
 				Cond: &ast.ExprCondition{},
 			},
-			wantErr: false,
+			wantErr: nil,
 		},
 		{
 			name:    "invalid both nil",
 			se:      ast.SelectExpression{},
-			wantErr: true,
+			wantErr: ast.ErrInvalidSelectExpression,
 		},
 		{
 			name: "invalid both non-nil",
@@ -339,14 +339,14 @@ func TestSelectExpression_Validate(t *testing.T) {
 				Expr: &ast.IntegerLiteral{},
 				Cond: &ast.ExprCondition{},
 			},
-			wantErr: true,
+			wantErr: ast.ErrInvalidSelectExpression,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.se.Validate()
-			if (err != nil) != tt.wantErr {
+			if err != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
@@ -357,26 +357,26 @@ func TestInsertStmt_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
 		stmt    ast.InsertStmt
-		wantErr bool
+		wantErr error
 	}{
 		{
 			name: "valid rows only",
 			stmt: ast.InsertStmt{
 				Rows: [][]*ast.SelectExpression{{{}}},
 			},
-			wantErr: false,
+			wantErr: nil,
 		},
 		{
 			name: "valid source only",
 			stmt: ast.InsertStmt{
 				Source: &ast.SelectStmt{},
 			},
-			wantErr: false,
+			wantErr: nil,
 		},
 		{
 			name:    "invalid both nil",
 			stmt:    ast.InsertStmt{},
-			wantErr: true,
+			wantErr: ast.ErrInvalidInsertStmt,
 		},
 		{
 			name: "invalid both non-nil",
@@ -384,14 +384,14 @@ func TestInsertStmt_Validate(t *testing.T) {
 				Rows:   [][]*ast.SelectExpression{{{}}},
 				Source: &ast.SelectStmt{},
 			},
-			wantErr: true,
+			wantErr: ast.ErrInvalidInsertStmt,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.stmt.Validate()
-			if (err != nil) != tt.wantErr {
+			if err != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})

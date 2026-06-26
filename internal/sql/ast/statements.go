@@ -1,6 +1,5 @@
 package ast
 
-import "errors"
 
 // CreateDatabaseStmt represents: CREATE DATABASE [IF NOT EXISTS] Name.
 type CreateDatabaseStmt struct {
@@ -72,7 +71,7 @@ type InsertStmt struct {
 
 func (i *InsertStmt) Validate() error {
 	if (i.Rows == nil) == (i.Source == nil) {
-		return errors.New("InsertStmt must have exactly one of Rows or Source set")
+		return ErrInvalidInsertStmt
 	}
 	return nil
 }
