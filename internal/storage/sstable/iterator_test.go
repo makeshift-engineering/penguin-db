@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+// TestIterator_OptionsCapping verifies that WithBufferSize and WithInitialCapacities
+// correctly restrict option parameters to predefined maximums and ignore invalid/negative options.
 func TestIterator_OptionsCapping(t *testing.T) {
 	opts := &IteratorOptions{
 		BufferSize:      DefaultIteratorBufferSize,
@@ -49,6 +51,8 @@ func TestIterator_OptionsCapping(t *testing.T) {
 	}
 }
 
+// TestIterator_NilGuards verifies that methods called on a nil Iterator receiver
+// return safe zero-values and do not trigger nil-pointer dereference panics.
 func TestIterator_NilGuards(t *testing.T) {
 	var iter *Iterator
 	if iter.Next() {
@@ -71,6 +75,9 @@ func TestIterator_NilGuards(t *testing.T) {
 	}
 }
 
+// TestIterator_LifecycleAndBounds performs a standard full-lifecycle iteration
+// over a mock SSTable file containing updates and deletes, verifying correct
+// extraction of keys, values, and opcodes.
 func TestIterator_LifecycleAndBounds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "iterator_test.sst")
@@ -134,6 +141,8 @@ func TestIterator_LifecycleAndBounds(t *testing.T) {
 	}
 }
 
+// TestIterator_CorruptedBoundary checks that the iterator detects corrupted entry lengths
+// that exceed the SSTable data block boundaries, returning a corruption error.
 func TestIterator_CorruptedBoundary(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "corrupt_boundary.sst")
@@ -178,6 +187,8 @@ func TestIterator_CorruptedBoundary(t *testing.T) {
 	}
 }
 
+// TestIterator_ClosedReader asserts that creating an iterator from an already-closed
+// SSTable Reader returns ErrReaderClosed.
 func TestIterator_ClosedReader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "closed_reader.sst")
@@ -202,6 +213,8 @@ func TestIterator_ClosedReader(t *testing.T) {
 	}
 }
 
+// TestIterator_FileOpenFailure verifies that NewIterator fails with an appropriate OS error
+// if the underlying SSTable file is removed or renamed before iterator initialization.
 func TestIterator_FileOpenFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "open_failure.sst")
@@ -228,6 +241,8 @@ func TestIterator_FileOpenFailure(t *testing.T) {
 	}
 }
 
+// TestIterator_NextErrorPaths constructs mock iterator structures and asserts that Next()
+// returns false and flags ErrUnexpectedEOF on truncated entry headers, keys, or values.
 func TestIterator_NextErrorPaths(t *testing.T) {
 	dir := t.TempDir()
 
@@ -303,6 +318,8 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 	}
 }
 
+// TestIterator_HeaderEOF asserts that Next() sets an ErrUnexpectedEOF if the file stream
+// is completely empty (0 bytes read) while the iterator is below limitOffset.
 func TestIterator_HeaderEOF(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "eof_header.dat")

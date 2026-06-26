@@ -10,6 +10,9 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 )
 
+// TestCompactor_MergeAndDeduplicate verifies that the compactor successfully merges
+// multiple sorted input SSTables, resolves duplicates by keeping newer key versions,
+// and correctly handles on-disk tombstone deletion records.
 func TestCompactor_MergeAndDeduplicate(t *testing.T) {
 	dir := t.TempDir()
 
@@ -95,6 +98,8 @@ func TestCompactor_MergeAndDeduplicate(t *testing.T) {
 	}
 }
 
+// TestCompactor_BottomLevelTombstoneElision verifies that deletion tombstones are elided
+// during bottom-level compaction (since there are no older files containing these keys).
 func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 	dir := t.TempDir()
 
@@ -139,6 +144,8 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 	}
 }
 
+// TestCompactor_ValidateErrors asserts that task validation correctly flags invalid task bounds
+// (such as empty input lists and length mismatches between InputFiles and FileIDs).
 func TestCompactor_ValidateErrors(t *testing.T) {
 	task1 := &Task{
 		InputFiles: []string{},
@@ -156,6 +163,8 @@ func TestCompactor_ValidateErrors(t *testing.T) {
 	}
 }
 
+// TestCompactor_Options verifies that functional options (WithReadBufferSize, WithEstimatedKeys)
+// correctly mutate values and safely ignore invalid/negative options.
 func TestCompactor_Options(t *testing.T) {
 	opts := &Options{
 		ReadBufferSize: DefaultReaderBufferSize,
@@ -180,6 +189,8 @@ func TestCompactor_Options(t *testing.T) {
 	}
 }
 
+// TestCompactor_OptionsRun verifies that passing WithReadBufferSize and WithEstimatedKeys
+// functionally configures compaction runs correctly without errors.
 func TestCompactor_OptionsRun(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "input1.sst")
@@ -209,6 +220,8 @@ func TestCompactor_OptionsRun(t *testing.T) {
 	}
 }
 
+// TestCompactor_RunErrors verifies that Run returns errors on input file failures,
+// writer creation failures, and data-corruption during heap merge/advance operations.
 func TestCompactor_RunErrors(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "input1.sst")
@@ -303,6 +316,8 @@ func TestCompactor_RunErrors(t *testing.T) {
 	}
 }
 
+// TestCompactor_ValidateOutputDirectory asserts that task validation fails if the output path
+// does not exist or points to a file rather than a directory.
 func TestCompactor_ValidateOutputDirectory(t *testing.T) {
 	dir := t.TempDir()
 	task1 := &Task{
@@ -329,6 +344,8 @@ func TestCompactor_ValidateOutputDirectory(t *testing.T) {
 	}
 }
 
+// TestCompactor_ValidateFileIDs verifies that task validation correctly returns an error
+// if duplicate FileIDs are supplied within the task definition.
 func TestCompactor_ValidateFileIDs(t *testing.T) {
 	dir := t.TempDir()
 	task := &Task{
@@ -341,4 +358,3 @@ func TestCompactor_ValidateFileIDs(t *testing.T) {
 		t.Error("expected error for duplicate file IDs")
 	}
 }
-

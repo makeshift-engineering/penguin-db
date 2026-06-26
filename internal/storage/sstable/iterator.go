@@ -9,6 +9,7 @@ import (
 	"os"
 )
 
+// Default and maximum constraint limits for iterator buffers and key/value allocations.
 const (
 	DefaultIteratorBufferSize = 64 * 1024
 	DefaultIteratorKeyCap     = 256
@@ -18,14 +19,17 @@ const (
 	MaxIteratorValueCap       = 32 * 1024 * 1024
 )
 
+// IteratorOptions holds configuration parameters for buffer size and initial key/value capacity sizing.
 type IteratorOptions struct {
 	BufferSize      int
 	InitialKeyCap   int
 	InitialValueCap int
 }
 
+// IteratorOption defines a functional option configuration function for IteratorOptions.
 type IteratorOption func(*IteratorOptions)
 
+// WithBufferSize configures a custom read buffer size for the underlying file reader.
 func WithBufferSize(size int) IteratorOption {
 	return func(option *IteratorOptions) {
 		if size > 0 && size <= MaxIteratorBufferSize {
@@ -34,6 +38,7 @@ func WithBufferSize(size int) IteratorOption {
 	}
 }
 
+// WithInitialCapacities sets custom pre-allocation capacities for key and value buffers to reduce allocations during iteration.
 func WithInitialCapacities(keyCap, valueCap int) IteratorOption {
 	return func(option *IteratorOptions) {
 		if keyCap > 0 && keyCap <= MaxIteratorKeyCap {
@@ -45,6 +50,7 @@ func WithInitialCapacities(keyCap, valueCap int) IteratorOption {
 	}
 }
 
+// Iterator reads sequential data entries from an immutable SSTable file.
 type Iterator struct {
 	file        *os.File
 	reader      *bufio.Reader
@@ -57,6 +63,8 @@ type Iterator struct {
 	closed      bool
 }
 
+// NewIterator creates a new Iterator starting from the beginning of the SSTable file.
+// It returns an error if the parent Reader is already closed or if the underlying file cannot be opened.
 func (reader *Reader) NewIterator(opts ...IteratorOption) (*Iterator, error) {
 	if reader.closed {
 		return nil, ErrReaderClosed
@@ -87,6 +95,9 @@ func (reader *Reader) NewIterator(opts ...IteratorOption) (*Iterator, error) {
 	}, nil
 }
 
+// Next advances the iterator to the next entry in the SSTable file.
+// It returns true if an entry was successfully read, and false if either the end of the data block
+// was reached or an I/O/corruption error occurred. Use Error() to distinguish between the two.
 func (iterator *Iterator) Next() bool {
 	if iterator == nil || iterator.closed || iterator.err != nil {
 		return false
@@ -143,6 +154,7 @@ func (iterator *Iterator) Next() bool {
 	return true
 }
 
+// Key returns the key of the current entry. The returned slice is valid until the next call to Next() or Close().
 func (iterator *Iterator) Key() []byte {
 	if iterator == nil {
 		return nil
@@ -150,6 +162,7 @@ func (iterator *Iterator) Key() []byte {
 	return iterator.key
 }
 
+// Value returns the value of the current entry. The returned slice is valid until the next call to Next() or Close().
 func (iterator *Iterator) Value() []byte {
 	if iterator == nil {
 		return nil
@@ -157,6 +170,7 @@ func (iterator *Iterator) Value() []byte {
 	return iterator.value
 }
 
+// Opcode returns the operation code (Put/Delete) of the current entry.
 func (iterator *Iterator) Opcode() uint8 {
 	if iterator == nil {
 		return 0
@@ -164,6 +178,7 @@ func (iterator *Iterator) Opcode() uint8 {
 	return iterator.opcode
 }
 
+// Error returns the first non-EOF error encountered by the iterator.
 func (iterator *Iterator) Error() error {
 	if iterator == nil {
 		return nil
@@ -171,6 +186,7 @@ func (iterator *Iterator) Error() error {
 	return iterator.err
 }
 
+// Close releases any system resources associated with the iterator.
 func (iterator *Iterator) Close() error {
 	if iterator == nil || iterator.closed || iterator.file == nil {
 		return nil

@@ -9,18 +9,22 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 )
 
+// Default reader buffer sizes and estimated key sizes for SSTable generation.
 const (
 	DefaultReaderBufferSize = 1024 * 1024
 	DefaultEstimatedKeys    = 100000
 )
 
+// Options holds runtime parameters for compaction buffer size and estimated key size.
 type Options struct {
 	ReadBufferSize int
 	EstimatedKeys  int
 }
 
+// Option configures custom parameter fields inside Options.
 type Option func(*Options)
 
+// WithReadBufferSize configures a custom read buffer size for input SSTable iterators.
 func WithReadBufferSize(size int) Option {
 	return func(option *Options) {
 		if size > 0 {
@@ -29,6 +33,7 @@ func WithReadBufferSize(size int) Option {
 	}
 }
 
+// WithEstimatedKeys specifies the estimated keys count to optimize bloom filters for the output SSTable.
 func WithEstimatedKeys(keys int) Option {
 	return func(option *Options) {
 		if keys > 0 {
@@ -37,6 +42,10 @@ func WithEstimatedKeys(keys int) Option {
 	}
 }
 
+// Run executes the multi-way merge compaction algorithm on the inputs defined by Task.
+// It opens each input SSTable, merges and deduplicates their keys using a min-heap,
+// and writes the result to a new compacted SSTable file. In bottom-level compactions,
+// expired tombstone entries (Delete opcode) are elided.
 func Run(task *Task, opts ...Option) (*Result, error) {
 	if err := task.Validate(); err != nil {
 		return nil, err
@@ -151,9 +160,11 @@ func Run(task *Task, opts ...Option) (*Result, error) {
 		BytesWritten:    bytesWritten,
 		KeysWritten:     keysWritten,
 	}, nil
-
 }
 
+// advanceAndPush advances the iterator of the given merge node.
+// If another entry is available, it updates the node and pushes it back into the heap.
+// If an error is encountered during iterator advancement, it is returned immediately.
 func advanceAndPush(h *MergeHeap, node *MergeNode) error {
 	if node.Iterator.Next() {
 		node.Key = node.Iterator.Key()

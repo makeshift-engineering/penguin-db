@@ -5,6 +5,8 @@ import (
 	"os"
 )
 
+// Task defines the input files, file metadata identifiers, output destination,
+// segment configuration, and level traits for a single compaction run.
 type Task struct {
 	InputFiles      []string
 	FileIDs         []int
@@ -13,6 +15,8 @@ type Task struct {
 	IsBottomLevel   bool
 }
 
+// Result describes the stats of a completed compaction run, including files created,
+// obsolete files to clean up, and performance metrics (bytes and keys written).
 type Result struct {
 	NewFilesCreated []string
 	ObsoleteFiles   []string
@@ -20,6 +24,9 @@ type Result struct {
 	KeysWritten     uint32
 }
 
+// Validate checks the task configuration parameters for structural invariants and constraints.
+// It verifies that there is at least one input file, slice lengths match, the output directory
+// is accessible, and that all FileIDs are unique.
 func (task *Task) Validate() error {
 	if len(task.InputFiles) == 0 {
 		return fmt.Errorf("compaction task requires at least one input file")
