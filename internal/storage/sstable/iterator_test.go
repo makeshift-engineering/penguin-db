@@ -1,9 +1,11 @@
 package sstable
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -173,5 +175,130 @@ func TestIterator_CorruptedBoundary(t *testing.T) {
 	}
 	if !errors.Is(iter.Error(), ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got %v", iter.Error())
+	}
+}
+
+func TestIterator_ClosedReader(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "closed_reader.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	_ = w.Add([]byte("a"), []byte("v"), OpcodePut)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = r.Close()
+
+	if _, err := r.NewIterator(); !errors.Is(err, ErrReaderClosed) {
+		t.Errorf("expected ErrReaderClosed, got %v", err)
+	}
+}
+
+func TestIterator_FileOpenFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "open_failure.sst")
+
+	w, err := NewWriter(path, 1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	_ = w.Add([]byte("a"), []byte("v"), OpcodePut)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	
+	_ = r.file.Close()
+	_ = os.Remove(path)
+
+	if _, err := r.NewIterator(); err == nil {
+		t.Error("expected error when opening missing file")
+	}
+}
+
+func TestIterator_NextErrorPaths(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "err_header.dat")
+	if err := os.WriteFile(path1, []byte{1, 2, 3}, 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f1, err := os.Open(path1)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f1.Close()
+	iter1 := &Iterator{
+		file:        f1,
+		reader:      bufio.NewReaderSize(f1, 100),
+		limitOffset: 7,
+	}
+	if iter1.Next() {
+		t.Error("expected Next to return false")
+	}
+	if iter1.Error() == nil || !errors.Is(iter1.Error(), io.ErrUnexpectedEOF) {
+		t.Errorf("expected ErrUnexpectedEOF, got %v", iter1.Error())
+	}
+
+	path2 := filepath.Join(dir, "err_key.dat")
+	var header2 [7]byte
+	binary.LittleEndian.PutUint16(header2[0:2], 10)
+	binary.LittleEndian.PutUint32(header2[2:6], 0)
+	header2[6] = OpcodePut
+	if err := os.WriteFile(path2, append(header2[:], []byte("abc")...), 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f2, err := os.Open(path2)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f2.Close()
+	iter2 := &Iterator{
+		file:        f2,
+		reader:      bufio.NewReaderSize(f2, 100),
+		limitOffset: 17,
+	}
+	if iter2.Next() {
+		t.Error("expected Next to return false")
+	}
+	if iter2.Error() == nil || !errors.Is(iter2.Error(), io.ErrUnexpectedEOF) {
+		t.Errorf("expected ErrUnexpectedEOF, got %v", iter2.Error())
+	}
+
+	path3 := filepath.Join(dir, "err_val.dat")
+	var header3 [7]byte
+	binary.LittleEndian.PutUint16(header3[0:2], 0)
+	binary.LittleEndian.PutUint32(header3[2:6], 10)
+	header3[6] = OpcodePut
+	if err := os.WriteFile(path3, append(header3[:], []byte("abc")...), 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f3, err := os.Open(path3)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f3.Close()
+	iter3 := &Iterator{
+		file:        f3,
+		reader:      bufio.NewReaderSize(f3, 100),
+		limitOffset: 17,
+	}
+	if iter3.Next() {
+		t.Error("expected Next to return false")
+	}
+	if iter3.Error() == nil || !errors.Is(iter3.Error(), io.ErrUnexpectedEOF) {
+		t.Errorf("expected ErrUnexpectedEOF, got %v", iter3.Error())
 	}
 }

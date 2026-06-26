@@ -2,6 +2,8 @@ package compactor
 
 import (
 	"bytes"
+	"encoding/binary"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -136,3 +138,168 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 		t.Error("expected tombstone key 'b' to be elided on bottom level compaction")
 	}
 }
+
+func TestCompactor_ValidateErrors(t *testing.T) {
+	task1 := &Task{
+		InputFiles: []string{},
+	}
+	if err := task1.Validate(); err == nil {
+		t.Error("expected error for empty input files")
+	}
+
+	task2 := &Task{
+		InputFiles: []string{"a.sst"},
+		FileIDs:    []int{},
+	}
+	if err := task2.Validate(); err == nil {
+		t.Error("expected error for mismatched input files and file IDs lengths")
+	}
+}
+
+func TestCompactor_Options(t *testing.T) {
+	opts := &Options{
+		ReadBufferSize: DefaultReaderBufferSize,
+		EstimatedKeys:  DefaultEstimatedKeys,
+	}
+	WithReadBufferSize(-1)(opts)
+	if opts.ReadBufferSize != DefaultReaderBufferSize {
+		t.Errorf("expected %d, got %d", DefaultReaderBufferSize, opts.ReadBufferSize)
+	}
+	WithReadBufferSize(4096)(opts)
+	if opts.ReadBufferSize != 4096 {
+		t.Errorf("expected 4096, got %d", opts.ReadBufferSize)
+	}
+
+	WithEstimatedKeys(-1)(opts)
+	if opts.EstimatedKeys != DefaultEstimatedKeys {
+		t.Errorf("expected %d, got %d", DefaultEstimatedKeys, opts.EstimatedKeys)
+	}
+	WithEstimatedKeys(500)(opts)
+	if opts.EstimatedKeys != 500 {
+		t.Errorf("expected 500, got %d", opts.EstimatedKeys)
+	}
+}
+
+func TestCompactor_OptionsRun(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "input1.sst")
+	w1, err := sstable.NewWriter(path1, 1)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = w1.Add([]byte("a"), []byte("v1"), sstable.OpcodePut)
+	if err := w1.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+
+	task := &Task{
+		InputFiles:      []string{path1},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   200,
+		IsBottomLevel:   false,
+	}
+
+	res, err := Run(task, WithReadBufferSize(2048), WithEstimatedKeys(100))
+	if err != nil {
+		t.Fatalf("compaction run failed: %v", err)
+	}
+	if len(res.NewFilesCreated) != 1 {
+		t.Fatalf("expected 1 output file")
+	}
+}
+
+func TestCompactor_RunErrors(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "input1.sst")
+	w1, err := sstable.NewWriter(path1, 1)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = w1.Add([]byte("a"), []byte("v1"), sstable.OpcodePut)
+	if err := w1.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+
+	task1 := &Task{
+		InputFiles:      []string{filepath.Join(dir, "missing.sst")},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   300,
+		IsBottomLevel:   false,
+	}
+	if _, err := Run(task1); err == nil {
+		t.Error("expected error for missing input file")
+	}
+
+	task2 := &Task{
+		InputFiles:      []string{path1},
+		FileIDs:         []int{1},
+		OutputDirectory: filepath.Join(dir, "nonexistent", "dir"),
+		NextSegmentID:   301,
+		IsBottomLevel:   false,
+	}
+	if _, err := Run(task2); err == nil {
+		t.Error("expected error for invalid output path/directory")
+	}
+
+	pathCorrupt := filepath.Join(dir, "corrupt.sst")
+	wCorrupt, err := sstable.NewWriter(pathCorrupt, 1)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = wCorrupt.Add([]byte("a"), []byte("v1"), sstable.OpcodePut)
+	if err := wCorrupt.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+	corruptBytes, err := os.ReadFile(pathCorrupt)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	binary.LittleEndian.PutUint32(corruptBytes[2:6], 999999)
+	if err := os.WriteFile(pathCorrupt, corruptBytes, 0666); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	task3 := &Task{
+		InputFiles:      []string{pathCorrupt},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   302,
+		IsBottomLevel:   false,
+	}
+	if _, err := Run(task3); err == nil {
+		t.Error("expected error for corrupted input file on iterator initialization")
+	}
+
+	pathCorrupt2 := filepath.Join(dir, "corrupt2.sst")
+	wCorrupt2, err := sstable.NewWriter(pathCorrupt2, 2)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = wCorrupt2.Add([]byte("a"), []byte("v1"), sstable.OpcodePut)
+	_ = wCorrupt2.Add([]byte("b"), []byte("v2"), sstable.OpcodePut)
+	if err := wCorrupt2.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+	corruptBytes2, err := os.ReadFile(pathCorrupt2)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	binary.LittleEndian.PutUint32(corruptBytes2[12:16], 999999)
+	if err := os.WriteFile(pathCorrupt2, corruptBytes2, 0666); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	task4 := &Task{
+		InputFiles:      []string{pathCorrupt2},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   303,
+		IsBottomLevel:   false,
+	}
+	if _, err := Run(task4); err == nil {
+		t.Error("expected error for corrupted input file during heap advance")
+	}
+}
+

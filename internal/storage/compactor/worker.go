@@ -98,6 +98,12 @@ func Run(task *Task, opts ...Option) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create compaction writer: %w", err)
 	}
+	var writerClosed bool
+	defer func() {
+		if !writerClosed {
+			_ = writer.Close()
+		}
+	}()
 
 	var lastKey []byte
 	var keysWritten uint32
@@ -137,6 +143,7 @@ func Run(task *Task, opts ...Option) (*Result, error) {
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("failed to finalize compacted sstable: %w", err)
 	}
+	writerClosed = true
 
 	return &Result{
 		NewFilesCreated: []string{outFilePath},
