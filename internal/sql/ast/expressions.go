@@ -40,6 +40,13 @@ type Identifier struct {
 	Qualifier string
 }
 
+func (i *Identifier) Validate() error {
+	if i.Name == "" {
+		return ErrEmptyIdentifierName
+	}
+	return nil
+}
+
 // BinaryExpr represents an infix arithmetic expression: Left Op Right.
 // Op is one of TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, or TOKEN_PERCENT.
 type BinaryExpr struct {
@@ -49,6 +56,21 @@ type BinaryExpr struct {
 	Right Expression
 }
 
+func (b *BinaryExpr) Validate() error {
+	if b.Left == nil || b.Right == nil {
+		return ErrNilExpression
+	}
+	switch b.Op {
+	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH, lexer.TOKEN_PERCENT:
+	default:
+		return ErrInvalidBinaryOperator
+	}
+	if err := b.Left.Validate(); err != nil {
+		return err
+	}
+	return b.Right.Validate()
+}
+
 // UnaryExpr represents a prefix unary expression: (+|-) Operand.
 type UnaryExpr struct {
 	ExprBase
@@ -56,10 +78,29 @@ type UnaryExpr struct {
 	Operand Expression
 }
 
+func (u *UnaryExpr) Validate() error {
+	if u.Operand == nil {
+		return ErrNilExpression
+	}
+	switch u.Op {
+	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS:
+	default:
+		return ErrInvalidUnaryOperator
+	}
+	return u.Operand.Validate()
+}
+
 // ParenExpr represents a parenthesized expression: ( Inner ).
 type ParenExpr struct {
 	ExprBase
 	Inner Expression
+}
+
+func (p *ParenExpr) Validate() error {
+	if p.Inner == nil {
+		return ErrNilExpression
+	}
+	return p.Inner.Validate()
 }
 
 // FunctionCall represents a SQL function invocation: Name( Args ).
@@ -71,6 +112,24 @@ type FunctionCall struct {
 	Distinct bool
 	Args     []*SelectExpression
 	Star     bool
+}
+
+func (f *FunctionCall) Validate() error {
+	if f.Name == "" {
+		return ErrEmptyFunctionName
+	}
+	if f.Star && len(f.Args) > 0 {
+		return ErrStarFunctionArgs
+	}
+	for _, arg := range f.Args {
+		if arg == nil {
+			return ErrNilExpression
+		}
+		if err := arg.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SelectExpression is a tagged union that can hold either an arithmetic
@@ -86,5 +145,8 @@ func (s *SelectExpression) Validate() error {
 	if (s.Expr == nil) == (s.Cond == nil) {
 		return ErrInvalidSelectExpression
 	}
-	return nil
+	if s.Expr != nil {
+		return s.Expr.Validate()
+	}
+	return s.Cond.Validate()
 }

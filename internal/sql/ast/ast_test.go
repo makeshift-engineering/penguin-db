@@ -309,89 +309,330 @@ func TestClause_TypeSwitchCoverage(t *testing.T) {
 	}
 }
 
-func TestSelectExpression_Validate(t *testing.T) {
+func TestValidation(t *testing.T) {
 	tests := []struct {
 		name    string
-		se      ast.SelectExpression
+		node    ast.Node
 		wantErr error
 	}{
+		// Program
 		{
-			name: "valid expr only",
-			se: ast.SelectExpression{
-				Expr: &ast.IntegerLiteral{},
+			name: "Program valid",
+			node: &ast.Program{
+				Statements: []ast.Statement{
+					&ast.UseDatabaseStmt{Name: "db"},
+				},
 			},
 			wantErr: nil,
 		},
 		{
-			name: "valid cond only",
-			se: ast.SelectExpression{
-				Cond: &ast.ExprCondition{},
+			name: "Program nil statement",
+			node: &ast.Program{
+				Statements: []ast.Statement{nil},
+			},
+			wantErr: ast.ErrNilStatement,
+		},
+
+		// Expressions
+		{
+			name:    "Identifier valid",
+			node:    &ast.Identifier{Name: "col"},
+			wantErr: nil,
+		},
+		{
+			name:    "Identifier empty name",
+			node:    &ast.Identifier{Name: ""},
+			wantErr: ast.ErrEmptyIdentifierName,
+		},
+		{
+			name: "BinaryExpr valid",
+			node: &ast.BinaryExpr{
+				Left:  &ast.IntegerLiteral{Value: "1"},
+				Op:    lexer.TOKEN_PLUS,
+				Right: &ast.IntegerLiteral{Value: "2"},
 			},
 			wantErr: nil,
 		},
 		{
-			name:    "invalid both nil",
-			se:      ast.SelectExpression{},
-			wantErr: ast.ErrInvalidSelectExpression,
+			name: "BinaryExpr nil left",
+			node: &ast.BinaryExpr{
+				Op:    lexer.TOKEN_PLUS,
+				Right: &ast.IntegerLiteral{Value: "2"},
+			},
+			wantErr: ast.ErrNilExpression,
 		},
 		{
-			name: "invalid both non-nil",
-			se: ast.SelectExpression{
-				Expr: &ast.IntegerLiteral{},
-				Cond: &ast.ExprCondition{},
+			name: "BinaryExpr invalid operator",
+			node: &ast.BinaryExpr{
+				Left:  &ast.IntegerLiteral{Value: "1"},
+				Op:    lexer.TOKEN_AND,
+				Right: &ast.IntegerLiteral{Value: "2"},
 			},
+			wantErr: ast.ErrInvalidBinaryOperator,
+		},
+		{
+			name: "BinaryExpr recursive error",
+			node: &ast.BinaryExpr{
+				Left:  &ast.Identifier{Name: ""},
+				Op:    lexer.TOKEN_PLUS,
+				Right: &ast.IntegerLiteral{Value: "2"},
+			},
+			wantErr: ast.ErrEmptyIdentifierName,
+		},
+		{
+			name: "UnaryExpr valid",
+			node: &ast.UnaryExpr{
+				Op:      lexer.TOKEN_MINUS,
+				Operand: &ast.IntegerLiteral{Value: "5"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "UnaryExpr nil operand",
+			node: &ast.UnaryExpr{
+				Op: lexer.TOKEN_MINUS,
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "UnaryExpr invalid operator",
+			node: &ast.UnaryExpr{
+				Op:      lexer.TOKEN_NOT,
+				Operand: &ast.IntegerLiteral{Value: "5"},
+			},
+			wantErr: ast.ErrInvalidUnaryOperator,
+		},
+		{
+			name: "ParenExpr valid",
+			node: &ast.ParenExpr{
+				Inner: &ast.IntegerLiteral{Value: "5"},
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "ParenExpr nil inner",
+			node:    &ast.ParenExpr{},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "FunctionCall valid star",
+			node: &ast.FunctionCall{
+				Name: "COUNT",
+				Star: true,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "FunctionCall invalid star with args",
+			node: &ast.FunctionCall{
+				Name: "COUNT",
+				Star: true,
+				Args: []*ast.SelectExpression{
+					{Expr: &ast.IntegerLiteral{Value: "1"}},
+				},
+			},
+			wantErr: ast.ErrStarFunctionArgs,
+		},
+		{
+			name: "FunctionCall empty name",
+			node: &ast.FunctionCall{
+				Name: "",
+			},
+			wantErr: ast.ErrEmptyFunctionName,
+		},
+
+		// SelectExpression
+		{
+			name: "SelectExpression valid expr",
+			node: &ast.SelectExpression{
+				Expr: &ast.IntegerLiteral{Value: "1"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "SelectExpression valid cond",
+			node: &ast.SelectExpression{
+				Cond: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "SelectExpression both nil",
+			node:    &ast.SelectExpression{},
 			wantErr: ast.ErrInvalidSelectExpression,
+		},
+
+		// Conditions
+		{
+			name: "BinaryCondition valid",
+			node: &ast.BinaryCondition{
+				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+				Op:    lexer.TOKEN_AND,
+				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "BinaryCondition invalid operator",
+			node: &ast.BinaryCondition{
+				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+				Op:    lexer.TOKEN_PLUS,
+				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
+			},
+			wantErr: ast.ErrInvalidConditionOperator,
+		},
+		{
+			name: "ComparisonPredicate valid",
+			node: &ast.ComparisonPredicate{
+				Left:  &ast.IntegerLiteral{Value: "1"},
+				Op:    lexer.TOKEN_EQ,
+				Right: &ast.IntegerLiteral{Value: "1"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "ComparisonPredicate invalid operator",
+			node: &ast.ComparisonPredicate{
+				Left:  &ast.IntegerLiteral{Value: "1"},
+				Op:    lexer.TOKEN_AND,
+				Right: &ast.IntegerLiteral{Value: "1"},
+			},
+			wantErr: ast.ErrInvalidComparisonOperator,
+		},
+
+		// Clauses
+		{
+			name: "DataType valid varchar",
+			node: func() ast.Node {
+				lenVal := 255
+				return &ast.DataType{
+					Kind:       ast.TypeVarchar,
+					VarcharLen: &lenVal,
+				}
+			}(),
+			wantErr: nil,
+		},
+		{
+			name: "DataType invalid varchar nil len",
+			node: &ast.DataType{
+				Kind: ast.TypeVarchar,
+			},
+			wantErr: ast.ErrVarcharLengthRequired,
+		},
+		{
+			name: "DataType invalid int with len",
+			node: func() ast.Node {
+				lenVal := 10
+				return &ast.DataType{
+					Kind:       ast.TypeInt,
+					VarcharLen: &lenVal,
+				}
+			}(),
+			wantErr: ast.ErrLengthNotSupported,
+		},
+		{
+			name: "JoinClause valid inner",
+			node: &ast.JoinClause{
+				Type:  ast.JoinInner,
+				Right: &ast.TablePrimary{Name: &ast.Identifier{Name: "t"}},
+				On:    &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "JoinClause inner missing ON",
+			node: &ast.JoinClause{
+				Type:  ast.JoinInner,
+				Right: &ast.TablePrimary{Name: &ast.Identifier{Name: "t"}},
+			},
+			wantErr: ast.ErrNonCrossJoinWithoutOn,
+		},
+		{
+			name: "JoinClause cross with ON",
+			node: &ast.JoinClause{
+				Type:  ast.JoinCross,
+				Right: &ast.TablePrimary{Name: &ast.Identifier{Name: "t"}},
+				On:    &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: ast.ErrCrossJoinWithOn,
+		},
+		{
+			name: "LimitClause negative count",
+			node: &ast.LimitClause{
+				Count: -1,
+			},
+			wantErr: ast.ErrNegativeLimitCount,
+		},
+
+		// Statements
+		{
+			name:    "CreateDatabaseStmt empty name",
+			node:    &ast.CreateDatabaseStmt{Name: ""},
+			wantErr: ast.ErrEmptyDatabaseName,
+		},
+		{
+			name: "CreateTableStmt empty columns",
+			node: &ast.CreateTableStmt{
+				Table: &ast.Identifier{Name: "t"},
+			},
+			wantErr: ast.ErrEmptyCreateTableColumns,
+		},
+		{
+			name: "CreateTableStmt nil table",
+			node: &ast.CreateTableStmt{
+				Columns: []*ast.ColumnDef{
+					{Name: "id", Type: &ast.DataType{Kind: ast.TypeInt}},
+				},
+			},
+			wantErr: ast.ErrNilIdentifier,
+		},
+		{
+			name: "SelectStmt valid",
+			node: &ast.SelectStmt{
+				Columns: []*ast.SelectColumn{
+					{Star: true},
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "SelectStmt both distinct and all",
+			node: &ast.SelectStmt{
+				Distinct: true,
+				All:      true,
+				Columns: []*ast.SelectColumn{
+					{Star: true},
+				},
+			},
+			wantErr: ast.ErrMutuallyExclusiveSelectModifiers,
+		},
+		{
+			name: "SelectStmt empty columns",
+			node: &ast.SelectStmt{
+				Columns: []*ast.SelectColumn{},
+			},
+			wantErr: ast.ErrEmptySelectColumns,
+		},
+		{
+			name: "InsertStmt valid",
+			node: &ast.InsertStmt{
+				Table: &ast.Identifier{Name: "t"},
+				Rows:  [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "InsertStmt both rows and source nil",
+			node: &ast.InsertStmt{
+				Table: &ast.Identifier{Name: "t"},
+			},
+			wantErr: ast.ErrInvalidInsertStmt,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.se.Validate()
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestInsertStmt_Validate(t *testing.T) {
-	tests := []struct {
-		name    string
-		stmt    ast.InsertStmt
-		wantErr error
-	}{
-		{
-			name: "valid rows only",
-			stmt: ast.InsertStmt{
-				Rows: [][]*ast.SelectExpression{{{}}},
-			},
-			wantErr: nil,
-		},
-		{
-			name: "valid source only",
-			stmt: ast.InsertStmt{
-				Source: &ast.SelectStmt{},
-			},
-			wantErr: nil,
-		},
-		{
-			name:    "invalid both nil",
-			stmt:    ast.InsertStmt{},
-			wantErr: ast.ErrInvalidInsertStmt,
-		},
-		{
-			name: "invalid both non-nil",
-			stmt: ast.InsertStmt{
-				Rows:   [][]*ast.SelectExpression{{{}}},
-				Source: &ast.SelectStmt{},
-			},
-			wantErr: ast.ErrInvalidInsertStmt,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.stmt.Validate()
+			err := tt.node.Validate()
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}

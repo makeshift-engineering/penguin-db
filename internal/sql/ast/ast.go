@@ -1,23 +1,14 @@
 package ast
 
 import (
-	"errors"
-
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-)
-
-var (
-	// ErrInvalidSelectExpression is returned when a SelectExpression does not have exactly one of Expr or Cond set.
-	ErrInvalidSelectExpression = errors.New("SelectExpression must have exactly one of Expr or Cond set")
-
-	// ErrInvalidInsertStmt is returned when an InsertStmt does not have exactly one of Rows or Source set.
-	ErrInvalidInsertStmt = errors.New("InsertStmt must have exactly one of Rows or Source set")
 )
 
 // Node is the root interface satisfied by every AST node. It provides source
 // location information through [diagnostic.Span].
 type Node interface {
 	Span() diagnostic.Span
+	Validate() error
 }
 
 // Statement is the sealed interface for top-level SQL statements
@@ -61,6 +52,10 @@ type NodeBase struct {
 // Span returns the source location range of this node.
 func (n *NodeBase) Span() diagnostic.Span { return n.NodeSpan }
 
+// Validate provides a default implementation of the Validate method that returns nil.
+// This is overridden by concrete AST nodes that require structural validation.
+func (n *NodeBase) Validate() error { return nil }
+
 // ExprBase is the embeddable base for concrete [Expression] types.
 type ExprBase struct{ NodeBase }
 
@@ -86,4 +81,16 @@ func (ClauseBase) clauseNode() {}
 type Program struct {
 	NodeBase
 	Statements []Statement
+}
+
+func (p *Program) Validate() error {
+	for _, stmt := range p.Statements {
+		if stmt == nil {
+			return ErrNilStatement
+		}
+		if err := stmt.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
