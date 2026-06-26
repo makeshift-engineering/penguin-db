@@ -49,9 +49,13 @@ var (
 var (
 	_ ast.Clause = (*ast.DataType)(nil)
 	_ ast.Clause = (*ast.ColumnDef)(nil)
-	_ ast.Clause = (*ast.ColumnConstraints)(nil)
 	_ ast.Clause = (*ast.SignedLiteral)(nil)
-	_ ast.Clause = (*ast.ForeignRef)(nil)
+	_ ast.Clause = (*ast.PrimaryKeyConstraint)(nil)
+	_ ast.Clause = (*ast.UniqueConstraint)(nil)
+	_ ast.Clause = (*ast.NotNullConstraint)(nil)
+	_ ast.Clause = (*ast.NullConstraint)(nil)
+	_ ast.Clause = (*ast.DefaultConstraint)(nil)
+	_ ast.Clause = (*ast.ReferencesConstraint)(nil)
 	_ ast.Clause = (*ast.AlterAction)(nil)
 	_ ast.Clause = (*ast.SelectColumn)(nil)
 	_ ast.Clause = (*ast.TableRef)(nil)
@@ -122,9 +126,13 @@ func TestSpan_ReturnsStoredSpan(t *testing.T) {
 
 		{"ColumnDef", &ast.ColumnDef{ClauseBase: clb(span)}},
 		{"DataType", &ast.DataType{ClauseBase: clb(span)}},
-		{"ColumnConstraints", &ast.ColumnConstraints{ClauseBase: clb(span)}},
 		{"SignedLiteral", &ast.SignedLiteral{ClauseBase: clb(span)}},
-		{"ForeignRef", &ast.ForeignRef{ClauseBase: clb(span)}},
+		{"PrimaryKeyConstraint", &ast.PrimaryKeyConstraint{ClauseBase: clb(span)}},
+		{"UniqueConstraint", &ast.UniqueConstraint{ClauseBase: clb(span)}},
+		{"NotNullConstraint", &ast.NotNullConstraint{ClauseBase: clb(span)}},
+		{"NullConstraint", &ast.NullConstraint{ClauseBase: clb(span)}},
+		{"DefaultConstraint", &ast.DefaultConstraint{ClauseBase: clb(span)}},
+		{"ReferencesConstraint", &ast.ReferencesConstraint{ClauseBase: clb(span)}},
 		{"AlterAction", &ast.AlterAction{ClauseBase: clb(span)}},
 		{"SelectColumn", &ast.SelectColumn{ClauseBase: clb(span)}},
 		{"TableRef", &ast.TableRef{ClauseBase: clb(span)}},
@@ -243,5 +251,149 @@ func TestExpression_TypeSwitchCoverage(t *testing.T) {
 		default:
 			t.Errorf("unhandled Expression type: %T", e)
 		}
+	}
+}
+
+func TestClause_TypeSwitchCoverage(t *testing.T) {
+	clauses := []ast.Clause{
+		&ast.DataType{},
+		&ast.ColumnDef{},
+		&ast.SignedLiteral{},
+		&ast.PrimaryKeyConstraint{},
+		&ast.UniqueConstraint{},
+		&ast.NotNullConstraint{},
+		&ast.NullConstraint{},
+		&ast.DefaultConstraint{},
+		&ast.ReferencesConstraint{},
+		&ast.AlterAction{},
+		&ast.SelectColumn{},
+		&ast.TableRef{},
+		&ast.TablePrimary{},
+		&ast.JoinClause{},
+		&ast.WhereClause{},
+		&ast.GroupByClause{},
+		&ast.HavingClause{},
+		&ast.OrderByClause{},
+		&ast.OrderByItem{},
+		&ast.LimitClause{},
+		&ast.SetItem{},
+	}
+
+	for _, c := range clauses {
+		switch c.(type) {
+		case *ast.DataType:
+		case *ast.ColumnDef:
+		case *ast.SignedLiteral:
+		case *ast.PrimaryKeyConstraint:
+		case *ast.UniqueConstraint:
+		case *ast.NotNullConstraint:
+		case *ast.NullConstraint:
+		case *ast.DefaultConstraint:
+		case *ast.ReferencesConstraint:
+		case *ast.AlterAction:
+		case *ast.SelectColumn:
+		case *ast.TableRef:
+		case *ast.TablePrimary:
+		case *ast.JoinClause:
+		case *ast.WhereClause:
+		case *ast.GroupByClause:
+		case *ast.HavingClause:
+		case *ast.OrderByClause:
+		case *ast.OrderByItem:
+		case *ast.LimitClause:
+		case *ast.SetItem:
+		default:
+			t.Errorf("unhandled Clause type: %T", c)
+		}
+	}
+}
+
+func TestSelectExpression_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		se      ast.SelectExpression
+		wantErr bool
+	}{
+		{
+			name: "valid expr only",
+			se: ast.SelectExpression{
+				Expr: &ast.IntegerLiteral{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid cond only",
+			se: ast.SelectExpression{
+				Cond: &ast.ExprCondition{},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid both nil",
+			se:      ast.SelectExpression{},
+			wantErr: true,
+		},
+		{
+			name: "invalid both non-nil",
+			se: ast.SelectExpression{
+				Expr: &ast.IntegerLiteral{},
+				Cond: &ast.ExprCondition{},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.se.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestInsertStmt_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		stmt    ast.InsertStmt
+		wantErr bool
+	}{
+		{
+			name: "valid rows only",
+			stmt: ast.InsertStmt{
+				Rows: [][]*ast.SelectExpression{{{}}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid source only",
+			stmt: ast.InsertStmt{
+				Source: &ast.SelectStmt{},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid both nil",
+			stmt:    ast.InsertStmt{},
+			wantErr: true,
+		},
+		{
+			name: "invalid both non-nil",
+			stmt: ast.InsertStmt{
+				Rows:   [][]*ast.SelectExpression{{{}}},
+				Source: &ast.SelectStmt{},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.stmt.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
