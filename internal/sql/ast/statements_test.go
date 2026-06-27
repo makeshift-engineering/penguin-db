@@ -121,6 +121,17 @@ func TestStatement_Validation(t *testing.T) {
 			},
 			wantErr: ast.ErrInvalidInsertStmt,
 		},
+		{
+			name: "InsertStmt both rows and source set",
+			node: &ast.InsertStmt{
+				Table: &ast.Identifier{Name: "t"},
+				Rows:  [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}},
+				Source: &ast.SelectStmt{
+					Columns: []*ast.SelectColumn{{Star: true}},
+				},
+			},
+			wantErr: ast.ErrInvalidInsertStmt,
+		},
 	}
 
 	for _, tt := range tests {
