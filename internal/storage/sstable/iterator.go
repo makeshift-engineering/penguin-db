@@ -32,7 +32,9 @@ type IteratorOption func(*IteratorOptions)
 // WithBufferSize configures a custom read buffer size for the underlying file reader.
 func WithBufferSize(size int) IteratorOption {
 	return func(option *IteratorOptions) {
-		if size > 0 && size <= MaxIteratorBufferSize {
+		if size > MaxIteratorBufferSize {
+			option.BufferSize = MaxIteratorBufferSize
+		} else if size > 0 {
 			option.BufferSize = size
 		}
 	}

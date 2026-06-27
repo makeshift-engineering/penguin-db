@@ -26,8 +26,8 @@ func TestIterator_OptionsCapping(t *testing.T) {
 	}
 
 	WithBufferSize(MaxIteratorBufferSize + 1)(opts)
-	if opts.BufferSize != DefaultIteratorBufferSize {
-		t.Errorf("expected buffer size %d, got %d", DefaultIteratorBufferSize, opts.BufferSize)
+	if opts.BufferSize != MaxIteratorBufferSize {
+		t.Errorf("expected buffer size %d, got %d", MaxIteratorBufferSize, opts.BufferSize)
 	}
 
 	WithBufferSize(8192)(opts)

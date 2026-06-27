@@ -125,10 +125,10 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 	var bytesWritten uint64
 
 	for minHeap.Len() > 0 {
-		node := heap.Pop(&minHeap).(*MergeNode)
+		node := minHeap[0]
 
 		if lastKey != nil && bytes.Equal(lastKey, node.Key) {
-			if err := advanceAndPush(&minHeap, node); err != nil {
+			if err := fixOrPop(&minHeap, node); err != nil {
 				return nil, err
 			}
 			continue
@@ -136,7 +136,7 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 
 		if task.IsBottomLevel && node.Opcode == sstable.OpcodeDelete {
 			lastKey = append(lastKey[:0], node.Key...)
-			if err := advanceAndPush(&minHeap, node); err != nil {
+			if err := fixOrPop(&minHeap, node); err != nil {
 				return nil, err
 			}
 			continue
@@ -150,7 +150,7 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 		bytesWritten += uint64(len(node.Key) + len(node.Value) + 7)
 		lastKey = append(lastKey[:0], node.Key...)
 
-		if err := advanceAndPush(&minHeap, node); err != nil {
+		if err := fixOrPop(&minHeap, node); err != nil {
 			return nil, err
 		}
 	}
@@ -168,17 +168,20 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 	}, nil
 }
 
-// advanceAndPush advances the iterator of the given merge node.
-// If another entry is available, it updates the node and pushes it back into the heap.
-// If an error is encountered during iterator advancement, it is returned immediately.
-func advanceAndPush(h *MergeHeap, node *MergeNode) error {
+// fixOrPop advances the iterator of the root node.
+// If another entry is available, it updates the node in-place and calls heap.Fix to re-order the heap.
+// If the iterator is exhausted, it removes the node from the heap using heap.Pop.
+func fixOrPop(h *MergeHeap, node *MergeNode) error {
 	if node.Iterator.Next() {
 		node.Key = node.Iterator.Key()
 		node.Value = node.Iterator.Value()
 		node.Opcode = node.Iterator.Opcode()
-		heap.Push(h, node)
-	} else if err := node.Iterator.Error(); err != nil {
-		return err
+		heap.Fix(h, 0)
+	} else {
+		if err := node.Iterator.Error(); err != nil {
+			return err
+		}
+		heap.Pop(h)
 	}
 	return nil
 }
