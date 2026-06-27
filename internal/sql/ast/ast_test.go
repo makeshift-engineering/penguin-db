@@ -96,7 +96,7 @@ func TestSpan_ReturnsStoredSpan(t *testing.T) {
 		{"IntegerLiteral", &ast.IntegerLiteral{ExprBase: eb(span), Value: "42"}},
 		{"FloatLiteral", &ast.FloatLiteral{ExprBase: eb(span), Value: "3.14"}},
 		{"StringLiteral", &ast.StringLiteral{ExprBase: eb(span), Value: "hello"}},
-		{"BooleanLiteral", &ast.BooleanLiteral{ExprBase: eb(span), Value: true}},
+		{"BooleanLiteral", &ast.BooleanLiteral{ExprBase: eb(span), Value: "TRUE"}},
 		{"NullLiteral", &ast.NullLiteral{ExprBase: eb(span)}},
 		{"Identifier", &ast.Identifier{ExprBase: eb(span), Name: "id"}},
 		{"BinaryExpr", &ast.BinaryExpr{ExprBase: eb(span), Op: lexer.TOKEN_PLUS}},

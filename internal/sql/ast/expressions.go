@@ -23,7 +23,7 @@ type StringLiteral struct {
 // BooleanLiteral represents a TRUE or FALSE keyword.
 type BooleanLiteral struct {
 	ExprBase
-	Value bool
+	Value string
 }
 
 // NullLiteral represents the NULL keyword.

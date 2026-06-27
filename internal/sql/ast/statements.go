@@ -188,7 +188,7 @@ func (i *InsertStmt) Validate() error {
 	if err := i.Table.Validate(); err != nil {
 		return err
 	}
-	if (i.Rows == nil) == (i.Source == nil) {
+	if (len(i.Rows) == 0) == (i.Source == nil) {
 		return ErrInvalidInsertStmt
 	}
 	if i.Source != nil {
