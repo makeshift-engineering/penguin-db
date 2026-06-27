@@ -12,9 +12,9 @@ import (
 var _ ast.Node = (*ast.Program)(nil)
 
 // helpers to build base structs with a span
-func eb(s diagnostic.Span) ast.ExprBase   { return ast.ExprBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
-func cb(s diagnostic.Span) ast.CondBase   { return ast.CondBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
-func sb(s diagnostic.Span) ast.StmtBase   { return ast.StmtBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+func eb(s diagnostic.Span) ast.ExprBase { return ast.ExprBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+func cb(s diagnostic.Span) ast.CondBase { return ast.CondBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+func sb(s diagnostic.Span) ast.StmtBase { return ast.StmtBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
 func clb(s diagnostic.Span) ast.ClauseBase {
 	return ast.ClauseBase{NodeBase: ast.NodeBase{NodeSpan: s}}
 }
