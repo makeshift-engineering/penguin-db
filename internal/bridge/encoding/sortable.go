@@ -12,16 +12,16 @@ import (
 // EncodeInt32 encodes an int32 into a 4-byte slice such that lexicographical byte comparison
 // corresponds to numerical comparison. This is achieved by XORing the sign bit with 1, which maps
 // the signed domain [-2^31, 2^31 - 1] to the unsigned domain [0, 2^32 - 1] before writing as big-endian.
-func EncodeInt32(v int32) []byte {
+func EncodeInt32(v int32) (b []byte) {
 	u := uint32(v) ^ 0x80000000
-	b := make([]byte, 4)
+	b = make([]byte, 4)
 	binary.BigEndian.PutUint32(b, u)
 	return b
 }
 
 // DecodeInt32 decodes a 4-byte slice produced by EncodeInt32 back into an int32.
 // It reads the big-endian uint32 and XORs the sign bit to restore the original signed value.
-func DecodeInt32(b []byte) int32 {
+func DecodeInt32(b []byte) (v int32) {
 	if len(b) < 4 {
 		return 0
 	}
@@ -31,16 +31,16 @@ func DecodeInt32(b []byte) int32 {
 
 // EncodeInt64 encodes an int64 into an 8-byte slice such that lexicographical byte comparison
 // matches numerical comparison. It XORs the most significant bit (sign bit) before big-endian encoding.
-func EncodeInt64(v int64) []byte {
+func EncodeInt64(v int64) (b []byte) {
 	u := uint64(v) ^ 0x8000000000000000
-	b := make([]byte, 8)
+	b = make([]byte, 8)
 	binary.BigEndian.PutUint64(b, u)
 	return b
 }
 
 // DecodeInt64 decodes an 8-byte slice produced by EncodeInt64 back into an int64.
 // It restores the original value by applying the reverse XOR operation on the most significant bit.
-func DecodeInt64(b []byte) int64 {
+func DecodeInt64(b []byte) (v int64) {
 	if len(b) < 8 {
 		return 0
 	}
@@ -53,7 +53,7 @@ func DecodeInt64(b []byte) int64 {
 // 1. If the number is negative (sign bit = 1), XOR all 64 bits to invert the value.
 // 2. If the number is positive (sign bit = 0), XOR only the sign bit.
 // NaN values are explicitly rejected and will return ErrNaNNotAllowed.
-func EncodeFloat64(v float64) ([]byte, error) {
+func EncodeFloat64(v float64) (b []byte, err error) {
 	if math.IsNaN(v) {
 		return nil, ErrNaNNotAllowed
 	}
@@ -63,7 +63,7 @@ func EncodeFloat64(v float64) ([]byte, error) {
 	} else {
 		u ^= 0x8000000000000000
 	}
-	b := make([]byte, 8)
+	b = make([]byte, 8)
 	binary.BigEndian.PutUint64(b, u)
 	return b, nil
 }
@@ -71,7 +71,7 @@ func EncodeFloat64(v float64) ([]byte, error) {
 // DecodeFloat64 decodes an 8-byte slice produced by EncodeFloat64 back into a float64.
 // It examines the sign bit of the encoded bytes to determine whether to invert all bits
 // (if original was negative) or just the sign bit (if original was positive) before interpreting as IEEE 754.
-func DecodeFloat64(b []byte) float64 {
+func DecodeFloat64(b []byte) (v float64) {
 	if len(b) < 8 {
 		return 0
 	}
@@ -87,7 +87,7 @@ func DecodeFloat64(b []byte) float64 {
 // EncodeString encodes a UTF-8 string into a byte slice, appending a single NUL (0x00) terminator byte.
 // The terminator makes variable-length strings self-delimiting within composite keys.
 // If the input string contains an interior NUL byte, this function returns ErrNulInString.
-func EncodeString(v string) ([]byte, error) {
+func EncodeString(v string) (out []byte, err error) {
 	b := []byte(v)
 	if bytes.IndexByte(b, 0x00) >= 0 {
 		return nil, ErrNulInString
@@ -97,7 +97,7 @@ func EncodeString(v string) ([]byte, error) {
 
 // DecodeString extracts a string from a NUL-terminated byte slice produced by EncodeString.
 // It scans for the first 0x00 byte, returning the string up to that point. The terminator is discarded.
-func DecodeString(b []byte) (string, error) {
+func DecodeString(b []byte) (str string, err error) {
 	idx := bytes.IndexByte(b, 0x00)
 	if idx < 0 {
 		return "", ErrKeyTooShort
@@ -107,7 +107,7 @@ func DecodeString(b []byte) (string, error) {
 
 // EncodeBool encodes a boolean into a single byte.
 // False is represented as 0x00 and True is represented as 0x01, ensuring False sorts before True.
-func EncodeBool(v bool) []byte {
+func EncodeBool(v bool) (b []byte) {
 	if v {
 		return []byte{0x01}
 	}
@@ -116,7 +116,7 @@ func EncodeBool(v bool) []byte {
 
 // DecodeBool decodes a boolean from a single byte.
 // Returns true if the byte is 0x01, otherwise false.
-func DecodeBool(b []byte) bool {
+func DecodeBool(b []byte) (v bool) {
 	if len(b) == 0 {
 		return false
 	}
@@ -125,13 +125,13 @@ func DecodeBool(b []byte) bool {
 
 // EncodeTimestamp encodes a time.Time into an 8-byte slice by converting it to Unix nanoseconds
 // and applying the same sort-preserving sign-flip technique used by EncodeInt64.
-func EncodeTimestamp(t time.Time) []byte {
+func EncodeTimestamp(t time.Time) (b []byte) {
 	return EncodeInt64(t.UnixNano())
 }
 
 // DecodeTimestamp decodes an 8-byte slice produced by EncodeTimestamp back into a time.Time.
 // The decoded int64 represents Unix nanoseconds, which is parsed as a UTC timestamp.
-func DecodeTimestamp(b []byte) time.Time {
+func DecodeTimestamp(b []byte) (t time.Time) {
 	nanos := DecodeInt64(b)
 	return time.Unix(0, nanos).UTC()
 }
@@ -139,11 +139,10 @@ func DecodeTimestamp(b []byte) time.Time {
 // EncodePK iteratively encodes a sequence of primitive values into a single composite byte slice
 // representing a Primary Key. It uses the provided AST data type kinds to dispatch to the correct
 // sort-preserving type encoder for each column value.
-func EncodePK(cols []ast.DataTypeKind, vals []any) ([]byte, error) {
+func EncodePK(cols []ast.DataTypeKind, vals []any) (out []byte, err error) {
 	if len(cols) != len(vals) {
 		return nil, ErrInvalidPK
 	}
-	var out []byte
 	for i, kind := range cols {
 		val := vals[i]
 		switch kind {
@@ -191,8 +190,7 @@ func EncodePK(cols []ast.DataTypeKind, vals []any) ([]byte, error) {
 // DecodePK reads a composite byte slice produced by EncodePK and reconstructs the sequence of column values.
 // It relies on fixed-width advances for integers/floats/booleans/timestamps and scans for NUL terminators
 // for variable-width types (VARCHAR/TEXT).
-func DecodePK(cols []ast.DataTypeKind, pk []byte) ([]any, error) {
-	var vals []any
+func DecodePK(cols []ast.DataTypeKind, pk []byte) (vals []any, err error) {
 	offset := 0
 	for _, kind := range cols {
 		if offset >= len(pk) {
