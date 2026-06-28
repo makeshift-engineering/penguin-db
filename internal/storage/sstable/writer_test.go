@@ -1683,3 +1683,49 @@ func TestWriter_CloseReleasesFileOnSuccess(t *testing.T) {
 		t.Error("file.Sync() succeeded after successful Close; fd not released")
 	}
 }
+
+// TestWriter_InvalidExpectedKeys verifies that NewWriter returns
+// ErrInvalidExpectedKeys when provided with invalid expectedKeys values.
+func TestWriter_InvalidExpectedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "invalid_keys.sst")
+
+	if _, err := NewWriter(path, -1); !errors.Is(err, ErrInvalidExpectedKeys) {
+		t.Errorf("expected ErrInvalidExpectedKeys, got %v", err)
+	}
+
+	if _, err := NewWriter(path, MaxWriterExpectedKeys+1); !errors.Is(err, ErrInvalidExpectedKeys) {
+		t.Errorf("expected ErrInvalidExpectedKeys, got %v", err)
+	}
+}
+
+// TestWriter_CurrentSize verifies that the CurrentSize method correctly and
+// accurately predicts the final on-disk file size of the completed SSTable.
+func TestWriter_CurrentSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "est_size.sst")
+
+	w, err := NewWriter(path, 3)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	_ = w.Add([]byte("k1"), []byte("v1"), OpcodePut)
+	_ = w.Add([]byte("k2"), []byte("v2"), OpcodePut)
+
+	est := w.CurrentSize()
+	if est == 0 {
+		t.Error("estimated size should not be zero")
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if fi.Size() != int64(est) {
+		t.Errorf("expected final size %d, got estimated %d", fi.Size(), est)
+	}
+}
