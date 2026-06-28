@@ -84,38 +84,65 @@ func NewIterator(filePath string, opts ...IteratorOption) (*Iterator, error) {
 		return nil, fmt.Errorf("failed to open file for iteration: %w", err)
 	}
 
+	success := false
+	defer func() {
+		if !success {
+			file.Close()
+		}
+	}()
+
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
 		return nil, err
 	}
 	fileSize := info.Size()
 
 	if fileSize < int64(footerSize) {
-		file.Close()
 		return nil, fmt.Errorf("%w: file too small for footer (%d bytes)", ErrCorrupted, fileSize)
 	}
 
 	var footer [footerSize]byte
 	if _, err := file.ReadAt(footer[:], fileSize-int64(footerSize)); err != nil {
-		file.Close()
 		return nil, fmt.Errorf("reading footer: %w", err)
 	}
 
 	magic := binary.LittleEndian.Uint32(footer[footerMagicOffset : footerMagicOffset+footerMagicSize])
 	if magic != magicNumber {
-		file.Close()
 		return nil, fmt.Errorf("%w: got 0x%08X, want 0x%08X", ErrInvalidMagic, magic, magicNumber)
 	}
 
 	indexOffset := binary.LittleEndian.Uint64(footer[footerIndexOffsetOffset:footerBloomOffsetOffset])
 	bloomOffset := binary.LittleEndian.Uint64(footer[footerBloomOffsetOffset:footerBloomNumHashesOffset])
+	entryCount := binary.LittleEndian.Uint32(footer[footerEntryCountOffset:footerMagicOffset])
 
 	footerStart := uint64(fileSize) - uint64(footerSize)
 	if indexOffset > footerStart || bloomOffset > footerStart || bloomOffset < indexOffset {
-		file.Close()
 		return nil, fmt.Errorf("%w: invalid footer offsets in iterator initialization", ErrCorrupted)
 	}
+
+	if uint64(entryCount)*uint64(indexEntryHeaderSize) > bloomOffset-indexOffset {
+		return nil, fmt.Errorf("%w: index block too small for %d entries", ErrCorrupted, entryCount)
+	}
+
+	if entryCount == 0 {
+		if indexOffset != 0 {
+			return nil, fmt.Errorf("%w: indexOffset must be 0 for empty SSTable", ErrCorrupted)
+		}
+	} else {
+		// Detect downward-corrupted indexOffsets before trusting them as limitOffset.
+		// A corrupted offset pointing to an earlier entry boundary in the data block
+		// would be parsed here as an index entry, resulting in a non-zero data offset.
+		var idxHeader [indexEntryHeaderSize]byte
+		if _, err := file.ReadAt(idxHeader[:], int64(indexOffset)); err != nil {
+			return nil, fmt.Errorf("reading first index entry: %w", err)
+		}
+		firstDataOffset := binary.LittleEndian.Uint64(idxHeader[indexOffsetOffset:indexKeyDataOffset])
+		if firstDataOffset != 0 {
+			return nil, fmt.Errorf("%w: structurally inconsistent index/data boundary", ErrCorrupted)
+		}
+	}
+
+	success = true
 
 	return &Iterator{
 		file:        file,

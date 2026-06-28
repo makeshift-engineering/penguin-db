@@ -346,3 +346,50 @@ func TestIterator_NewIteratorErrors(t *testing.T) {
 		t.Errorf("expected ErrCorrupted, got %v", err)
 	}
 }
+
+// TestIterator_DownwardCorruptedIndexOffset verifies that NewIterator detects when an
+// indexOffset has been downward-corrupted to point to an earlier data entry boundary,
+// preventing silent truncation of the iteration.
+func TestIterator_DownwardCorruptedIndexOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "corrupt_downward.sst")
+
+	w, err := NewWriter(path, 2)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	_ = w.Add([]byte("a"), []byte("value-a"), OpcodePut)
+	// We will corrupt indexOffset to point to the boundary of the second entry.
+	// We need to know the size of the first entry:
+	// entryHeaderSize (7) + len("a") (1) + len("value-a") (7) = 15
+	firstEntrySize := uint64(entryHeaderSize + 1 + 7)
+
+	_ = w.Add([]byte("b"), []byte("value-b"), OpcodePut)
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// The footer is at the end of the file.
+	// indexOffset is at the beginning of the footer.
+	footerOffset := len(data) - footerSize
+	
+	// Write the corrupted indexOffset (15 instead of the correct index block start).
+	binary.LittleEndian.PutUint64(data[footerOffset+footerIndexOffsetOffset:footerOffset+footerBloomOffsetOffset], firstEntrySize)
+
+	if err := os.WriteFile(path, data, 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err = NewIterator(path)
+	if err == nil {
+		t.Fatal("expected error for downward-corrupted indexOffset, got nil")
+	}
+	if !errors.Is(err, ErrCorrupted) {
+		t.Errorf("expected ErrCorrupted, got %v", err)
+	}
+}

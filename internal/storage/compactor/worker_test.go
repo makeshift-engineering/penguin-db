@@ -488,8 +488,12 @@ func TestCompactor_NoEmptyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create writer: %v", err)
 	}
-	_ = w1.Add([]byte("a"), nil, sstable.OpcodeDelete)
-	_ = w1.Add([]byte("b"), nil, sstable.OpcodeDelete)
+	if err := w1.Add([]byte("a"), nil, sstable.OpcodeDelete); err != nil {
+		t.Fatalf("failed to add tombstone a: %v", err)
+	}
+	if err := w1.Add([]byte("b"), nil, sstable.OpcodeDelete); err != nil {
+		t.Fatalf("failed to add tombstone b: %v", err)
+	}
 	if err := w1.Close(); err != nil {
 		t.Fatalf("failed to finalize writer: %v", err)
 	}
