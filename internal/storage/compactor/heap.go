@@ -46,10 +46,12 @@ func (heap *MergeHeap) Push(x any) {
 
 // Pop removes and returns the minimum element from the heap slice.
 func (heap *MergeHeap) Pop() any {
-	old := *heap
-	n := len(old)
-	item := old[n-1]
-	old[n-1] = nil
-	*heap = old[0 : n-1]
+	h := *heap
+	lastIdx := len(h) - 1
+
+	item := h[lastIdx]
+	h[lastIdx] = nil
+	*heap = h[:lastIdx]
+
 	return item
 }
