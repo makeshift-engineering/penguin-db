@@ -88,121 +88,25 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 		}
 	}()
 
-	var currentWriter *sstable.Writer
-	var currentFilePath string
-	var nextSegmentID = task.NextSegmentID
-	var newFilesCreated []string
-	var writerClosed bool
-
-	// rollWriter closes the currently active writer (if any), records the finalized
-	// file path, and initializes a new sstable.Writer for the next segment.
-	rollWriter := func() error {
-		if currentWriter != nil {
-			if err := currentWriter.Close(); err != nil {
-				return err
-			}
-			newFilesCreated = append(newFilesCreated, currentFilePath)
-			currentWriter = nil
-			currentFilePath = ""
-		}
-
-		outFileName := fmt.Sprintf("%06d.sst", nextSegmentID)
-		currentFilePath = filepath.Join(task.OutputDirectory, outFileName)
-		nextSegmentID++
-
-		w, err := sstable.NewWriter(currentFilePath, config.EstimatedKeys)
-		if err != nil {
-			return err
-		}
-		currentWriter = w
-		return nil
-	}
-
-	// Defer cleanup to close any active writer and delete all created files
-	// on failure (preventing partial compaction files from leaking).
-	defer func() {
-		if err != nil {
-			if currentWriter != nil {
-				_ = currentWriter.Close()
-			}
-			if currentFilePath != "" {
-				_ = os.Remove(currentFilePath)
-			}
-			for _, f := range newFilesCreated {
-				_ = os.Remove(f)
-			}
-			return
-		}
-		if !writerClosed && currentWriter != nil {
-			_ = currentWriter.Close()
-		}
-	}()
-
-	if err := rollWriter(); err != nil {
+	newFilesCreated, keysWritten, err := performMerge(task, minHeap, config)
+	if err != nil {
 		return nil, err
 	}
 
-	var lastKey []byte
-	var keysWritten uint32
-	var bytesWritten uint64
-
-	// Multi-way merge loop. We retrieve the smallest key from the min-heap,
-	// write it to the current segment, and advance the corresponding iterator.
-	for minHeap.Len() > 0 {
-		node := (*minHeap)[0]
-
-		// Skip duplicate keys (retaining the version from the newest input file,
-		// which was pushed last and thus resides on top).
-		if lastKey != nil && bytes.Equal(lastKey, node.Key) {
-			if err := fixOrPop(minHeap, node); err != nil {
-				return nil, err
-			}
-			continue
+	// Calculate the actual total bytes written on disk across all segments.
+	var totalBytesWritten uint64
+	for _, path := range newFilesCreated {
+		fi, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat compacted file %s: %w", path, err)
 		}
-
-		// Elide tombstones if this is a bottom-level compaction.
-		if task.IsBottomLevel && node.Opcode == sstable.OpcodeDelete {
-			lastKey = append(lastKey[:0], node.Key...)
-			if err := fixOrPop(minHeap, node); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		// Write entry to current SSTable writer.
-		if err := currentWriter.Add(node.Key, node.Value, node.Opcode); err != nil {
-			return nil, fmt.Errorf("failed to write to output sstable: %w", err)
-		}
-
-		keysWritten++
-		bytesWritten += uint64(len(node.Key) + len(node.Value) + 7)
-		lastKey = append(lastKey[:0], node.Key...)
-
-		// Check if the current writer has exceeded the target size threshold.
-		if currentWriter.EstimatedSize() >= config.MaxSSTableSize {
-			if err := rollWriter(); err != nil {
-				return nil, fmt.Errorf("failed to roll compaction writer: %w", err)
-			}
-		}
-
-		if err := fixOrPop(minHeap, node); err != nil {
-			return nil, err
-		}
+		totalBytesWritten += uint64(fi.Size())
 	}
-
-	// Finalize the last active SSTable.
-	if currentWriter != nil {
-		if err := currentWriter.Close(); err != nil {
-			return nil, fmt.Errorf("failed to finalize compacted sstable: %w", err)
-		}
-		newFilesCreated = append(newFilesCreated, currentFilePath)
-	}
-	writerClosed = true
 
 	return &Result{
 		NewFilesCreated: newFilesCreated,
 		ObsoleteFiles:   task.InputFiles,
-		BytesWritten:    bytesWritten,
+		BytesWritten:    totalBytesWritten,
 		KeysWritten:     keysWritten,
 	}, nil
 }
@@ -225,16 +129,10 @@ func initializeInputs(task *Task, config *Options) (iterators []*sstable.Iterato
 	}()
 
 	for i, filePath := range task.InputFiles {
-		reader, err := sstable.Open(filePath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to open sstable %s: %w", filePath, err)
-		}
-
-		iter, err := reader.NewIterator(
+		iter, err := sstable.NewIterator(
+			filePath,
 			sstable.WithBufferSize(config.ReadBufferSize),
 		)
-		reader.Close()
-
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create iterator for %s: %w", filePath, err)
 		}
@@ -256,6 +154,149 @@ func initializeInputs(task *Task, config *Options) (iterators []*sstable.Iterato
 
 	success = true
 	return iters, &minHeap, nil
+}
+
+// createOutputWriter prepares a new output SSTable file and initializes
+// a writer to store the compacted data, using the estimated keys from the configuration.
+func createOutputWriter(task *Task, config *Options, segmentID int) (outFilePath string, writer *sstable.Writer, err error) {
+	outFileName := fmt.Sprintf("%06d.sst", segmentID)
+	outFilePath = filepath.Join(task.OutputDirectory, outFileName)
+
+	writer, err = sstable.NewWriter(outFilePath, config.EstimatedKeys)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create compaction writer: %w", err)
+	}
+
+	return outFilePath, writer, nil
+}
+
+// performMerge executes the multi-way merge logic. It continually pops the minimum
+// entry from the heap, deduplicates identical keys, elides tombstone entries if
+// applicable, and adds the resulting entries to the output SSTable writer.
+// It rolls over and creates multiple SSTable files when size limits are exceeded.
+// compactionState manages the writer rollover and file creation state during a compaction run.
+type compactionState struct {
+	task            *Task
+	config          *Options
+	currentWriter   *sstable.Writer
+	currentFilePath string
+	nextSegmentID   int
+	newFilesCreated []string
+}
+
+// openWriter creates a new SSTable segment writer.
+func (s *compactionState) openWriter() error {
+	path, w, err := createOutputWriter(s.task, s.config, s.nextSegmentID)
+	if err != nil {
+		return err
+	}
+	s.currentFilePath = path
+	s.currentWriter = w
+	s.nextSegmentID++
+	return nil
+}
+
+// finalizeWriter closes and finalizes the active SSTable writer.
+func (s *compactionState) finalizeWriter() error {
+	if s.currentWriter == nil {
+		return nil
+	}
+	if err := s.currentWriter.Close(); err != nil {
+		return err
+	}
+	s.newFilesCreated = append(s.newFilesCreated, s.currentFilePath)
+	s.currentWriter = nil
+	s.currentFilePath = ""
+	return nil
+}
+
+// performMerge executes the multi-way merge logic. It continually pops the minimum
+// entry from the heap, deduplicates identical keys, elides tombstone entries if
+// applicable, and adds the resulting entries to the output SSTable writer.
+// It rolls over and creates multiple SSTable files when size limits are exceeded.
+func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []string, keysWritten uint32, err error) {
+	state := &compactionState{
+		task:          task,
+		config:        config,
+		nextSegmentID: task.NextSegmentID,
+	}
+
+	var writerClosed bool
+	defer func() {
+		if err != nil {
+			if state.currentWriter != nil {
+				_ = state.currentWriter.Close()
+			}
+			if state.currentFilePath != "" {
+				_ = os.Remove(state.currentFilePath)
+			}
+			for _, f := range state.newFilesCreated {
+				_ = os.Remove(f)
+			}
+			return
+		}
+		if !writerClosed && state.currentWriter != nil {
+			_ = state.currentWriter.Close()
+		}
+	}()
+
+	var lastKey []byte
+
+	for minHeap.Len() > 0 {
+		node := (*minHeap)[0]
+
+		// Skip duplicate keys (retaining the version from the newest input file,
+		// which was pushed last and thus resides on top).
+		if lastKey != nil && bytes.Equal(lastKey, node.Key) {
+			if err := fixOrPop(minHeap, node); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+
+		// Elide tombstones if this is a bottom-level compaction.
+		if task.IsBottomLevel && node.Opcode == sstable.OpcodeDelete {
+			lastKey = append(lastKey[:0], node.Key...)
+			if err := fixOrPop(minHeap, node); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+
+		// Lazily open the output writer if it is not already initialized.
+		if state.currentWriter == nil {
+			if err := state.openWriter(); err != nil {
+				return nil, 0, fmt.Errorf("failed to create compaction writer: %w", err)
+			}
+		}
+
+		// Write entry to current SSTable writer.
+		if err := state.currentWriter.Add(node.Key, node.Value, node.Opcode); err != nil {
+			return nil, 0, fmt.Errorf("failed to write to output sstable: %w", err)
+		}
+
+		keysWritten++
+		lastKey = append(lastKey[:0], node.Key...)
+
+		// Check if the current writer has exceeded the target size threshold.
+		if state.currentWriter.EstimatedSize() >= config.MaxSSTableSize {
+			if err := state.finalizeWriter(); err != nil {
+				return nil, 0, fmt.Errorf("failed to roll compaction writer: %w", err)
+			}
+		}
+
+		if err := fixOrPop(minHeap, node); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	// Finalize the last active SSTable.
+	if err := state.finalizeWriter(); err != nil {
+		return nil, 0, fmt.Errorf("failed to finalize compacted sstable: %w", err)
+	}
+	writerClosed = true
+
+	return state.newFilesCreated, keysWritten, nil
 }
 
 // fixOrPop advances the iterator of the root merge node in the heap.

@@ -185,8 +185,8 @@ func (w *Writer) Close() (closeErr error) {
 	return w.file.Sync()
 }
 
-// Size returns the total bytes written to the data block so far.
-func (w *Writer) Size() uint64 {
+// DataSize returns the total bytes written to the data block so far.
+func (w *Writer) DataSize() uint64 {
 	return w.offset
 }
 

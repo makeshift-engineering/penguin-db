@@ -66,12 +66,9 @@ type Iterator struct {
 }
 
 // NewIterator creates a new Iterator starting from the beginning of the SSTable file.
-// It returns an error if the parent Reader is already closed or if the underlying file cannot be opened.
-func (reader *Reader) NewIterator(opts ...IteratorOption) (*Iterator, error) {
-	if reader.closed {
-		return nil, ErrReaderClosed
-	}
-
+// It parses the footer metadata of the SSTable to establish the data boundaries
+// and returns an error if the underlying file cannot be opened or is corrupted.
+func NewIterator(filePath string, opts ...IteratorOption) (*Iterator, error) {
 	config := &IteratorOptions{
 		BufferSize:      DefaultIteratorBufferSize,
 		InitialKeyCap:   DefaultIteratorKeyCap,
@@ -82,15 +79,48 @@ func (reader *Reader) NewIterator(opts ...IteratorOption) (*Iterator, error) {
 		opt(config)
 	}
 
-	file, err := os.Open(reader.FilePath())
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file for iteration: %w", err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	fileSize := info.Size()
+
+	if fileSize < int64(footerSize) {
+		file.Close()
+		return nil, fmt.Errorf("%w: file too small for footer (%d bytes)", ErrCorrupted, fileSize)
+	}
+
+	var footer [footerSize]byte
+	if _, err := file.ReadAt(footer[:], fileSize-int64(footerSize)); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("reading footer: %w", err)
+	}
+
+	magic := binary.LittleEndian.Uint32(footer[footerMagicOffset : footerMagicOffset+footerMagicSize])
+	if magic != magicNumber {
+		file.Close()
+		return nil, fmt.Errorf("%w: got 0x%08X, want 0x%08X", ErrInvalidMagic, magic, magicNumber)
+	}
+
+	indexOffset := binary.LittleEndian.Uint64(footer[footerIndexOffsetOffset:footerBloomOffsetOffset])
+	bloomOffset := binary.LittleEndian.Uint64(footer[footerBloomOffsetOffset:footerBloomNumHashesOffset])
+
+	footerStart := uint64(fileSize) - uint64(footerSize)
+	if indexOffset > footerStart || bloomOffset > footerStart || bloomOffset < indexOffset {
+		file.Close()
+		return nil, fmt.Errorf("%w: invalid footer offsets in iterator initialization", ErrCorrupted)
 	}
 
 	return &Iterator{
 		file:        file,
 		reader:      bufio.NewReaderSize(file, config.BufferSize),
-		limitOffset: reader.indexOffset,
+		limitOffset: indexOffset,
 		currOffset:  0,
 		key:         make([]byte, 0, config.InitialKeyCap),
 		value:       make([]byte, 0, config.InitialValueCap),

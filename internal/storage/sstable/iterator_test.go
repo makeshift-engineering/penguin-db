@@ -93,13 +93,7 @@ func TestIterator_LifecycleAndBounds(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	r, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer r.Close()
-
-	iter, err := r.NewIterator()
+	iter, err := NewIterator(path)
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}
@@ -167,13 +161,7 @@ func TestIterator_CorruptedBoundary(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	r, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer r.Close()
-
-	iter, err := r.NewIterator()
+	iter, err := NewIterator(path)
 	if err != nil {
 		t.Fatalf("NewIterator: %v", err)
 	}
@@ -187,56 +175,10 @@ func TestIterator_CorruptedBoundary(t *testing.T) {
 	}
 }
 
-// TestIterator_ClosedReader asserts that creating an iterator from an already-closed
-// SSTable Reader returns ErrReaderClosed.
-func TestIterator_ClosedReader(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "closed_reader.sst")
-
-	w, err := NewWriter(path, 1)
-	if err != nil {
-		t.Fatalf("NewWriter: %v", err)
-	}
-	_ = w.Add([]byte("a"), []byte("v"), OpcodePut)
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	r, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	_ = r.Close()
-
-	if _, err := r.NewIterator(); !errors.Is(err, ErrReaderClosed) {
-		t.Errorf("expected ErrReaderClosed, got %v", err)
-	}
-}
-
 // TestIterator_FileOpenFailure verifies that NewIterator fails with an appropriate OS error
 // if the underlying SSTable file is removed or renamed before iterator initialization.
 func TestIterator_FileOpenFailure(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "open_failure.sst")
-
-	w, err := NewWriter(path, 1)
-	if err != nil {
-		t.Fatalf("NewWriter: %v", err)
-	}
-	_ = w.Add([]byte("a"), []byte("v"), OpcodePut)
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	r, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-
-	_ = r.file.Close()
-	_ = os.Remove(path)
-
-	if _, err := r.NewIterator(); err == nil {
+	if _, err := NewIterator("nonexistent.sst"); err == nil {
 		t.Error("expected error when opening missing file")
 	}
 }
@@ -366,5 +308,41 @@ func TestIterator_HeaderEOF(t *testing.T) {
 	}
 	if !errors.Is(iter.Error(), io.ErrUnexpectedEOF) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter.Error())
+	}
+}
+
+// TestIterator_NewIteratorErrors verifies that NewIterator returns appropriate errors
+// when opening corrupted files or files with invalid sizes and footers.
+func TestIterator_NewIteratorErrors(t *testing.T) {
+	dir := t.TempDir()
+
+	pathSmall := filepath.Join(dir, "small.sst")
+	if err := os.WriteFile(pathSmall, []byte{1, 2, 3}, 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := NewIterator(pathSmall); err == nil {
+		t.Error("expected error for file too small for footer")
+	}
+
+	pathBadMagic := filepath.Join(dir, "bad_magic.sst")
+	badMagicBytes := make([]byte, footerSize)
+	binary.LittleEndian.PutUint32(badMagicBytes[footerMagicOffset:footerMagicOffset+footerMagicSize], 0x12345678)
+	if err := os.WriteFile(pathBadMagic, badMagicBytes, 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := NewIterator(pathBadMagic); !errors.Is(err, ErrInvalidMagic) {
+		t.Errorf("expected ErrInvalidMagic, got %v", err)
+	}
+
+	pathBadOffsets := filepath.Join(dir, "bad_offsets.sst")
+	badOffsetsBytes := make([]byte, footerSize)
+	binary.LittleEndian.PutUint32(badOffsetsBytes[footerMagicOffset:footerMagicOffset+footerMagicSize], magicNumber)
+	binary.LittleEndian.PutUint64(badOffsetsBytes[footerIndexOffsetOffset:footerBloomOffsetOffset], 100)
+	binary.LittleEndian.PutUint64(badOffsetsBytes[footerBloomOffsetOffset:footerBloomNumHashesOffset], 50)
+	if err := os.WriteFile(pathBadOffsets, badOffsetsBytes, 0666); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := NewIterator(pathBadOffsets); !errors.Is(err, ErrCorrupted) {
+		t.Errorf("expected ErrCorrupted, got %v", err)
 	}
 }

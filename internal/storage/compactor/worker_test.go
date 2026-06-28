@@ -477,3 +477,47 @@ func TestCompactor_SplitErrorsCleanup(t *testing.T) {
 		}
 	}
 }
+
+// TestCompactor_NoEmptyFiles verifies that bottom-level compaction does not create any
+// output SSTable files if all keys are tombstones and thus elided.
+func TestCompactor_NoEmptyFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "input1.sst")
+	w1, err := sstable.NewWriter(path1, 2)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = w1.Add([]byte("a"), nil, sstable.OpcodeDelete)
+	_ = w1.Add([]byte("b"), nil, sstable.OpcodeDelete)
+	if err := w1.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+
+	task := &Task{
+		InputFiles:      []string{path1},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   100,
+		IsBottomLevel:   true,
+	}
+
+	res, err := Run(task)
+	if err != nil {
+		t.Fatalf("compaction run failed: %v", err)
+	}
+
+	if len(res.NewFilesCreated) != 0 {
+		t.Fatalf("expected 0 output files, got %d: %v", len(res.NewFilesCreated), res.NewFilesCreated)
+	}
+
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read output directory: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), "00010") {
+			t.Errorf("found empty/unused output file: %s", f.Name())
+		}
+	}
+}
