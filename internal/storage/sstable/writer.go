@@ -30,10 +30,16 @@ type Writer struct {
 	lastKey     []byte       // last key added, used to enforce sorted order
 }
 
-// NewWriter creates a new Writer that will write an SSTable to filePath.
-// expectedKeys is used to size the Bloom Filter (10 bits per key).
+// MaxWriterExpectedKeys is the upper bound limit for the estimated keys parameter
+// passed to a new SSTable writer. This prevents unbounded memory allocation for
+// the in-memory bloom filter and index structures.
+const MaxWriterExpectedKeys = 100000000
+
+// NewWriter creates a new SSTable Writer for the specified file path.
+// It initializes a bloom filter and an index based on expectedKeys to minimize
+// memory reallocations. expectedKeys must be between 0 and MaxWriterExpectedKeys.
 func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
-	if expectedKeys < 0 {
+	if expectedKeys < 0 || expectedKeys > MaxWriterExpectedKeys {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidExpectedKeys, expectedKeys)
 	}
 
@@ -177,4 +183,29 @@ func (w *Writer) Close() (closeErr error) {
 	}
 
 	return w.file.Sync()
+}
+
+// DataSize returns the total bytes written to the data block so far.
+func (w *Writer) DataSize() uint64 {
+	return w.offset
+}
+
+// EntryCount returns the number of entries written so far.
+func (w *Writer) EntryCount() uint32 {
+	return w.entryCount
+}
+
+// CurrentSize returns the current on-disk size of the SSTable file if it were
+// closed and finalized immediately. It computes this by summing the sizes of the
+// data block, index block, bloom filter block, and footer.
+func (w *Writer) CurrentSize() uint64 {
+	if w == nil {
+		return 0
+	}
+	indexSize := uint64(len(w.index) * indexEntryHeaderSize)
+	for _, entry := range w.index {
+		indexSize += uint64(len(entry.key))
+	}
+	bloomSize := uint64(len(w.bloomFilter.Bytes()))
+	return w.offset + indexSize + bloomSize + uint64(footerSize)
 }
