@@ -10,7 +10,7 @@ const (
 	NamespaceSystem byte = 0x00
 
 	// NamespaceUser is the prefix byte used for all user table row keys.
-	NamespaceUser   byte = 0x01
+	NamespaceUser byte = 0x01
 )
 
 // EncodeRowKey generates a fully qualified KV store key for a given row.
@@ -19,7 +19,7 @@ const (
 // This structure guarantees that keys from different tables or databases never overlap.
 func EncodeRowKey(db, table string, pk []byte) []byte {
 	prefix := EncodeScanPrefix(db, table)
-	var key []byte
+	key := make([]byte, 0, len(prefix)+len(pk))
 	key = append(key, prefix...)
 	key = append(key, pk...)
 	return key
@@ -29,10 +29,12 @@ func EncodeRowKey(db, table string, pk []byte) []byte {
 // The returned byte slice corresponds to: [NamespaceUser] + [DB Length] + [DB Bytes] + [0x00] +
 // [Table Length] + [Table Bytes] + [0x00]. It can be used directly for a prefix scan over a table.
 func EncodeScanPrefix(db, table string) []byte {
-	var buf []byte
+	dbBytes := []byte(db)
+	tableBytes := []byte(table)
+
+	buf := make([]byte, 0, 7+len(dbBytes)+len(tableBytes))
 	buf = append(buf, NamespaceUser)
 
-	dbBytes := []byte(db)
 	var lengthBuf [2]byte
 	binary.BigEndian.PutUint16(lengthBuf[:], uint16(len(dbBytes)))
 	buf = append(buf, lengthBuf[:]...)
@@ -96,7 +98,7 @@ func DecodeParts(key []byte) (db, table string, pk []byte, err error) {
 // EncodeCatalogDBKey generates a system KV key for database-level metadata.
 // Format: [NamespaceSystem (0x00)] + "db\x00" + [DB Length (2 bytes BE)] + [DB Bytes].
 func EncodeCatalogDBKey(db string) []byte {
-	var buf []byte
+	buf := make([]byte, 0, 1+3+2+len(db))
 	buf = append(buf, NamespaceSystem)
 	buf = append(buf, []byte("db\x00")...)
 	var lengthBuf [2]byte
@@ -109,7 +111,7 @@ func EncodeCatalogDBKey(db string) []byte {
 // EncodeCatalogTableKey generates a system KV key for table schema metadata.
 // Format: [NamespaceSystem (0x00)] + "tbl\x00" + [DB Length] + [DB Bytes] + [0x00] + [Table Length] + [Table Bytes].
 func EncodeCatalogTableKey(db, table string) []byte {
-	var buf []byte
+	buf := make([]byte, 0, 1+4+2+len(db)+1+2+len(table))
 	buf = append(buf, NamespaceSystem)
 	buf = append(buf, []byte("tbl\x00")...)
 	var lengthBuf [2]byte
@@ -126,7 +128,7 @@ func EncodeCatalogTableKey(db, table string) []byte {
 // EncodeCatalogSeqKey generates a system KV key for auto-increment sequence counters.
 // Format: [NamespaceSystem (0x00)] + "seq\x00" + [DB Length] + [DB Bytes] + [0x00] + [Table Length] + [Table Bytes].
 func EncodeCatalogSeqKey(db, table string) []byte {
-	var buf []byte
+	buf := make([]byte, 0, 1+4+2+len(db)+1+2+len(table))
 	buf = append(buf, NamespaceSystem)
 	buf = append(buf, []byte("seq\x00")...)
 	var lengthBuf [2]byte

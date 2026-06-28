@@ -59,9 +59,9 @@ func EncodeFloat64(v float64) ([]byte, error) {
 	}
 	u := math.Float64bits(v)
 	if (u & 0x8000000000000000) != 0 {
-		u = u ^ 0xFFFFFFFFFFFFFFFF
+		u ^= 0xFFFFFFFFFFFFFFFF
 	} else {
-		u = u ^ 0x8000000000000000
+		u ^= 0x8000000000000000
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, u)
@@ -77,9 +77,9 @@ func DecodeFloat64(b []byte) float64 {
 	}
 	u := binary.BigEndian.Uint64(b)
 	if (u & 0x8000000000000000) != 0 {
-		u = u ^ 0x8000000000000000
+		u ^= 0x8000000000000000
 	} else {
-		u = u ^ 0xFFFFFFFFFFFFFFFF
+		u ^= 0xFFFFFFFFFFFFFFFF
 	}
 	return math.Float64frombits(u)
 }
@@ -216,7 +216,7 @@ func DecodePK(cols []ast.DataTypeKind, pk []byte) ([]any, error) {
 				return nil, ErrKeyTooShort
 			}
 			vals = append(vals, DecodeBool(pk[offset:offset+1]))
-			offset += 1
+			offset++
 		case ast.TypeTimestamp:
 			if offset+8 > len(pk) {
 				return nil, ErrKeyTooShort
