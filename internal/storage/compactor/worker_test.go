@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
@@ -360,5 +361,119 @@ func TestCompactor_ValidateFileIDs(t *testing.T) {
 	}
 	if err := task.Validate(); err == nil {
 		t.Error("expected error for duplicate file IDs")
+	}
+}
+
+// TestCompactor_SplitSSTables verifies that the compactor successfully splits
+// output keys into multiple SSTable files when they cross the MaxSSTableSize threshold.
+func TestCompactor_SplitSSTables(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "input1.sst")
+	w1, err := sstable.NewWriter(path1, 3)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = w1.Add([]byte("a"), []byte("v1"), sstable.OpcodePut)
+	_ = w1.Add([]byte("b"), []byte("v2"), sstable.OpcodePut)
+	_ = w1.Add([]byte("c"), []byte("v3"), sstable.OpcodePut)
+	if err := w1.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+
+	task := &Task{
+		InputFiles:      []string{path1},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   100,
+		IsBottomLevel:   false,
+	}
+
+	res, err := Run(task, WithMaxSSTableSize(60), WithEstimatedKeys(3))
+	if err != nil {
+		t.Fatalf("compaction run failed: %v", err)
+	}
+
+	if len(res.NewFilesCreated) != 2 {
+		t.Fatalf("expected 2 output files, got %d: %v", len(res.NewFilesCreated), res.NewFilesCreated)
+	}
+
+	r0, err := sstable.Open(res.NewFilesCreated[0])
+	if err != nil {
+		t.Fatalf("failed to open file 0: %v", err)
+	}
+	defer r0.Close()
+	if r0.EntryCount() != 2 {
+		t.Errorf("file 0: expected 2 entries, got %d", r0.EntryCount())
+	}
+	val, found, deleted, _ := r0.Get([]byte("a"))
+	if !found || deleted || !bytes.Equal(val, []byte("v1")) {
+		t.Error("file 0 does not contain key a")
+	}
+	val, found, deleted, _ = r0.Get([]byte("b"))
+	if !found || deleted || !bytes.Equal(val, []byte("v2")) {
+		t.Error("file 0 does not contain key b")
+	}
+
+	r1, err := sstable.Open(res.NewFilesCreated[1])
+	if err != nil {
+		t.Fatalf("failed to open file 1: %v", err)
+	}
+	defer r1.Close()
+	if r1.EntryCount() != 1 {
+		t.Errorf("file 1: expected 1 entry, got %d", r1.EntryCount())
+	}
+	val, found, deleted, _ = r1.Get([]byte("c"))
+	if !found || deleted || !bytes.Equal(val, []byte("v3")) {
+		t.Error("file 1 does not contain key c")
+	}
+}
+
+// TestCompactor_SplitErrorsCleanup verifies that if a multi-file compaction run
+// encounters an error halfway, all successfully finalized and active SSTables
+// created during the run are properly cleaned up from disk.
+func TestCompactor_SplitErrorsCleanup(t *testing.T) {
+	dir := t.TempDir()
+
+	pathCorrupt := filepath.Join(dir, "corrupt.sst")
+	wCorrupt, err := sstable.NewWriter(pathCorrupt, 2)
+	if err != nil {
+		t.Fatalf("failed to create writer: %v", err)
+	}
+	_ = wCorrupt.Add([]byte("a"), []byte("v1"), sstable.OpcodePut)
+	_ = wCorrupt.Add([]byte("b"), []byte("v2"), sstable.OpcodePut)
+	if err := wCorrupt.Close(); err != nil {
+		t.Fatalf("failed to finalize writer: %v", err)
+	}
+
+	corruptBytes, err := os.ReadFile(pathCorrupt)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	binary.LittleEndian.PutUint32(corruptBytes[12:16], 999999)
+	if err := os.WriteFile(pathCorrupt, corruptBytes, 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	task := &Task{
+		InputFiles:      []string{pathCorrupt},
+		FileIDs:         []int{1},
+		OutputDirectory: dir,
+		NextSegmentID:   100,
+		IsBottomLevel:   false,
+	}
+
+	if _, err := Run(task, WithMaxSSTableSize(50), WithEstimatedKeys(3)); err == nil {
+		t.Error("expected error during compaction")
+	}
+
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("failed to read output directory: %v", err)
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), "00010") {
+			t.Errorf("found leftover compaction file: %s", f.Name())
+		}
 	}
 }

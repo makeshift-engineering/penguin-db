@@ -194,3 +194,18 @@ func (w *Writer) Size() uint64 {
 func (w *Writer) EntryCount() uint32 {
 	return w.entryCount
 }
+
+// EstimatedSize returns the hypothetical on-disk size of the SSTable file if it were
+// closed and finalized immediately. It computes this by summing the sizes of the
+// data block, index block, bloom filter block, and footer.
+func (w *Writer) EstimatedSize() uint64 {
+	if w == nil {
+		return 0
+	}
+	indexSize := uint64(len(w.index) * indexEntryHeaderSize)
+	for _, entry := range w.index {
+		indexSize += uint64(len(entry.key))
+	}
+	bloomSize := uint64(len(w.bloomFilter.Bytes()))
+	return w.offset + indexSize + bloomSize + uint64(footerSize)
+}

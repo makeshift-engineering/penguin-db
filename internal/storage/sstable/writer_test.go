@@ -1698,3 +1698,34 @@ func TestWriter_InvalidExpectedKeys(t *testing.T) {
 		t.Errorf("expected ErrInvalidExpectedKeys, got %v", err)
 	}
 }
+
+// TestWriter_EstimatedSize verifies that the EstimatedSize method correctly and
+// accurately predicts the final on-disk file size of the completed SSTable.
+func TestWriter_EstimatedSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "est_size.sst")
+
+	w, err := NewWriter(path, 3)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	_ = w.Add([]byte("k1"), []byte("v1"), OpcodePut)
+	_ = w.Add([]byte("k2"), []byte("v2"), OpcodePut)
+
+	est := w.EstimatedSize()
+	if est == 0 {
+		t.Error("estimated size should not be zero")
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if fi.Size() != int64(est) {
+		t.Errorf("expected final size %d, got estimated %d", fi.Size(), est)
+	}
+}
