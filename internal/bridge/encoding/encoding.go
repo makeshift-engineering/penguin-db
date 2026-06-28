@@ -40,8 +40,6 @@ func EncodeScanPrefix(db, table string) []byte {
 	buf = append(buf, lengthBuf[:]...)
 	buf = append(buf, dbBytes...)
 	buf = append(buf, 0x00)
-
-	tableBytes := []byte(table)
 	binary.BigEndian.PutUint16(lengthBuf[:], uint16(len(tableBytes)))
 	buf = append(buf, lengthBuf[:]...)
 	buf = append(buf, tableBytes...)
