@@ -126,20 +126,20 @@ func TestMergeHeap_DirectMethods(t *testing.T) {
 	// Test the direct methods Push and Pop without the heap package
 	// to ensure they behave as expected on the slice.
 	h := &MergeHeap{}
-	
+
 	node1 := &MergeNode{Key: []byte("test1")}
 	node2 := &MergeNode{Key: []byte("test2")}
-	
+
 	h.Push(node1)
 	if h.Len() != 1 || (*h)[0] != node1 {
 		t.Errorf("Direct Push failed")
 	}
-	
+
 	h.Push(node2)
 	if h.Len() != 2 || (*h)[1] != node2 {
 		t.Errorf("Direct Push failed")
 	}
-	
+
 	popped := h.Pop()
 	if popped != node2 {
 		t.Errorf("Direct Pop expected the last element added")
