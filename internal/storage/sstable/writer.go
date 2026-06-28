@@ -195,10 +195,10 @@ func (w *Writer) EntryCount() uint32 {
 	return w.entryCount
 }
 
-// EstimatedSize returns the hypothetical on-disk size of the SSTable file if it were
+// CurrentSize returns the current on-disk size of the SSTable file if it were
 // closed and finalized immediately. It computes this by summing the sizes of the
 // data block, index block, bloom filter block, and footer.
-func (w *Writer) EstimatedSize() uint64 {
+func (w *Writer) CurrentSize() uint64 {
 	if w == nil {
 		return 0
 	}

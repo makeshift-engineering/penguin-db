@@ -1699,9 +1699,9 @@ func TestWriter_InvalidExpectedKeys(t *testing.T) {
 	}
 }
 
-// TestWriter_EstimatedSize verifies that the EstimatedSize method correctly and
+// TestWriter_CurrentSize verifies that the CurrentSize method correctly and
 // accurately predicts the final on-disk file size of the completed SSTable.
-func TestWriter_EstimatedSize(t *testing.T) {
+func TestWriter_CurrentSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "est_size.sst")
 
@@ -1712,7 +1712,7 @@ func TestWriter_EstimatedSize(t *testing.T) {
 	_ = w.Add([]byte("k1"), []byte("v1"), OpcodePut)
 	_ = w.Add([]byte("k2"), []byte("v2"), OpcodePut)
 
-	est := w.EstimatedSize()
+	est := w.CurrentSize()
 	if est == 0 {
 		t.Error("estimated size should not be zero")
 	}

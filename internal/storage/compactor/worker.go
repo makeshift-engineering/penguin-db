@@ -279,7 +279,7 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 		lastKey = append(lastKey[:0], node.Key...)
 
 		// Check if the current writer has exceeded the target size threshold.
-		if state.currentWriter.EstimatedSize() >= config.MaxSSTableSize {
+		if state.currentWriter.CurrentSize() >= config.MaxSSTableSize {
 			if err := state.finalizeWriter(); err != nil {
 				return nil, 0, fmt.Errorf("failed to roll compaction writer: %w", err)
 			}
