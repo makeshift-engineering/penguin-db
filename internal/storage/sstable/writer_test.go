@@ -1684,6 +1684,8 @@ func TestWriter_CloseReleasesFileOnSuccess(t *testing.T) {
 	}
 }
 
+// TestWriter_InvalidExpectedKeys verifies that NewWriter returns
+// ErrInvalidExpectedKeys when provided with invalid expectedKeys values.
 func TestWriter_InvalidExpectedKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "invalid_keys.sst")
