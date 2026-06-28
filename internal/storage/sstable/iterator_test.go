@@ -377,7 +377,7 @@ func TestIterator_DownwardCorruptedIndexOffset(t *testing.T) {
 	// The footer is at the end of the file.
 	// indexOffset is at the beginning of the footer.
 	footerOffset := len(data) - footerSize
-	
+
 	// Write the corrupted indexOffset (15 instead of the correct index block start).
 	binary.LittleEndian.PutUint64(data[footerOffset+footerIndexOffsetOffset:footerOffset+footerBloomOffsetOffset], firstEntrySize)
 
