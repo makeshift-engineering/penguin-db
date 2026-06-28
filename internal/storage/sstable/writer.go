@@ -30,8 +30,14 @@ type Writer struct {
 	lastKey     []byte       // last key added, used to enforce sorted order
 }
 
+// MaxWriterExpectedKeys is the upper bound limit for the estimated keys parameter
+// passed to a new SSTable writer. This prevents unbounded memory allocation for
+// the in-memory bloom filter and index structures.
 const MaxWriterExpectedKeys = 100000000
 
+// NewWriter creates a new SSTable Writer for the specified file path.
+// It initializes a bloom filter and an index based on expectedKeys to minimize
+// memory reallocations. expectedKeys must be between 0 and MaxWriterExpectedKeys.
 func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 	if expectedKeys < 0 || expectedKeys > MaxWriterExpectedKeys {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidExpectedKeys, expectedKeys)
@@ -177,4 +183,14 @@ func (w *Writer) Close() (closeErr error) {
 	}
 
 	return w.file.Sync()
+}
+
+// Size returns the total bytes written to the data block so far.
+func (w *Writer) Size() uint64 {
+	return w.offset
+}
+
+// EntryCount returns the number of entries written so far.
+func (w *Writer) EntryCount() uint32 {
+	return w.entryCount
 }
