@@ -75,18 +75,3 @@ func (p *Parser) selectExpressionFromExpression(start diagnostic.Pos, expr ast.E
 		Expr:     expr,
 	}, nil
 }
-
-// isSelectExprStart reports whether the current token can begin a SelectExpression.
-// Used by parseValueRow and similar callers that need to know before committing.
-func (p *Parser) isSelectExprStart() bool {
-	switch p.current.Type {
-	case utils.TOKEN_IDENT,
-		utils.TOKEN_INTEGER, utils.TOKEN_FLOAT, utils.TOKEN_STRING,
-		utils.TOKEN_TRUE, utils.TOKEN_FALSE, utils.TOKEN_NULL,
-		utils.TOKEN_LPAREN,
-		utils.TOKEN_PLUS, utils.TOKEN_MINUS,
-		utils.TOKEN_NOT:
-		return true
-	}
-	return false
-}
