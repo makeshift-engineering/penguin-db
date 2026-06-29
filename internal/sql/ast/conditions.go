@@ -1,12 +1,12 @@
 package ast
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+import "github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 
 // BinaryCondition represents two conditions joined by AND or OR.
 type BinaryCondition struct {
 	CondBase
 	Left  Condition
-	Op    lexer.TokenType
+	Op    utils.TokenType // TOKEN_AND or TOKEN_OR
 	Right Condition
 }
 
@@ -14,7 +14,7 @@ func (b *BinaryCondition) Validate() error {
 	if b.Left == nil || b.Right == nil {
 		return ErrNilCondition
 	}
-	if b.Op != lexer.TOKEN_AND && b.Op != lexer.TOKEN_OR {
+	if b.Op != utils.TOKEN_AND && b.Op != utils.TOKEN_OR {
 		return ErrInvalidConditionOperator
 	}
 	if err := b.Left.Validate(); err != nil {
@@ -36,12 +36,12 @@ func (n *NotCondition) Validate() error {
 	return n.Operand.Validate()
 }
 
-// ComparisonPredicate represents a comparison between two expressions
-// using one of =, !=, <>, <, >, <=, >=.
+// ComparisonPredicate represents a comparison between two expressions:
+// Left Op Right where Op is one of =, !=, <>, <, >, <=, >=.
 type ComparisonPredicate struct {
 	CondBase
 	Left  Expression
-	Op    lexer.TokenType
+	Op    utils.TokenType
 	Right Expression
 }
 
@@ -50,7 +50,9 @@ func (c *ComparisonPredicate) Validate() error {
 		return ErrNilExpression
 	}
 	switch c.Op {
-	case lexer.TOKEN_EQ, lexer.TOKEN_NEQ, lexer.TOKEN_LT, lexer.TOKEN_GT, lexer.TOKEN_LTE, lexer.TOKEN_GTE:
+	case utils.TOKEN_EQ, utils.TOKEN_NEQ,
+		utils.TOKEN_LT, utils.TOKEN_GT,
+		utils.TOKEN_LTE, utils.TOKEN_GTE:
 	default:
 		return ErrInvalidComparisonOperator
 	}
@@ -60,8 +62,7 @@ func (c *ComparisonPredicate) Validate() error {
 	return c.Right.Validate()
 }
 
-// LikePredicate represents a pattern-matching predicate: Left [NOT] LIKE Pattern.
-// Negated is true for NOT LIKE.
+// LikePredicate represents: Left [NOT] LIKE Pattern.
 type LikePredicate struct {
 	CondBase
 	Left    Expression
@@ -79,8 +80,7 @@ func (l *LikePredicate) Validate() error {
 	return l.Pattern.Validate()
 }
 
-// IsNullPredicate represents a null check: Expr IS [NOT] NULL.
-// Negated is true for IS NOT NULL.
+// IsNullPredicate represents: Expr IS [NOT] NULL.
 type IsNullPredicate struct {
 	CondBase
 	Expr    Expression
@@ -94,8 +94,7 @@ func (i *IsNullPredicate) Validate() error {
 	return i.Expr.Validate()
 }
 
-// InPredicate represents a set membership test: Expr [NOT] IN (Values...).
-// Negated is true for NOT IN.
+// InPredicate represents: Expr [NOT] IN (Values...).
 type InPredicate struct {
 	CondBase
 	Expr    Expression
@@ -121,8 +120,7 @@ func (i *InPredicate) Validate() error {
 	return nil
 }
 
-// BetweenPredicate represents a range test: Expr [NOT] BETWEEN Low AND High.
-// Negated is true for NOT BETWEEN.
+// BetweenPredicate represents: Expr [NOT] BETWEEN Low AND High.
 type BetweenPredicate struct {
 	CondBase
 	Expr    Expression
@@ -144,7 +142,7 @@ func (b *BetweenPredicate) Validate() error {
 	return b.High.Validate()
 }
 
-// ParenCondition represents a parenthesized condition: ( Inner ).
+// ParenCondition represents a parenthesised condition: ( Inner ).
 type ParenCondition struct {
 	CondBase
 	Inner Condition
@@ -157,8 +155,8 @@ func (p *ParenCondition) Validate() error {
 	return p.Inner.Validate()
 }
 
-// ExprCondition wraps a bare [Expression] used as a truth value in a
-// condition context (e.g. a boolean column reference in a WHERE clause).
+// ExprCondition wraps a bare Expression used as a boolean truth value
+// (e.g. a boolean column reference in a WHERE clause).
 type ExprCondition struct {
 	CondBase
 	Expr Expression

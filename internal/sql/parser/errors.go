@@ -6,6 +6,8 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
+// Parser diagnostic codes occupy the 2000–2999 range.
+// Each constant identifies a distinct class of syntax error.
 const (
 	// CodeUnexpectedToken is emitted when expect() or a branch check finds
 	// a token that does not match what the grammar requires at that position.

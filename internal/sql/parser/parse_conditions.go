@@ -3,7 +3,7 @@ package parser
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // parseCondition is the stable public entry point for all condition contexts
@@ -13,7 +13,8 @@ func (p *Parser) parseCondition() (ast.Condition, error) {
 }
 
 // parseOrCondition parses the lowest-precedence boolean level.
-// OrCondition = AndCondition ( 'OR' AndCondition )*
+//
+//	OrCondition = AndCondition ( 'OR' AndCondition )*
 func (p *Parser) parseOrCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -22,7 +23,7 @@ func (p *Parser) parseOrCondition() (ast.Condition, error) {
 		return nil, err
 	}
 
-	for p.check(lexer.TOKEN_OR) {
+	for p.check(utils.TOKEN_OR) {
 		p.advance()
 		right, err := p.parseAndCondition()
 		if err != nil {
@@ -31,7 +32,7 @@ func (p *Parser) parseOrCondition() (ast.Condition, error) {
 		left = &ast.BinaryCondition{
 			CondBase: p.condBase(start),
 			Left:     left,
-			Op:       lexer.TOKEN_OR,
+			Op:       utils.TOKEN_OR,
 			Right:    right,
 		}
 	}
@@ -39,7 +40,8 @@ func (p *Parser) parseOrCondition() (ast.Condition, error) {
 }
 
 // parseAndCondition parses the AND level.
-// AndCondition = NotCondition ( 'AND' NotCondition )*
+//
+//	AndCondition = NotCondition ( 'AND' NotCondition )*
 func (p *Parser) parseAndCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -48,7 +50,7 @@ func (p *Parser) parseAndCondition() (ast.Condition, error) {
 		return nil, err
 	}
 
-	for p.check(lexer.TOKEN_AND) {
+	for p.check(utils.TOKEN_AND) {
 		p.advance()
 		right, err := p.parseNotCondition()
 		if err != nil {
@@ -57,7 +59,7 @@ func (p *Parser) parseAndCondition() (ast.Condition, error) {
 		left = &ast.BinaryCondition{
 			CondBase: p.condBase(start),
 			Left:     left,
-			Op:       lexer.TOKEN_AND,
+			Op:       utils.TOKEN_AND,
 			Right:    right,
 		}
 	}
@@ -65,11 +67,12 @@ func (p *Parser) parseAndCondition() (ast.Condition, error) {
 }
 
 // parseNotCondition handles the NOT prefix (right-recursive).
-// NotCondition = ConditionPrimary | 'NOT' NotCondition
+//
+//	NotCondition = ConditionPrimary | 'NOT' NotCondition
 func (p *Parser) parseNotCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
-	if p.check(lexer.TOKEN_NOT) {
+	if p.check(utils.TOKEN_NOT) {
 		p.advance()
 		inner, err := p.parseNotCondition()
 		if err != nil {
@@ -85,7 +88,7 @@ func (p *Parser) parseNotCondition() (ast.Condition, error) {
 func (p *Parser) parseConditionPrimary() (ast.Condition, error) {
 	start := p.currentStart()
 
-	if p.check(lexer.TOKEN_LPAREN) {
+	if p.check(utils.TOKEN_LPAREN) {
 		p.advance() // consume '('
 
 		// Always try an arithmetic expression first.
@@ -95,7 +98,7 @@ func (p *Parser) parseConditionPrimary() (ast.Condition, error) {
 		}
 
 		// Case A: closing ')' immediately — the inner content is an Expression.
-		if p.check(lexer.TOKEN_RPAREN) {
+		if p.check(utils.TOKEN_RPAREN) {
 			p.advance() // consume ')'
 			parenExpr := &ast.ParenExpr{ExprBase: p.exprBase(start), Inner: expr}
 
@@ -108,11 +111,12 @@ func (p *Parser) parseConditionPrimary() (ast.Condition, error) {
 		}
 
 		// Case B: something else inside the parens — must be a condition.
+		// e.g. (a > 5), (a > 5 AND b < 10)
 		innerCond, err := p.parseConditionContinuationFromExpr(start, expr)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 		return &ast.ParenCondition{CondBase: p.condBase(start), Inner: innerCond}, nil
@@ -145,7 +149,7 @@ func (p *Parser) parseConditionContinuationFromExpr(start diagnostic.Pos, left a
 		return p.parseOrConditionTailFromLeft(start, pred)
 	}
 
-	if p.check(lexer.TOKEN_AND) || p.check(lexer.TOKEN_OR) {
+	if p.check(utils.TOKEN_AND) || p.check(utils.TOKEN_OR) {
 		leftCond := &ast.ExprCondition{CondBase: p.condBase(start), Expr: left}
 		return p.parseOrConditionTailFromLeft(start, leftCond)
 	}
@@ -162,13 +166,13 @@ func (p *Parser) parseConditionContinuationFromExpr(start diagnostic.Pos, left a
 // tail (i.e. the operator that turns an expression into a condition).
 func (p *Parser) isPredicateTailStart() bool {
 	switch p.current.Type {
-	case lexer.TOKEN_EQ, lexer.TOKEN_NEQ,
-		lexer.TOKEN_LT, lexer.TOKEN_GT, lexer.TOKEN_LTE, lexer.TOKEN_GTE,
-		lexer.TOKEN_LIKE, lexer.TOKEN_IS, lexer.TOKEN_IN, lexer.TOKEN_BETWEEN:
+	case utils.TOKEN_EQ, utils.TOKEN_NEQ,
+		utils.TOKEN_LT, utils.TOKEN_GT, utils.TOKEN_LTE, utils.TOKEN_GTE,
+		utils.TOKEN_LIKE, utils.TOKEN_IS, utils.TOKEN_IN, utils.TOKEN_BETWEEN:
 		return true
-	case lexer.TOKEN_NOT:
+	case utils.TOKEN_NOT:
 		switch p.tokens.Peek().Type {
-		case lexer.TOKEN_LIKE, lexer.TOKEN_IN, lexer.TOKEN_BETWEEN:
+		case utils.TOKEN_LIKE, utils.TOKEN_IN, utils.TOKEN_BETWEEN:
 			return true
 		}
 	}
@@ -179,8 +183,8 @@ func (p *Parser) isPredicateTailStart() bool {
 // the appropriate Condition node based on the predicate operator that follows.
 func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (ast.Condition, error) {
 	switch p.current.Type {
-	case lexer.TOKEN_EQ, lexer.TOKEN_NEQ,
-		lexer.TOKEN_LT, lexer.TOKEN_GT, lexer.TOKEN_LTE, lexer.TOKEN_GTE:
+	case utils.TOKEN_EQ, utils.TOKEN_NEQ,
+		utils.TOKEN_LT, utils.TOKEN_GT, utils.TOKEN_LTE, utils.TOKEN_GTE:
 		op := p.current.Type
 		p.advance()
 		right, err := p.parseExpression()
@@ -194,7 +198,7 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 			Right:    right,
 		}, nil
 
-	case lexer.TOKEN_LIKE:
+	case utils.TOKEN_LIKE:
 		p.advance()
 		pattern, err := p.parseExpression()
 		if err != nil {
@@ -207,10 +211,10 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 			Negated:  false,
 		}, nil
 
-	case lexer.TOKEN_IS:
+	case utils.TOKEN_IS:
 		p.advance()
-		negated := p.match(lexer.TOKEN_NOT)
-		if _, err := p.expect(lexer.TOKEN_NULL); err != nil {
+		negated := p.match(utils.TOKEN_NOT)
+		if _, err := p.expect(utils.TOKEN_NULL); err != nil {
 			return nil, err
 		}
 		return &ast.IsNullPredicate{
@@ -219,7 +223,7 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 			Negated:  negated,
 		}, nil
 
-	case lexer.TOKEN_IN:
+	case utils.TOKEN_IN:
 		p.advance()
 		vals, err := p.parseParenExpressionList()
 		if err != nil {
@@ -232,13 +236,13 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 			Negated:  false,
 		}, nil
 
-	case lexer.TOKEN_BETWEEN:
+	case utils.TOKEN_BETWEEN:
 		p.advance()
 		lo, err := p.parseExpression()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_AND); err != nil {
+		if _, err := p.expect(utils.TOKEN_AND); err != nil {
 			return nil, err
 		}
 		hi, err := p.parseExpression()
@@ -253,10 +257,10 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 			Negated:  false,
 		}, nil
 
-	case lexer.TOKEN_NOT:
+	case utils.TOKEN_NOT:
 		p.advance() // consume NOT
 		switch p.current.Type {
-		case lexer.TOKEN_LIKE:
+		case utils.TOKEN_LIKE:
 			p.advance()
 			pattern, err := p.parseExpression()
 			if err != nil {
@@ -269,7 +273,7 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 				Negated:  true,
 			}, nil
 
-		case lexer.TOKEN_IN:
+		case utils.TOKEN_IN:
 			p.advance()
 			vals, err := p.parseParenExpressionList()
 			if err != nil {
@@ -282,13 +286,13 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 				Negated:  true,
 			}, nil
 
-		case lexer.TOKEN_BETWEEN:
+		case utils.TOKEN_BETWEEN:
 			p.advance()
 			lo, err := p.parseExpression()
 			if err != nil {
 				return nil, err
 			}
-			if _, err := p.expect(lexer.TOKEN_AND); err != nil {
+			if _, err := p.expect(utils.TOKEN_AND); err != nil {
 				return nil, err
 			}
 			hi, err := p.parseExpression()
@@ -332,7 +336,7 @@ func (p *Parser) parseOrConditionTailFromLeft(start diagnostic.Pos, left ast.Con
 		return nil, err
 	}
 
-	for p.check(lexer.TOKEN_OR) {
+	for p.check(utils.TOKEN_OR) {
 		p.advance()
 		right, err := p.parseAndCondition()
 		if err != nil {
@@ -341,7 +345,7 @@ func (p *Parser) parseOrConditionTailFromLeft(start diagnostic.Pos, left ast.Con
 		left = &ast.BinaryCondition{
 			CondBase: p.condBase(start),
 			Left:     left,
-			Op:       lexer.TOKEN_OR,
+			Op:       utils.TOKEN_OR,
 			Right:    right,
 		}
 	}
@@ -350,7 +354,7 @@ func (p *Parser) parseOrConditionTailFromLeft(start diagnostic.Pos, left ast.Con
 
 // parseAndConditionTailFromLeft continues an AND chain starting from `left`.
 func (p *Parser) parseAndConditionTailFromLeft(start diagnostic.Pos, left ast.Condition) (ast.Condition, error) {
-	for p.check(lexer.TOKEN_AND) {
+	for p.check(utils.TOKEN_AND) {
 		p.advance()
 		right, err := p.parseNotCondition()
 		if err != nil {
@@ -359,7 +363,7 @@ func (p *Parser) parseAndConditionTailFromLeft(start diagnostic.Pos, left ast.Co
 		left = &ast.BinaryCondition{
 			CondBase: p.condBase(start),
 			Left:     left,
-			Op:       lexer.TOKEN_AND,
+			Op:       utils.TOKEN_AND,
 			Right:    right,
 		}
 	}
@@ -369,7 +373,7 @@ func (p *Parser) parseAndConditionTailFromLeft(start diagnostic.Pos, left ast.Co
 // parseParenExpressionList parses '(' Expression ( ',' Expression )* ')'.
 // Used by IN predicates.
 func (p *Parser) parseParenExpressionList() ([]ast.Expression, error) {
-	if _, err := p.expect(lexer.TOKEN_LPAREN); err != nil {
+	if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
 		return nil, err
 	}
 
@@ -379,7 +383,7 @@ func (p *Parser) parseParenExpressionList() ([]ast.Expression, error) {
 	}
 	vals := []ast.Expression{first}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		v, err := p.parseExpression()
 		if err != nil {
 			return nil, err
@@ -387,7 +391,7 @@ func (p *Parser) parseParenExpressionList() ([]ast.Expression, error) {
 		vals = append(vals, v)
 	}
 
-	if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+	if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 		return nil, err
 	}
 	return vals, nil

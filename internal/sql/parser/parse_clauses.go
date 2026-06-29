@@ -2,7 +2,7 @@ package parser
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // parseTableReferences parses a comma-separated list of TableReference nodes.
@@ -14,7 +14,7 @@ func (p *Parser) parseTableReferences() ([]*ast.TableRef, error) {
 	}
 	refs := []*ast.TableRef{ref}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		ref, err = p.parseTableReference()
 		if err != nil {
 			return nil, err
@@ -29,13 +29,13 @@ func (p *Parser) parseTableReference() (*ast.TableRef, error) {
 	start := p.currentStart()
 
 	// Parenthesised table reference
-	if p.check(lexer.TOKEN_LPAREN) {
+	if p.check(utils.TOKEN_LPAREN) {
 		p.advance() // consume '('
 		inner, err := p.parseTableReference()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 		return &ast.TableRef{ClauseBase: p.clauseBase(start), Paren: inner}, nil
@@ -73,14 +73,14 @@ func (p *Parser) parseTablePrimary() (*ast.TablePrimary, error) {
 	}
 
 	var alias string
-	if p.match(lexer.TOKEN_AS) {
+	if p.match(utils.TOKEN_AS) {
 		alias, err = p.expectIdent()
 		if err != nil {
 			return nil, err
 		}
-	} else if p.check(lexer.TOKEN_IDENT) {
+	} else if p.check(utils.TOKEN_IDENT) {
 		// Implicit alias: bare IDENT not preceded by AS.
-		// We only accept TOKEN_IDENT here, keywords are not identifiers.
+		// We only accept TOKEN_IDENT here — keywords are not identifiers.
 		alias = p.current.Literal
 		p.advance()
 	}
@@ -95,12 +95,12 @@ func (p *Parser) parseTablePrimary() (*ast.TablePrimary, error) {
 // isJoinStart reports whether the current token begins a JoinClause.
 func (p *Parser) isJoinStart() bool {
 	switch p.current.Type {
-	case lexer.TOKEN_JOIN,
-		lexer.TOKEN_INNER,
-		lexer.TOKEN_LEFT,
-		lexer.TOKEN_RIGHT,
-		lexer.TOKEN_FULL,
-		lexer.TOKEN_CROSS:
+	case utils.TOKEN_JOIN,
+		utils.TOKEN_INNER,
+		utils.TOKEN_LEFT,
+		utils.TOKEN_RIGHT,
+		utils.TOKEN_FULL,
+		utils.TOKEN_CROSS:
 		return true
 	}
 	return false
@@ -111,37 +111,37 @@ func (p *Parser) parseJoinClause() (*ast.JoinClause, error) {
 	start := p.currentStart()
 
 	// Determine join type and consume qualifier keyword(s).
-	joinType := ast.JoinInner
+	joinType := ast.JoinInner // default for bare JOIN
 	switch p.current.Type {
-	case lexer.TOKEN_CROSS:
+	case utils.TOKEN_CROSS:
 		p.advance() // CROSS
 		joinType = ast.JoinCross
 
-	case lexer.TOKEN_INNER:
+	case utils.TOKEN_INNER:
 		p.advance() // INNER
 		joinType = ast.JoinInner
 
-	case lexer.TOKEN_LEFT:
+	case utils.TOKEN_LEFT:
 		p.advance()                // LEFT
-		p.match(lexer.TOKEN_OUTER) // optional OUTER
+		p.match(utils.TOKEN_OUTER) // optional OUTER
 		joinType = ast.JoinLeft
 
-	case lexer.TOKEN_RIGHT:
+	case utils.TOKEN_RIGHT:
 		p.advance()
-		p.match(lexer.TOKEN_OUTER)
+		p.match(utils.TOKEN_OUTER)
 		joinType = ast.JoinRight
 
-	case lexer.TOKEN_FULL:
+	case utils.TOKEN_FULL:
 		p.advance()
-		p.match(lexer.TOKEN_OUTER)
+		p.match(utils.TOKEN_OUTER)
 		joinType = ast.JoinFull
 
-	case lexer.TOKEN_JOIN:
+	case utils.TOKEN_JOIN:
 		// bare JOIN — type already set to JoinInner, nothing to consume yet
 	}
 
 	// Every variant requires the JOIN keyword.
-	if _, err := p.expect(lexer.TOKEN_JOIN); err != nil {
+	if _, err := p.expect(utils.TOKEN_JOIN); err != nil {
 		return nil, err
 	}
 
@@ -159,7 +159,7 @@ func (p *Parser) parseJoinClause() (*ast.JoinClause, error) {
 		}, nil
 	}
 
-	if _, err := p.expect(lexer.TOKEN_ON); err != nil {
+	if _, err := p.expect(utils.TOKEN_ON); err != nil {
 		return nil, err
 	}
 
@@ -196,7 +196,7 @@ func (p *Parser) parseGroupByClause() (*ast.GroupByClause, error) {
 	start := p.currentStart()
 	p.advance() // GROUP
 
-	if _, err := p.expect(lexer.TOKEN_BY); err != nil {
+	if _, err := p.expect(utils.TOKEN_BY); err != nil {
 		return nil, err
 	}
 
@@ -206,7 +206,7 @@ func (p *Parser) parseGroupByClause() (*ast.GroupByClause, error) {
 	}
 	cols := []*ast.Identifier{col}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		col, err = p.parseQualifiedIdentifier()
 		if err != nil {
 			return nil, err
@@ -237,7 +237,7 @@ func (p *Parser) parseOrderByClause() (*ast.OrderByClause, error) {
 	start := p.currentStart()
 	p.advance() // ORDER
 
-	if _, err := p.expect(lexer.TOKEN_BY); err != nil {
+	if _, err := p.expect(utils.TOKEN_BY); err != nil {
 		return nil, err
 	}
 
@@ -247,7 +247,7 @@ func (p *Parser) parseOrderByClause() (*ast.OrderByClause, error) {
 	}
 	items := []*ast.OrderByItem{item}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		item, err = p.parseOrderByItem()
 		if err != nil {
 			return nil, err
@@ -271,9 +271,9 @@ func (p *Parser) parseOrderByItem() (*ast.OrderByItem, error) {
 
 	dir := ast.OrderAsc
 	switch {
-	case p.match(lexer.TOKEN_DESC):
+	case p.match(utils.TOKEN_DESC):
 		dir = ast.OrderDesc
-	case p.match(lexer.TOKEN_ASC):
+	case p.match(utils.TOKEN_ASC):
 		// already the default; consumed but direction unchanged
 	}
 
@@ -296,7 +296,7 @@ func (p *Parser) parseLimitClause() (*ast.LimitClause, error) {
 	}
 
 	var offset *int
-	if p.match(lexer.TOKEN_OFFSET) {
+	if p.match(utils.TOKEN_OFFSET) {
 		n, err := p.parseIntegerLiteralValue()
 		if err != nil {
 			return nil, err

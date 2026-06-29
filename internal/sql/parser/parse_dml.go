@@ -2,17 +2,24 @@ package parser
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // parseInsertStatement handles:
-// INSERT INTO QualifiedIdentifier ['(' Identifier (',' Identifier)* ')']
-// ( VALUES ValueRow (',' ValueRow)* | SelectStatement )
+//
+//	INSERT INTO QualifiedIdentifier
+//	  ['(' Identifier (',' Identifier)* ')']
+//	  ( VALUES ValueRow (',' ValueRow)* | SelectStatement )
+//
+// Column-list disambiguation: after INSERT INTO <table>, a '(' followed by an
+// IDENT is always a column list — the only valid alternative is VALUES or SELECT,
+// neither of which starts with '('. So if current is '(' and peek is IDENT, it
+// is the column list.
 func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 	start := p.currentStart()
 	p.advance() // INSERT
 
-	if _, err := p.expect(lexer.TOKEN_INTO); err != nil {
+	if _, err := p.expect(utils.TOKEN_INTO); err != nil {
 		return nil, err
 	}
 
@@ -23,7 +30,7 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 
 	// Optional column list: '(' Identifier (',' Identifier)* ')'
 	var cols []string
-	if p.check(lexer.TOKEN_LPAREN) && p.peekIs(lexer.TOKEN_IDENT) {
+	if p.check(utils.TOKEN_LPAREN) && p.peekIs(utils.TOKEN_IDENT) {
 		p.advance() // consume '('
 
 		col, err := p.expectIdent()
@@ -32,7 +39,7 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 		}
 		cols = append(cols, col)
 
-		for p.match(lexer.TOKEN_COMMA) {
+		for p.match(utils.TOKEN_COMMA) {
 			col, err = p.expectIdent()
 			if err != nil {
 				return nil, err
@@ -40,14 +47,14 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 			cols = append(cols, col)
 		}
 
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 	}
 
 	// VALUES or SELECT
 	switch p.current.Type {
-	case lexer.TOKEN_VALUES:
+	case utils.TOKEN_VALUES:
 		p.advance() // VALUES
 
 		row, err := p.parseValueRow()
@@ -56,7 +63,7 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 		}
 		rows := [][]*ast.SelectExpression{row}
 
-		for p.match(lexer.TOKEN_COMMA) {
+		for p.match(utils.TOKEN_COMMA) {
 			row, err = p.parseValueRow()
 			if err != nil {
 				return nil, err
@@ -71,7 +78,7 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 			Rows:     rows,
 		}, nil
 
-	case lexer.TOKEN_SELECT:
+	case utils.TOKEN_SELECT:
 		source, err := p.parseSelectStatement()
 		if err != nil {
 			return nil, err
@@ -94,9 +101,14 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 }
 
 // parseValueRow parses one row of INSERT VALUES:
-// ValueRow = '(' Expression (',' Expression)* ')'
+//
+//	ValueRow = '(' Expression (',' Expression)* ')'
+//
+// The grammar specifies Expression (not SelectExpression) inside VALUE rows —
+// conditions are not valid insert values. Each Expression is wrapped in an
+// ast.SelectExpression with Expr set, because InsertStmt.Rows is [][]*SelectExpression.
 func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
-	if _, err := p.expect(lexer.TOKEN_LPAREN); err != nil {
+	if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
 		return nil, err
 	}
 
@@ -108,7 +120,7 @@ func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
 		{NodeBase: ast.NodeBase{NodeSpan: first.Span()}, Expr: first},
 	}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		expr, err := p.parseExpression()
 		if err != nil {
 			return nil, err
@@ -119,14 +131,15 @@ func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
 		})
 	}
 
-	if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+	if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 		return nil, err
 	}
 	return vals, nil
 }
 
 // parseUpdateStatement handles:
-// UPDATE QualifiedIdentifier SET SetItem (',' SetItem)* [WHERE Condition]
+//
+//	UPDATE QualifiedIdentifier SET SetItem (',' SetItem)* [WHERE Condition]
 func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	start := p.currentStart()
 	p.advance() // UPDATE
@@ -136,7 +149,7 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 		return nil, err
 	}
 
-	if _, err := p.expect(lexer.TOKEN_SET); err != nil {
+	if _, err := p.expect(utils.TOKEN_SET); err != nil {
 		return nil, err
 	}
 
@@ -146,7 +159,7 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	}
 	items := []*ast.SetItem{item}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		item, err = p.parseSetItem()
 		if err != nil {
 			return nil, err
@@ -155,7 +168,7 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	}
 
 	var where *ast.WhereClause
-	if p.check(lexer.TOKEN_WHERE) {
+	if p.check(utils.TOKEN_WHERE) {
 		where, err = p.parseWhereClause()
 		if err != nil {
 			return nil, err
@@ -171,7 +184,8 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 }
 
 // parseSetItem parses one assignment in an UPDATE SET clause:
-// SetItem = QualifiedIdentifier '=' Expression
+//
+//	SetItem = QualifiedIdentifier '=' Expression
 func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 	start := p.currentStart()
 
@@ -180,7 +194,7 @@ func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 		return nil, err
 	}
 
-	if _, err := p.expect(lexer.TOKEN_EQ); err != nil {
+	if _, err := p.expect(utils.TOKEN_EQ); err != nil {
 		return nil, err
 	}
 
@@ -197,12 +211,13 @@ func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 }
 
 // parseDeleteStatement handles:
-// DELETE FROM QualifiedIdentifier [WHERE Condition]
+//
+//	DELETE FROM QualifiedIdentifier [WHERE Condition]
 func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 	start := p.currentStart()
 	p.advance() // DELETE
 
-	if _, err := p.expect(lexer.TOKEN_FROM); err != nil {
+	if _, err := p.expect(utils.TOKEN_FROM); err != nil {
 		return nil, err
 	}
 
@@ -212,7 +227,7 @@ func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 	}
 
 	var where *ast.WhereClause
-	if p.check(lexer.TOKEN_WHERE) {
+	if p.check(utils.TOKEN_WHERE) {
 		var err error
 		where, err = p.parseWhereClause()
 		if err != nil {

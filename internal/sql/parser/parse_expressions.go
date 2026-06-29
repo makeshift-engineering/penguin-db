@@ -5,11 +5,12 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // parseExpression parses an additive expression (lowest precedence level).
-// Expression = Term ( ( '+' | '-' ) Term )*
+//
+//	Expression = Term ( ( '+' | '-' ) Term )*
 func (p *Parser) parseExpression() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -18,7 +19,7 @@ func (p *Parser) parseExpression() (ast.Expression, error) {
 		return nil, err
 	}
 
-	for p.check(lexer.TOKEN_PLUS) || p.check(lexer.TOKEN_MINUS) {
+	for p.check(utils.TOKEN_PLUS) || p.check(utils.TOKEN_MINUS) {
 		op := p.current.Type
 		p.advance()
 
@@ -39,7 +40,8 @@ func (p *Parser) parseExpression() (ast.Expression, error) {
 }
 
 // parseTerm parses a multiplicative expression.
-// Term = Factor ( ( '*' | '/' | '%' ) Factor )*
+//
+//	Term = Factor ( ( '*' | '/' | '%' ) Factor )*
 func (p *Parser) parseTerm() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -48,7 +50,7 @@ func (p *Parser) parseTerm() (ast.Expression, error) {
 		return nil, err
 	}
 
-	for p.check(lexer.TOKEN_STAR) || p.check(lexer.TOKEN_SLASH) || p.check(lexer.TOKEN_PERCENT) {
+	for p.check(utils.TOKEN_STAR) || p.check(utils.TOKEN_SLASH) || p.check(utils.TOKEN_PERCENT) {
 		op := p.current.Type
 		p.advance()
 
@@ -69,14 +71,24 @@ func (p *Parser) parseTerm() (ast.Expression, error) {
 }
 
 // parseFactor parses the primary level of an expression.
+//
+//	Factor = Literal
+//	       | QualifiedIdentifier        (plain IDENT or table.col)
+//	       | FunctionCall               (IDENT followed by '(')
+//	       | '(' Expression ')'
+//	       | ( '+' | '-' ) Factor
+//
+// The IDENT disambiguation is the only place where peek is needed:
+//   - IDENT + peek '(' → FunctionCall
+//   - IDENT + anything else → QualifiedIdentifier
 func (p *Parser) parseFactor() (ast.Expression, error) {
 	start := p.currentStart()
 
 	switch p.current.Type {
-	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS:
+	case utils.TOKEN_PLUS, utils.TOKEN_MINUS:
 		op := p.current.Type
 		p.advance()
-		operand, err := p.parseFactor()
+		operand, err := p.parseFactor() // right-recursive: grammar says `( '+' | '-' ) Factor`
 		if err != nil {
 			return nil, err
 		}
@@ -86,19 +98,19 @@ func (p *Parser) parseFactor() (ast.Expression, error) {
 			Operand:  operand,
 		}, nil
 
-	case lexer.TOKEN_LPAREN:
+	case utils.TOKEN_LPAREN:
 		p.advance() // consume '('
 		inner, err := p.parseExpression()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 		return &ast.ParenExpr{ExprBase: p.exprBase(start), Inner: inner}, nil
 
-	case lexer.TOKEN_IDENT:
-		if p.peekIs(lexer.TOKEN_LPAREN) {
+	case utils.TOKEN_IDENT:
+		if p.peekIs(utils.TOKEN_LPAREN) {
 			return p.parseFunctionCall()
 		}
 		return p.parseQualifiedIdentifier()
@@ -113,27 +125,28 @@ func (p *Parser) parseLiteral() (ast.Expression, error) {
 	start := p.currentStart()
 
 	switch p.current.Type {
-	case lexer.TOKEN_INTEGER:
+	case utils.TOKEN_INTEGER:
 		lit := p.current.Literal
 		p.advance()
 		return &ast.IntegerLiteral{ExprBase: p.exprBase(start), Value: lit}, nil
 
-	case lexer.TOKEN_FLOAT:
+	case utils.TOKEN_FLOAT:
 		lit := p.current.Literal
 		p.advance()
 		return &ast.FloatLiteral{ExprBase: p.exprBase(start), Value: lit}, nil
 
-	case lexer.TOKEN_STRING:
+	case utils.TOKEN_STRING:
+		// The lexer already stripped quotes and decoded escape sequences.
 		lit := p.current.Literal
 		p.advance()
 		return &ast.StringLiteral{ExprBase: p.exprBase(start), Value: lit}, nil
 
-	case lexer.TOKEN_TRUE, lexer.TOKEN_FALSE:
+	case utils.TOKEN_TRUE, utils.TOKEN_FALSE:
 		lit := p.current.Literal
 		p.advance()
 		return &ast.BooleanLiteral{ExprBase: p.exprBase(start), Value: lit}, nil
 
-	case lexer.TOKEN_NULL:
+	case utils.TOKEN_NULL:
 		p.advance()
 		return &ast.NullLiteral{ExprBase: p.exprBase(start)}, nil
 
@@ -154,12 +167,12 @@ func (p *Parser) parseNumericLiteral() (ast.Expression, error) {
 	start := p.currentStart()
 
 	switch p.current.Type {
-	case lexer.TOKEN_INTEGER:
+	case utils.TOKEN_INTEGER:
 		lit := p.current.Literal
 		p.advance()
 		return &ast.IntegerLiteral{ExprBase: p.exprBase(start), Value: lit}, nil
 
-	case lexer.TOKEN_FLOAT:
+	case utils.TOKEN_FLOAT:
 		lit := p.current.Literal
 		p.advance()
 		return &ast.FloatLiteral{ExprBase: p.exprBase(start), Value: lit}, nil
@@ -186,20 +199,20 @@ func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 
 	switch {
 	// Zero-argument call: func()
-	case p.check(lexer.TOKEN_RPAREN):
+	case p.check(utils.TOKEN_RPAREN):
 		p.advance()
 
 	// Star form: COUNT(*)
-	case p.check(lexer.TOKEN_STAR):
+	case p.check(utils.TOKEN_STAR):
 		p.advance()
 		fc.Star = true
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 
 	// Argument list, optionally preceded by DISTINCT
 	default:
-		if p.match(lexer.TOKEN_DISTINCT) {
+		if p.match(utils.TOKEN_DISTINCT) {
 			fc.Distinct = true
 		}
 
@@ -209,7 +222,7 @@ func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 		}
 		fc.Args = append(fc.Args, arg)
 
-		for p.match(lexer.TOKEN_COMMA) {
+		for p.match(utils.TOKEN_COMMA) {
 			arg, err = p.parseSelectExpression()
 			if err != nil {
 				return nil, err
@@ -217,7 +230,7 @@ func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 			fc.Args = append(fc.Args, arg)
 		}
 
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 	}
@@ -231,7 +244,7 @@ func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 // VARCHAR lengths — places where the grammar requires a bare integer, not a
 // full arithmetic expression.
 func (p *Parser) parseIntegerLiteralValue() (int, error) {
-	tok, err := p.expect(lexer.TOKEN_INTEGER)
+	tok, err := p.expect(utils.TOKEN_INTEGER)
 	if err != nil {
 		return 0, err
 	}
@@ -252,7 +265,7 @@ func (p *Parser) parseIntegerLiteralValue() (int, error) {
 func (p *Parser) parseExpressionFromFactor(start diagnostic.Pos, factor ast.Expression) (ast.Expression, error) {
 	// Term tail: * / %
 	left := factor
-	for p.check(lexer.TOKEN_STAR) || p.check(lexer.TOKEN_SLASH) || p.check(lexer.TOKEN_PERCENT) {
+	for p.check(utils.TOKEN_STAR) || p.check(utils.TOKEN_SLASH) || p.check(utils.TOKEN_PERCENT) {
 		op := p.current.Type
 		p.advance()
 		right, err := p.parseFactor()
@@ -263,7 +276,7 @@ func (p *Parser) parseExpressionFromFactor(start diagnostic.Pos, factor ast.Expr
 	}
 
 	// Expression tail: + -
-	for p.check(lexer.TOKEN_PLUS) || p.check(lexer.TOKEN_MINUS) {
+	for p.check(utils.TOKEN_PLUS) || p.check(utils.TOKEN_MINUS) {
 		op := p.current.Type
 		p.advance()
 		right, err := p.parseTerm()

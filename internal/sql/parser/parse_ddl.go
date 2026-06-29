@@ -2,10 +2,12 @@ package parser
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
-// parseCreateDatabaseStatement handles: CREATE DATABASE [IF NOT EXISTS] Identifier
+// parseCreateDatabaseStatement handles:
+//
+//	CREATE DATABASE [IF NOT EXISTS] Identifier
 func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error) {
 	start := p.currentStart()
 	p.advance() // CREATE
@@ -28,7 +30,9 @@ func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error)
 	}, nil
 }
 
-// parseUseDatabaseStatement handles: USE Identifier
+// parseUseDatabaseStatement handles:
+//
+//	USE Identifier
 func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 	start := p.currentStart()
 	p.advance() // USE
@@ -44,7 +48,9 @@ func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 	}, nil
 }
 
-// parseDropDatabaseStatement handles: DROP DATABASE [IF EXISTS] Identifier
+// parseDropDatabaseStatement handles:
+//
+//	DROP DATABASE [IF EXISTS] Identifier
 func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 	start := p.currentStart()
 	p.advance() // DROP
@@ -67,8 +73,9 @@ func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 	}, nil
 }
 
-// parseCreateTableStatement handles: CREATE TABLE [IF NOT EXISTS]
-// QualifiedIdentifier '(' ColumnDefinition (',' ColumnDefinition)* ')'
+// parseCreateTableStatement handles:
+//
+//	CREATE TABLE [IF NOT EXISTS] QualifiedIdentifier '(' ColumnDefinition (',' ColumnDefinition)* ')'
 func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 	start := p.currentStart()
 	p.advance() // CREATE
@@ -84,7 +91,7 @@ func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 		return nil, err
 	}
 
-	if _, err := p.expect(lexer.TOKEN_LPAREN); err != nil {
+	if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
 		return nil, err
 	}
 
@@ -93,7 +100,7 @@ func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 		return nil, err
 	}
 
-	if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+	if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 		return nil, err
 	}
 
@@ -105,12 +112,14 @@ func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 	}, nil
 }
 
-// parseAlterTableStatement handles: ALTER TABLE QualifiedIdentifier AlterAction
+// parseAlterTableStatement handles:
+//
+//	ALTER TABLE QualifiedIdentifier AlterAction
 func (p *Parser) parseAlterTableStatement() (*ast.AlterTableStmt, error) {
 	start := p.currentStart()
 	p.advance() // ALTER
 
-	if _, err := p.expect(lexer.TOKEN_TABLE); err != nil {
+	if _, err := p.expect(utils.TOKEN_TABLE); err != nil {
 		return nil, err
 	}
 
@@ -142,13 +151,13 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 	start := p.currentStart()
 
 	switch p.current.Type {
-	case lexer.TOKEN_ADD, lexer.TOKEN_MODIFY:
+	case utils.TOKEN_ADD, utils.TOKEN_MODIFY:
 		kind := ast.AlterAdd
-		if p.check(lexer.TOKEN_MODIFY) {
+		if p.check(utils.TOKEN_MODIFY) {
 			kind = ast.AlterModify
 		}
 		p.advance()                 // ADD or MODIFY
-		p.match(lexer.TOKEN_COLUMN) // optional COLUMN keyword
+		p.match(utils.TOKEN_COLUMN) // optional COLUMN keyword
 
 		col, err := p.parseColumnDefinition()
 		if err != nil {
@@ -160,10 +169,11 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 			Column:     col,
 		}, nil
 
-	case lexer.TOKEN_RENAME:
+	case utils.TOKEN_RENAME:
 		p.advance() // RENAME
 		switch p.current.Type {
-		case lexer.TOKEN_TO:
+		case utils.TOKEN_TO:
+			// RENAME TO <new_table_name>
 			p.advance() // TO
 			newName, err := p.expectIdent()
 			if err != nil {
@@ -175,13 +185,14 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 				NewName:    newName,
 			}, nil
 
-		case lexer.TOKEN_COLUMN:
+		case utils.TOKEN_COLUMN:
+			// RENAME COLUMN <old> TO <new>
 			p.advance() // COLUMN
 			oldName, err := p.expectIdent()
 			if err != nil {
 				return nil, err
 			}
-			if _, err := p.expect(lexer.TOKEN_TO); err != nil {
+			if _, err := p.expect(utils.TOKEN_TO); err != nil {
 				return nil, err
 			}
 			newName, err := p.expectIdent()
@@ -204,9 +215,9 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 			)
 		}
 
-	case lexer.TOKEN_DROP:
+	case utils.TOKEN_DROP:
 		p.advance() // DROP
-		if _, err := p.expect(lexer.TOKEN_COLUMN); err != nil {
+		if _, err := p.expect(utils.TOKEN_COLUMN); err != nil {
 			return nil, err
 		}
 		dropName, err := p.expectIdent()
@@ -229,7 +240,9 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 	}
 }
 
-// parseDropTableStatement handles: DROP TABLE [IF EXISTS] QualifiedIdentifier
+// parseDropTableStatement handles:
+//
+//	DROP TABLE [IF EXISTS] QualifiedIdentifier
 func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 	start := p.currentStart()
 	p.advance() // DROP
@@ -254,7 +267,8 @@ func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 
 // parseColumnDefinitions parses a comma-separated list of column definitions.
 // Called after the opening '(' of a CREATE TABLE statement.
-// ColumnDefinitions = ColumnDefinition ( ',' ColumnDefinition )*
+//
+//	ColumnDefinitions = ColumnDefinition ( ',' ColumnDefinition )*
 func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 	col, err := p.parseColumnDefinition()
 	if err != nil {
@@ -262,7 +276,7 @@ func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 	}
 	cols := []*ast.ColumnDef{col}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		col, err = p.parseColumnDefinition()
 		if err != nil {
 			return nil, err
@@ -273,7 +287,8 @@ func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 }
 
 // parseColumnDefinition parses a single column definition:
-// ColumnDefinition = Identifier DataType ColumnConstraint*
+//
+//	ColumnDefinition = Identifier DataType ColumnConstraint*
 func (p *Parser) parseColumnDefinition() (*ast.ColumnDef, error) {
 	start := p.currentStart()
 
@@ -318,12 +333,12 @@ func (p *Parser) parseColumnConstraints() ([]ast.Clause, error) {
 // constraint. This is the FIRST set of the ColumnConstraint rule.
 func (p *Parser) isConstraintStart() bool {
 	switch p.current.Type {
-	case lexer.TOKEN_PRIMARY,
-		lexer.TOKEN_UNIQUE,
-		lexer.TOKEN_NOT,
-		lexer.TOKEN_NULL,
-		lexer.TOKEN_DEFAULT,
-		lexer.TOKEN_REFERENCES:
+	case utils.TOKEN_PRIMARY,
+		utils.TOKEN_UNIQUE,
+		utils.TOKEN_NOT,
+		utils.TOKEN_NULL,
+		utils.TOKEN_DEFAULT,
+		utils.TOKEN_REFERENCES:
 		return true
 	}
 	return false
@@ -334,29 +349,29 @@ func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 	start := p.currentStart()
 
 	switch p.current.Type {
-	case lexer.TOKEN_PRIMARY:
+	case utils.TOKEN_PRIMARY:
 		p.advance() // PRIMARY
-		if _, err := p.expect(lexer.TOKEN_KEY); err != nil {
+		if _, err := p.expect(utils.TOKEN_KEY); err != nil {
 			return nil, err
 		}
 		return &ast.PrimaryKeyConstraint{ClauseBase: p.clauseBase(start)}, nil
 
-	case lexer.TOKEN_UNIQUE:
+	case utils.TOKEN_UNIQUE:
 		p.advance() // UNIQUE
 		return &ast.UniqueConstraint{ClauseBase: p.clauseBase(start)}, nil
 
-	case lexer.TOKEN_NOT:
+	case utils.TOKEN_NOT:
 		p.advance() // NOT
-		if _, err := p.expect(lexer.TOKEN_NULL); err != nil {
+		if _, err := p.expect(utils.TOKEN_NULL); err != nil {
 			return nil, err
 		}
 		return &ast.NotNullConstraint{ClauseBase: p.clauseBase(start)}, nil
 
-	case lexer.TOKEN_NULL:
+	case utils.TOKEN_NULL:
 		p.advance() // NULL
 		return &ast.NullConstraint{ClauseBase: p.clauseBase(start)}, nil
 
-	case lexer.TOKEN_DEFAULT:
+	case utils.TOKEN_DEFAULT:
 		p.advance() // DEFAULT
 		lit, err := p.parseSignedLiteral()
 		if err != nil {
@@ -364,20 +379,20 @@ func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 		}
 		return &ast.DefaultConstraint{ClauseBase: p.clauseBase(start), Value: lit}, nil
 
-	case lexer.TOKEN_REFERENCES:
+	case utils.TOKEN_REFERENCES:
 		p.advance() // REFERENCES
 		table, err := p.expectIdent()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_LPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
 			return nil, err
 		}
 		col, err := p.expectIdent()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 		return &ast.ReferencesConstraint{
@@ -387,6 +402,7 @@ func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 		}, nil
 
 	default:
+		// Should be unreachable if isConstraintStart is correct.
 		return nil, p.errorf(
 			p.current.Span,
 			CodeUnexpectedToken,
@@ -401,36 +417,36 @@ func (p *Parser) parseDataType() (*ast.DataType, error) {
 	start := p.currentStart()
 
 	switch p.current.Type {
-	case lexer.TOKEN_INT:
+	case utils.TOKEN_INT:
 		p.advance()
 		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeInt}, nil
 
-	case lexer.TOKEN_BIGINT:
+	case utils.TOKEN_BIGINT:
 		p.advance()
 		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeBigInt}, nil
 
-	case lexer.TOKEN_BOOLEAN:
+	case utils.TOKEN_BOOLEAN:
 		p.advance()
 		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeBoolean}, nil
 
-	case lexer.TOKEN_TEXT:
+	case utils.TOKEN_TEXT:
 		p.advance()
 		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeText}, nil
 
-	case lexer.TOKEN_TIMESTAMP:
+	case utils.TOKEN_TIMESTAMP:
 		p.advance()
 		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeTimestamp}, nil
 
-	case lexer.TOKEN_VARCHAR:
+	case utils.TOKEN_VARCHAR:
 		p.advance() // VARCHAR
-		if _, err := p.expect(lexer.TOKEN_LPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
 			return nil, err
 		}
 		n, err := p.parseIntegerLiteralValue()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := p.expect(lexer.TOKEN_RPAREN); err != nil {
+		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
 		return &ast.DataType{
@@ -453,7 +469,7 @@ func (p *Parser) parseDataType() (*ast.DataType, error) {
 func (p *Parser) parseQualifiedIdentifier() (*ast.Identifier, error) {
 	start := p.currentStart()
 
-	nameTok, err := p.expect(lexer.TOKEN_IDENT)
+	nameTok, err := p.expect(utils.TOKEN_IDENT)
 	if err != nil {
 		return nil, err
 	}
@@ -462,9 +478,9 @@ func (p *Parser) parseQualifiedIdentifier() (*ast.Identifier, error) {
 	qualifier := ""
 
 	// Only consume the dot if it is followed by another IDENT (not '*' or EOF).
-	if p.check(lexer.TOKEN_DOT) && p.peekIs(lexer.TOKEN_IDENT) {
-		p.advance()
-		qualTok, err := p.expect(lexer.TOKEN_IDENT)
+	if p.check(utils.TOKEN_DOT) && p.peekIs(utils.TOKEN_IDENT) {
+		p.advance() // consume '.'
+		qualTok, err := p.expect(utils.TOKEN_IDENT)
 		if err != nil {
 			return nil, err
 		}
@@ -485,10 +501,10 @@ func (p *Parser) parseSignedLiteral() (*ast.SignedLiteral, error) {
 	start := p.currentStart()
 	negative := false
 
-	if p.check(lexer.TOKEN_MINUS) {
+	if p.check(utils.TOKEN_MINUS) {
 		p.advance()
 		negative = true
-	} else if p.check(lexer.TOKEN_PLUS) {
+	} else if p.check(utils.TOKEN_PLUS) {
 		p.advance()
 	}
 
@@ -513,14 +529,14 @@ func (p *Parser) parseSignedLiteral() (*ast.SignedLiteral, error) {
 
 // parseIfNotExists consumes [IF NOT EXISTS] and returns the flag.
 func (p *Parser) parseIfNotExists() (bool, error) {
-	if !p.check(lexer.TOKEN_IF) {
+	if !p.check(utils.TOKEN_IF) {
 		return false, nil
 	}
 	p.advance() // IF
-	if _, err := p.expect(lexer.TOKEN_NOT); err != nil {
+	if _, err := p.expect(utils.TOKEN_NOT); err != nil {
 		return false, err
 	}
-	if _, err := p.expect(lexer.TOKEN_EXISTS); err != nil {
+	if _, err := p.expect(utils.TOKEN_EXISTS); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -528,11 +544,11 @@ func (p *Parser) parseIfNotExists() (bool, error) {
 
 // parseIfExists consumes [IF EXISTS] and returns the flag.
 func (p *Parser) parseIfExists() (bool, error) {
-	if !p.check(lexer.TOKEN_IF) {
+	if !p.check(utils.TOKEN_IF) {
 		return false, nil
 	}
 	p.advance() // IF
-	if _, err := p.expect(lexer.TOKEN_EXISTS); err != nil {
+	if _, err := p.expect(utils.TOKEN_EXISTS); err != nil {
 		return false, err
 	}
 	return true, nil

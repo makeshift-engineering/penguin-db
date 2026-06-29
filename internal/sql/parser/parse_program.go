@@ -2,53 +2,45 @@ package parser
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
-// parseStatement dispatches to the correct statement parser based on the
-// current token. This is the only function that looks at the statement-level
-// keyword; every sub-parser assumes its leading keyword is still in p.current
-// when called.
 func (p *Parser) parseStatement() (ast.Statement, error) {
 	switch p.current.Type {
-	case lexer.TOKEN_CREATE:
+	case utils.TOKEN_CREATE:
 		return p.parseCreateStatement()
-	case lexer.TOKEN_DROP:
+	case utils.TOKEN_DROP:
 		return p.parseDropStatement()
-	case lexer.TOKEN_ALTER:
+	case utils.TOKEN_ALTER:
 		return p.parseAlterTableStatement()
-	case lexer.TOKEN_USE:
+	case utils.TOKEN_USE:
 		return p.parseUseDatabaseStatement()
-	case lexer.TOKEN_SELECT:
+	case utils.TOKEN_SELECT:
 		return p.parseSelectStatement()
-	case lexer.TOKEN_INSERT:
+	case utils.TOKEN_INSERT:
 		return p.parseInsertStatement()
-	case lexer.TOKEN_UPDATE:
+	case utils.TOKEN_UPDATE:
 		return p.parseUpdateStatement()
-	case lexer.TOKEN_DELETE:
+	case utils.TOKEN_DELETE:
 		return p.parseDeleteStatement()
 	default:
 		return nil, p.errorf(
 			p.current.Span,
 			CodeMalformedStatement,
-			"unexpected token %q: expected a statement keyword (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, USE)",
+			"unexpected token %q: expected a statement keyword",
 			p.current.Literal,
 		)
 	}
 }
 
-// parseCreateStatement reads the token after CREATE (still in peek at this
-// point) to decide which CREATE variant to dispatch to.
 func (p *Parser) parseCreateStatement() (ast.Statement, error) {
-	// peek holds the token immediately after CREATE
 	switch p.tokens.Peek().Type {
-	case lexer.TOKEN_DATABASE:
+	case utils.TOKEN_DATABASE:
 		return p.parseCreateDatabaseStatement()
-	case lexer.TOKEN_TABLE:
+	case utils.TOKEN_TABLE:
 		return p.parseCreateTableStatement()
 	default:
-		// Consume CREATE so the error span points at the unexpected token.
-		p.advance()
+		p.advance() // consume CREATE so the span points at the bad token
 		return nil, p.errorf(
 			p.current.Span,
 			CodeMalformedStatement,
@@ -58,12 +50,11 @@ func (p *Parser) parseCreateStatement() (ast.Statement, error) {
 	}
 }
 
-// parseDropStatement uses the same peek-ahead technique as parseCreateStatement.
 func (p *Parser) parseDropStatement() (ast.Statement, error) {
 	switch p.tokens.Peek().Type {
-	case lexer.TOKEN_DATABASE:
+	case utils.TOKEN_DATABASE:
 		return p.parseDropDatabaseStatement()
-	case lexer.TOKEN_TABLE:
+	case utils.TOKEN_TABLE:
 		return p.parseDropTableStatement()
 	default:
 		p.advance()

@@ -3,50 +3,68 @@ package parser
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // Parser is a single-pass recursive descent parser.
 type Parser struct {
-	tokens  *utils.LookaheadIterator[lexer.Token]
-	lex     *lexer.Lexer
-	current lexer.Token
+	tokens  *utils.LookaheadIterator[utils.Token]
+	current utils.Token
 	diag    diagnostic.List
 	source  *diagnostic.Source
 }
 
-// New creates a Parser for the token stream produced by l.
-func New(l *lexer.Lexer, src *diagnostic.Source) *Parser {
+// New creates a Parser over the given pre-lexed token slice.
+//
+// tokens must be the slice produced by lexer.Tokenize() — it must end with a
+// TOKEN_EOF entry. The lexer's diagnostic list (lex errors) should be merged
+// with the parser's own list by the caller after parsing; the parser itself
+// has no reference to the lexer.
+//
+// One advance() call primes p.current with the first token. The iterator
+// lazily buffers the second token on the first Peek() call.
+func New(tokens []utils.Token, src *diagnostic.Source) *Parser {
+	// Build a closure over the slice that acts as a token source.
+	// Once the slice is exhausted the closure returns TOKEN_EOF repeatedly
+	// (the lexer already appended one, so this only triggers if the caller
+	// reads past it — defensive behaviour only).
+	i := 0
+	next := func() utils.Token {
+		if i >= len(tokens) {
+			return utils.Token{Type: utils.TOKEN_EOF}
+		}
+		tok := tokens[i]
+		i++
+		return tok
+	}
+
 	p := &Parser{
-		tokens: utils.NewLookaheadIterator(l.NextToken),
-		lex:    l,
+		tokens: utils.NewLookaheadIterator[utils.Token](next),
 		source: src,
 	}
-	p.advance()
+	p.advance() // prime current with the first token
 	return p
 }
 
-// advance consumes the next token from the stream, storing it in p.current.
+// advance consumes the next token from the iterator into p.current.
+// This is the only place in the parser that reads from the iterator.
 func (p *Parser) advance() {
 	p.current = p.tokens.Next()
 }
 
-// check reports whether the current token has the given type.
-// Does not consume.
-func (p *Parser) check(t lexer.TokenType) bool {
+// check reports whether the current token has the given type. Does not consume.
+func (p *Parser) check(t utils.TokenType) bool {
 	return p.current.Type == t
 }
 
-// peekIs reports whether the lookahead token (the token after current)
-// has the given type. Does not consume either token.
-func (p *Parser) peekIs(t lexer.TokenType) bool {
+// peekIs reports whether the lookahead token has the given type. Does not consume.
+func (p *Parser) peekIs(t utils.TokenType) bool {
 	return p.tokens.Peek().Type == t
 }
 
 // match consumes current and returns true if it matches any of the given types.
 // Returns false without consuming if nothing matches.
-func (p *Parser) match(types ...lexer.TokenType) bool {
+func (p *Parser) match(types ...utils.TokenType) bool {
 	for _, t := range types {
 		if p.check(t) {
 			p.advance()
@@ -58,9 +76,9 @@ func (p *Parser) match(types ...lexer.TokenType) bool {
 
 // expect consumes and returns current if its type matches t.
 // On a mismatch it records an UnexpectedToken diagnostic and returns an error.
-func (p *Parser) expect(t lexer.TokenType) (lexer.Token, error) {
+func (p *Parser) expect(t utils.TokenType) (utils.Token, error) {
 	if !p.check(t) {
-		return lexer.Token{}, p.errorf(
+		return utils.Token{}, p.errorf(
 			p.current.Span,
 			CodeUnexpectedToken,
 			"expected %s, got %s (%q)",
@@ -73,8 +91,9 @@ func (p *Parser) expect(t lexer.TokenType) (lexer.Token, error) {
 }
 
 // expectIdent consumes and returns the Literal of current if it is TOKEN_IDENT.
+// Keywords are intentionally rejected — `CREATE TABLE select (…)` is an error.
 func (p *Parser) expectIdent() (string, error) {
-	tok, err := p.expect(lexer.TOKEN_IDENT)
+	tok, err := p.expect(utils.TOKEN_IDENT)
 	if err != nil {
 		return "", err
 	}
@@ -82,13 +101,13 @@ func (p *Parser) expectIdent() (string, error) {
 }
 
 // currentStart returns the start position of the current (not-yet-consumed)
-// token. Call this as the very first line of every parse function.
+// token. Must be called as the very first line of every parse function.
 func (p *Parser) currentStart() diagnostic.Pos {
 	return p.current.Span.Start
 }
 
-// spanFrom builds a [Start, End) Span from the given start position to the
-// end of the last consumed token. Call after the final consume in a rule.
+// spanFrom builds a [Start, End) Span covering from start through the end
+// of the last consumed token. Call after the final advance/expect in a rule.
 func (p *Parser) spanFrom(start diagnostic.Pos) diagnostic.Span {
 	return diagnostic.Span{Start: start, End: p.current.Span.End}
 }
@@ -113,15 +132,14 @@ func (p *Parser) clauseBase(start diagnostic.Pos) ast.ClauseBase {
 	return ast.ClauseBase{NodeBase: p.nodeBase(start)}
 }
 
-// Parse is the public entry point. It runs the program loop, collecting
-// statements until EOF. On a statement error it synchronizes to the next
-// boundary and continues, accumulating all diagnostics. Returns nil and the
-// diagnostic list if any errors were found.
+// Parse runs the statement loop until TOKEN_EOF. Errors within a statement
+// trigger synchronization so subsequent statements can still be parsed.
+// Returns nil and the diagnostic list if any error was found.
 func (p *Parser) Parse() (*ast.Program, error) {
 	start := p.currentStart()
 	prog := &ast.Program{}
 
-	for !p.check(lexer.TOKEN_EOF) {
+	for !p.check(utils.TOKEN_EOF) {
 		stmt, err := p.parseStatement()
 		if err != nil {
 			p.synchronize()
@@ -129,40 +147,40 @@ func (p *Parser) Parse() (*ast.Program, error) {
 		}
 		prog.Statements = append(prog.Statements, stmt)
 
-		if _, err := p.expect(lexer.TOKEN_SEMICOLON); err != nil {
+		if _, err := p.expect(utils.TOKEN_SEMICOLON); err != nil {
 			p.synchronize()
 		}
 	}
 
 	prog.NodeSpan = p.spanFrom(start)
 
-	if p.Diagnostics().HasErrors() {
-		return nil, p.Diagnostics().AsError()
+	if p.diag.HasErrors() {
+		return nil, p.diag.AsError()
 	}
 	return prog, nil
 }
 
-// Diagnostics returns the combined lexer + parser diagnostic list.
-// Lexer errors appear first. Safe to call before or after Parse.
+// Diagnostics returns the parser-level diagnostic list.
+// The caller is responsible for merging this with the lexer's diagnostic list
+// to get a complete picture of all errors.
 func (p *Parser) Diagnostics() diagnostic.List {
-	lexDiag := p.lex.Diagnostics()
-	all := make(diagnostic.List, 0, len(lexDiag)+len(p.diag))
-	all = append(all, lexDiag...)
-	all = append(all, p.diag...)
-	return all
+	return p.diag
 }
 
-// synchronize discards tokens until a safe recovery point
+// synchronize discards tokens until a safe recovery boundary:
+//   - TOKEN_SEMICOLON  → consumed, return (outer loop won't re-consume it)
+//   - Statement keyword → NOT consumed (outer loop will parse the next statement)
+//   - TOKEN_EOF        → stop
 func (p *Parser) synchronize() {
-	for !p.check(lexer.TOKEN_EOF) {
-		if p.check(lexer.TOKEN_SEMICOLON) {
+	for !p.check(utils.TOKEN_EOF) {
+		if p.check(utils.TOKEN_SEMICOLON) {
 			p.advance()
 			return
 		}
 		switch p.current.Type {
-		case lexer.TOKEN_SELECT, lexer.TOKEN_INSERT, lexer.TOKEN_UPDATE,
-			lexer.TOKEN_DELETE, lexer.TOKEN_CREATE, lexer.TOKEN_DROP,
-			lexer.TOKEN_ALTER, lexer.TOKEN_USE:
+		case utils.TOKEN_SELECT, utils.TOKEN_INSERT, utils.TOKEN_UPDATE,
+			utils.TOKEN_DELETE, utils.TOKEN_CREATE, utils.TOKEN_DROP,
+			utils.TOKEN_ALTER, utils.TOKEN_USE:
 			return
 		}
 		p.advance()

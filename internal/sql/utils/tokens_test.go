@@ -1,4 +1,4 @@
-package lexer
+package utils
 
 import (
 	"fmt"
@@ -141,7 +141,7 @@ func TestToken_String(t *testing.T) {
 // TestLookupIdent_ReturnsKeywordType tests lookup ident returns keyword type.
 func TestLookupIdent_ReturnsKeywordType(t *testing.T) {
 	for word, expected := range keywords {
-		got := lookupIdent(word)
+		got := LookupIdent(word)
 		if got != expected {
 			t.Errorf("lookupIdent(%q) = %v, want %v", word, got, expected)
 		}
@@ -163,7 +163,7 @@ func TestLookupIdent_CaseInsensitive(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
-			got := lookupIdent(tc.input)
+			got := LookupIdent(tc.input)
 			if got != tc.want {
 				t.Errorf("lookupIdent(%q) = %v, want %v", tc.input, got, tc.want)
 			}
@@ -178,7 +178,7 @@ func TestLookupIdent_ReturnsIdentForNonKeywords(t *testing.T) {
 		"selection", "fromage", "orderly", "deleteme",
 	}
 	for _, word := range nonKeywords {
-		got := lookupIdent(word)
+		got := LookupIdent(word)
 		if got != TOKEN_IDENT {
 			t.Errorf("lookupIdent(%q) = %v, want TOKEN_IDENT", word, got)
 		}

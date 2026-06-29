@@ -3,7 +3,7 @@ package parser
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // parseSelectStatement handles the full SELECT syntax:
@@ -15,15 +15,20 @@ import (
 //	       [HAVING Condition]
 //	       [ORDER BY OrderByItem (',' OrderByItem)*]
 //	       [LIMIT Integer [OFFSET Integer]]
+//
+// Clause ordering is enforced by checking each keyword in the exact grammar
+// order. An out-of-order clause (e.g. LIMIT before WHERE) produces an
+// "expected ';'" error at the right position, pointing directly at the misplaced
+// keyword.
 func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	start := p.currentStart()
 	p.advance() // SELECT
 
 	distinct, all := false, false
 	switch {
-	case p.match(lexer.TOKEN_DISTINCT):
+	case p.match(utils.TOKEN_DISTINCT):
 		distinct = true
-	case p.match(lexer.TOKEN_ALL):
+	case p.match(utils.TOKEN_ALL):
 		all = true
 	}
 
@@ -33,7 +38,7 @@ func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	}
 
 	var from []*ast.TableRef
-	if p.match(lexer.TOKEN_FROM) {
+	if p.match(utils.TOKEN_FROM) {
 		from, err = p.parseTableReferences()
 		if err != nil {
 			return nil, err
@@ -41,7 +46,7 @@ func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	}
 
 	var where *ast.WhereClause
-	if p.check(lexer.TOKEN_WHERE) {
+	if p.check(utils.TOKEN_WHERE) {
 		where, err = p.parseWhereClause()
 		if err != nil {
 			return nil, err
@@ -49,7 +54,7 @@ func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	}
 
 	var groupBy *ast.GroupByClause
-	if p.check(lexer.TOKEN_GROUP) {
+	if p.check(utils.TOKEN_GROUP) {
 		groupBy, err = p.parseGroupByClause()
 		if err != nil {
 			return nil, err
@@ -57,7 +62,7 @@ func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	}
 
 	var having *ast.HavingClause
-	if p.check(lexer.TOKEN_HAVING) {
+	if p.check(utils.TOKEN_HAVING) {
 		having, err = p.parseHavingClause()
 		if err != nil {
 			return nil, err
@@ -65,7 +70,7 @@ func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	}
 
 	var orderBy *ast.OrderByClause
-	if p.check(lexer.TOKEN_ORDER) {
+	if p.check(utils.TOKEN_ORDER) {
 		orderBy, err = p.parseOrderByClause()
 		if err != nil {
 			return nil, err
@@ -73,7 +78,7 @@ func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	}
 
 	var limit *ast.LimitClause
-	if p.check(lexer.TOKEN_LIMIT) {
+	if p.check(utils.TOKEN_LIMIT) {
 		limit, err = p.parseLimitClause()
 		if err != nil {
 			return nil, err
@@ -102,7 +107,7 @@ func (p *Parser) parseSelectList() ([]*ast.SelectColumn, error) {
 	}
 	cols := []*ast.SelectColumn{col}
 
-	for p.match(lexer.TOKEN_COMMA) {
+	for p.match(utils.TOKEN_COMMA) {
 		col, err = p.parseSelectColumn()
 		if err != nil {
 			return nil, err
@@ -116,17 +121,20 @@ func (p *Parser) parseSelectList() ([]*ast.SelectColumn, error) {
 func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 	start := p.currentStart()
 
-	if p.check(lexer.TOKEN_STAR) {
+	if p.check(utils.TOKEN_STAR) {
 		p.advance()
 		return &ast.SelectColumn{ClauseBase: p.clauseBase(start), Star: true}, nil
 	}
 
-	if p.check(lexer.TOKEN_IDENT) && p.peekIs(lexer.TOKEN_DOT) {
+	if p.check(utils.TOKEN_IDENT) && p.peekIs(utils.TOKEN_DOT) {
+		// Save and consume the first identifier.
 		firstTok := p.current
-		p.advance()
+		p.advance() // consume IDENT
+		// current == '.', peek == ???
 
 		switch p.tokens.Peek().Type {
-		case lexer.TOKEN_STAR:
+		case utils.TOKEN_STAR:
+			// Pattern: IDENT '.' '*'  →  single-level qualified wildcard (table.*)
 			p.advance() // consume '.'
 			p.advance() // consume '*'
 			ident := &ast.Identifier{
@@ -138,12 +146,14 @@ func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 				QualifiedStar: ident,
 			}, nil
 
-		case lexer.TOKEN_IDENT:
+		case utils.TOKEN_IDENT:
+			// Pattern: IDENT '.' IDENT — could be db.table.* or table.col[…]
 			p.advance() // consume '.'
 			secondTok := p.current
 			p.advance() // consume second IDENT
 
-			if p.check(lexer.TOKEN_DOT) && p.peekIs(lexer.TOKEN_STAR) {
+			if p.check(utils.TOKEN_DOT) && p.peekIs(utils.TOKEN_STAR) {
+				// Pattern: IDENT '.' IDENT '.' '*'  →  two-level wildcard (db.table.*)
 				p.advance() // consume '.'
 				p.advance() // consume '*'
 				ident := &ast.Identifier{
@@ -157,6 +167,7 @@ func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 				}, nil
 			}
 
+			// Pattern: IDENT '.' IDENT [not followed by '.'  '*']
 			qualIdent := &ast.Identifier{
 				ExprBase:  p.exprBase(start),
 				Name:      secondTok.Literal,
@@ -165,6 +176,7 @@ func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 			return p.parseSelectColumnFromPrimary(start, qualIdent)
 
 		default:
+			// IDENT '.' <something unexpected>
 			return nil, p.errorf(
 				p.tokens.Peek().Span,
 				CodeUnexpectedToken,
@@ -223,12 +235,12 @@ func (p *Parser) parseSelectColumnFromPrimary(start diagnostic.Pos, primary *ast
 // parseOptionalAlias consumes ['AS'] Identifier if present and returns the alias
 // string. Returns "" if no alias follows.
 func (p *Parser) parseOptionalAlias() (string, error) {
-	if p.match(lexer.TOKEN_AS) {
+	if p.match(utils.TOKEN_AS) {
 		return p.expectIdent()
 	}
 	// Implicit alias: a bare IDENT that is not a clause keyword.
 	// Only TOKEN_IDENT qualifies — keywords like WHERE, JOIN, etc. are not aliases.
-	if p.check(lexer.TOKEN_IDENT) {
+	if p.check(utils.TOKEN_IDENT) {
 		alias := p.current.Literal
 		p.advance()
 		return alias, nil
