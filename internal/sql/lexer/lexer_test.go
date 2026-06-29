@@ -12,6 +12,7 @@ import (
 type Token = utils.Token
 type TokenType = utils.TokenType
 
+//nolint:revive // We prefer ALL_CAPS for token constants
 const (
 	TOKEN_EOF        = utils.TOKEN_EOF
 	TOKEN_ILLEGAL    = utils.TOKEN_ILLEGAL
