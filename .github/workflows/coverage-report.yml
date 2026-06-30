@@ -1,0 +1,256 @@
+name: Coverage Report
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  coverage:
+    if: >
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/coverage') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    name: Package Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      - name: Get PR ref and changed files
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('sha', pr.data.head.sha);
+            core.setOutput('ref', pr.data.head.ref);
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            const goFiles = files
+              .filter(f => f.filename.endsWith('.go') && f.status !== 'removed')
+              .map(f => f.filename);
+            fs.writeFileSync('changed_files.txt', goFiles.join('\n'));
+
+      # UNTRUSTED: checks out PR head code. No credentials persisted here,
+      # so the write-scoped token is never reachable from this code.
+      - name: Checkout PR code (untrusted)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          path: pr-code
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: pr-code/go.mod
+
+      - name: Download dependencies
+        working-directory: pr-code
+        run: go mod download
+
+      - name: Run tests with coverage
+        working-directory: pr-code
+        run: go test -coverprofile=coverage.out -covermode=set ./...
+
+      - name: Build per-package coverage table (PR-affected packages only)
+        working-directory: pr-code
+        run: |
+          python3 - <<'EOF' > table.md
+          from collections import defaultdict
+
+          # Determine module path so coverage.out paths (which are
+          # module-prefixed) can be matched against changed_files.txt
+          # (which are repo-relative, as returned by the GitHub API).
+          with open("go.mod") as f:
+              module = f.readline().split()[1].strip()
+
+          changed_pkgs = set()
+          with open("../changed_files.txt") as f:
+              for line in f:
+                  line = line.strip()
+                  if not line:
+                      continue
+                  pkg = "/".join(line.split("/")[:-1]) or "."
+                  changed_pkgs.add(pkg)
+
+          covered = defaultdict(int)
+          total = defaultdict(int)
+
+          with open("coverage.out") as f:
+              next(f)  # skip "mode: set" line
+              for line in f:
+                  parts = line.split()
+                  if len(parts) != 3:
+                      continue
+                  file_part, num_stmt, count = parts
+                  path = file_part.split(":")[0]
+                  if path.startswith(module + "/"):
+                      path = path[len(module) + 1:]
+                  pkg = "/".join(path.split("/")[:-1]) or "."
+                  if pkg not in changed_pkgs:
+                      continue
+                  num_stmt = int(num_stmt)
+                  count = int(count)
+                  total[pkg] += num_stmt
+                  if count > 0:
+                      covered[pkg] += num_stmt
+
+          if not total:
+              print("_No package-level coverage data for the packages changed in this PR (non-Go changes, or no testable statements)._")
+          else:
+              rows = []
+              for pkg in sorted(total):
+                  pct = 100 * covered[pkg] / total[pkg] if total[pkg] else 0
+                  rows.append((pkg, pct, covered[pkg], total[pkg]))
+
+              overall_covered = sum(covered.values())
+              overall_total = sum(total.values())
+              overall_pct = 100 * overall_covered / overall_total if overall_total else 0
+
+              print("| Package | Coverage | Statements |")
+              print("|---|---|---|")
+              for pkg, pct, c, t in rows:
+                  print(f"| `{pkg}` | {pct:.1f}% | {c}/{t} |")
+              print(f"| **TOTAL (PR-affected)** | **{overall_pct:.1f}%** | **{overall_covered}/{overall_total}** |")
+          EOF
+          echo "Generated table:"
+          cat table.md
+
+      - name: Install go-cover-treemap
+        working-directory: pr-code
+        run: go install github.com/nikolaydubina/go-cover-treemap@latest
+
+      - name: Generate treemap SVGs
+        working-directory: pr-code
+        run: |
+          $(go env GOPATH)/bin/go-cover-treemap \
+            -coverprofile coverage.out \
+            -only-folders=false \
+            -percent=false \
+            > treemap-files.svg
+
+          $(go env GOPATH)/bin/go-cover-treemap \
+            -coverprofile coverage.out \
+            -only-folders=true \
+            -percent=true \
+            > treemap-packages.svg
+
+      # TRUSTED: publishes the SVG to a Gist instead of the repo, so nothing
+      # lands in repo history/branches. Requires a fine-grained PAT with
+      # ONLY the "gist" scope, stored as a repo secret (e.g. GIST_PAT) —
+      # the default GITHUB_TOKEN cannot create gists.
+      - name: Publish treemaps to Gist
+        id: publish
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_PAT }}
+          GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const filesSvg = fs.readFileSync('pr-code/treemap-files.svg', 'utf8');
+            const pkgsSvg = fs.readFileSync('pr-code/treemap-packages.svg', 'utf8');
+            const filesName = `treemap-files-pr${context.issue.number}.svg`;
+            const pkgsName = `treemap-packages-pr${context.issue.number}.svg`;
+
+            const headers = {
+              authorization: `token ${process.env.GIST_TOKEN}`,
+              accept: 'application/vnd.github+json',
+            };
+
+            const gistId = process.env.GIST_ID;
+            const url = gistId
+              ? `https://api.github.com/gists/${gistId}`
+              : `https://api.github.com/gists`;
+            const method = gistId ? 'PATCH' : 'POST';
+
+            const res = await fetch(url, {
+              method,
+              headers,
+              body: JSON.stringify({
+                description: 'Coverage treemaps (auto-published by CI)',
+                public: false,
+                files: {
+                  [filesName]: { content: filesSvg },
+                  [pkgsName]: { content: pkgsSvg },
+                },
+              }),
+            });
+
+            if (!res.ok) {
+              throw new Error(`Gist publish failed: ${res.status} ${await res.text()}`);
+            }
+
+            const data = await res.json();
+            core.setOutput('files_img_url', data.files[filesName].raw_url);
+            core.setOutput('pkgs_img_url', data.files[pkgsName].raw_url);
+            if (!gistId) {
+              core.warning(`Created new gist ${data.id} — set repo secret COVERAGE_GIST_ID to this value to reuse it on future runs instead of creating a new gist each time.`);
+            }
+
+      - name: Post coverage comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const table = fs.readFileSync('pr-code/table.md', 'utf8');
+            const filesImgUrl = '${{ steps.publish.outputs.files_img_url }}';
+            const pkgsImgUrl = '${{ steps.publish.outputs.pkgs_img_url }}';
+            const sha = '${{ steps.pr.outputs.sha }}'.substring(0, 7);
+
+            const body = [
+              `### Coverage report (\`${sha}\`)`,
+              '',
+              '_Packages changed in this PR:_',
+              '',
+              table,
+              '',
+              '<details><summary>Treemap — by file</summary>',
+              '',
+              `![coverage treemap by file](${filesImgUrl})`,
+              '',
+              '_Box size = statements per file. Color = coverage heat, red (low) → green (high)._',
+              '',
+              '</details>',
+              '',
+              '<details><summary>Treemap — by package (with %)</summary>',
+              '',
+              `![coverage treemap by package](${pkgsImgUrl})`,
+              '',
+              '_Box size = statements per package. Color = coverage heat, red (low) → green (high)._',
+              '',
+              '</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
