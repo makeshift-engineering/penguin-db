@@ -295,4 +295,3 @@ func (r *Reader) MaxKey() []byte {
 	}
 	return r.index[len(r.index)-1].key
 }
-

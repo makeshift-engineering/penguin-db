@@ -336,7 +336,7 @@ func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reade
 	iterator := mem.NewIterator()
 	for iterator.Valid() {
 		key, value, isDeleted := iterator.Next()
-		var opcode uint8 = sstable.OpcodePut
+		opcode := sstable.OpcodePut
 		if isDeleted {
 			opcode = sstable.OpcodeDelete
 		}
@@ -479,7 +479,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 		// Build the WAL records for this batch.
 		walRecords := make([]*wal.Record, 0, len(operations))
 		for _, operation := range operations {
-			walOpcode := uint8(wal.OpcodePut)
+			walOpcode := wal.OpcodePut
 			if operation.Type == OpDelete {
 				walOpcode = wal.OpcodeDelete
 			}
@@ -567,15 +567,11 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		}
 	}
 
-	var level0 []*sstable.Reader
-	var level1 []*sstable.Reader
+	level0 := make([]*sstable.Reader, 0, len(engine.levels[0]))
+	level0 = append(level0, engine.levels[0]...)
 
-	for _, sstableReader := range engine.levels[0] {
-		level0 = append(level0, sstableReader)
-	}
-	for _, sstableReader := range engine.levels[1] {
-		level1 = append(level1, sstableReader)
-	}
+	level1 := make([]*sstable.Reader, 0, len(engine.levels[1]))
+	level1 = append(level1, engine.levels[1]...)
 
 	engine.mu.RUnlock()
 
@@ -648,9 +644,9 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 
-	var pinned []*sstable.Reader
+	pinned := make([]*sstable.Reader, 0, len(engine.levels[0])+len(engine.levels[1]))
 
-	var level0 []*sstable.Reader
+	level0 := make([]*sstable.Reader, 0, len(engine.levels[0]))
 	for _, sstableReader := range engine.levels[0] {
 		engine.sstRefsMu.Lock()
 		engine.pinSSTable(sstableReader)
@@ -659,7 +655,7 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 		pinned = append(pinned, sstableReader)
 	}
 
-	var level1 []*sstable.Reader
+	level1 := make([]*sstable.Reader, 0, len(engine.levels[1]))
 	for _, sstableReader := range engine.levels[1] {
 		engine.sstRefsMu.Lock()
 		engine.pinSSTable(sstableReader)
@@ -923,10 +919,11 @@ func (engine *dbEngine) compactionWorker() {
 
 // collectCompactionInputs gathers the files and readers that will be merged.
 // Must be called with lock held.
-func (engine *dbEngine) collectCompactionInputs() ([]string, []int, []*sstable.Reader) {
-	var inputFiles []string
-	var fileIDs []int
-	var obsoleteReaders []*sstable.Reader
+func (engine *dbEngine) collectCompactionInputs() (inputFiles []string, fileIDs []int, obsoleteReaders []*sstable.Reader) {
+	capacity := len(engine.levels[0]) + len(engine.levels[1])
+	inputFiles = make([]string, 0, capacity)
+	fileIDs = make([]int, 0, capacity)
+	obsoleteReaders = make([]*sstable.Reader, 0, capacity)
 
 	for _, sstableReader := range engine.levels[0] {
 		inputFiles = append(inputFiles, sstableReader.FilePath())
