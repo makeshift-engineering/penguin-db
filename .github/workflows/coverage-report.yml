@@ -1,0 +1,181 @@
+name: Coverage Report
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  coverage:
+    if: >
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/coverage') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    name: Package Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      - name: Get PR ref
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            core.setOutput('sha', pr.data.head.sha);
+            core.setOutput('ref', pr.data.head.ref);
+
+      # UNTRUSTED: checks out PR head code. No credentials persisted here,
+      # so the write-scoped token is never reachable from this code.
+      - name: Checkout PR code (untrusted)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          path: pr-code
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: pr-code/go.mod
+
+      - name: Download dependencies
+        working-directory: pr-code
+        run: go mod download
+
+      - name: Run tests with coverage
+        working-directory: pr-code
+        run: go test -coverprofile=coverage.out -covermode=set ./...
+
+      - name: Build per-package coverage table
+        working-directory: pr-code
+        run: |
+          python3 - <<'EOF' > table.md
+          from collections import defaultdict
+
+          covered = defaultdict(int)
+          total = defaultdict(int)
+
+          with open("coverage.out") as f:
+              next(f)  # skip "mode: set" line
+              for line in f:
+                  parts = line.split()
+                  if len(parts) != 3:
+                      continue
+                  file_part, num_stmt, count = parts
+                  path = file_part.split(":")[0]
+                  pkg = "/".join(path.split("/")[:-1]) or "."
+                  num_stmt = int(num_stmt)
+                  count = int(count)
+                  total[pkg] += num_stmt
+                  if count > 0:
+                      covered[pkg] += num_stmt
+
+          rows = []
+          for pkg in sorted(total):
+              pct = 100 * covered[pkg] / total[pkg] if total[pkg] else 0
+              rows.append((pkg, pct, covered[pkg], total[pkg]))
+
+          overall_covered = sum(covered.values())
+          overall_total = sum(total.values())
+          overall_pct = 100 * overall_covered / overall_total if overall_total else 0
+
+          print("| Package | Coverage | Statements |")
+          print("|---|---|---|")
+          for pkg, pct, c, t in rows:
+              print(f"| `{pkg}` | {pct:.1f}% | {c}/{t} |")
+          print(f"| **TOTAL** | **{overall_pct:.1f}%** | **{overall_covered}/{overall_total}** |")
+          EOF
+          echo "Generated table:"
+          cat table.md
+
+      - name: Install go-cover-treemap
+        working-directory: pr-code
+        run: go install github.com/nikolaydubina/go-cover-treemap@latest
+
+      - name: Generate treemap SVG
+        working-directory: pr-code
+        run: |
+          $(go env GOPATH)/bin/go-cover-treemap -coverprofile coverage.out > treemap.svg
+
+      # TRUSTED: separate checkout of the base repo, no PR code involved.
+      # This is the only place the write-scoped token is used/persisted.
+      - name: Checkout base repo (trusted, for publishing)
+        uses: actions/checkout@v6
+        with:
+          path: report-repo
+          fetch-depth: 0
+
+      - name: Publish treemap to coverage-reports branch
+        id: publish
+        working-directory: report-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          IMG_PATH="pr-${{ github.event.issue.number }}/${{ steps.pr.outputs.sha }}/treemap.svg"
+
+          git fetch origin coverage-reports 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/coverage-reports; then
+            git checkout coverage-reports
+          else
+            git checkout --orphan coverage-reports
+            git rm -rf . 2>/dev/null || true
+          fi
+
+          mkdir -p "$(dirname "$IMG_PATH")"
+          cp "$GITHUB_WORKSPACE/pr-code/treemap.svg" "$IMG_PATH"
+
+          git add "$IMG_PATH"
+          git commit -m "Coverage treemap for PR #${{ github.event.issue.number }} (${{ steps.pr.outputs.sha }})"
+          git push origin coverage-reports
+
+          echo "img_path=$IMG_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Post coverage comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const table = fs.readFileSync('pr-code/table.md', 'utf8');
+            const imgPath = '${{ steps.publish.outputs.img_path }}';
+            const imgUrl = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/coverage-reports/${imgPath}`;
+            const sha = '${{ steps.pr.outputs.sha }}'.substring(0, 7);
+
+            const body = [
+              `### Coverage report (\`${sha}\`)`,
+              '',
+              table,
+              '',
+              '<details><summary>Treemap</summary>',
+              '',
+              `![coverage treemap](${imgUrl})`,
+              '',
+              '</details>',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
