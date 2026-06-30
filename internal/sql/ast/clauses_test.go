@@ -121,6 +121,121 @@ func TestClause_Validation(t *testing.T) {
 			wantErr: ast.ErrLengthNotSupported,
 		},
 		{
+			name: "DataType valid float",
+			node: &ast.DataType{
+				Kind: ast.TypeFloat,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "DataType valid double",
+			node: &ast.DataType{
+				Kind: ast.TypeDouble,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "DataType valid decimal no params",
+			node: &ast.DataType{
+				Kind: ast.TypeDecimal,
+			},
+			wantErr: nil,
+		},
+		{
+			name: "DataType valid decimal precision",
+			node: func() ast.Node {
+				precVal := 10
+				return &ast.DataType{
+					Kind:        ast.TypeDecimal,
+					DecimalPrec: &precVal,
+				}
+			}(),
+			wantErr: nil,
+		},
+		{
+			name: "DataType valid decimal precision and scale",
+			node: func() ast.Node {
+				precVal := 10
+				scaleVal := 2
+				return &ast.DataType{
+					Kind:         ast.TypeDecimal,
+					DecimalPrec:  &precVal,
+					DecimalScale: &scaleVal,
+				}
+			}(),
+			wantErr: nil,
+		},
+		{
+			name: "DataType invalid decimal negative precision",
+			node: func() ast.Node {
+				precVal := -5
+				return &ast.DataType{
+					Kind:        ast.TypeDecimal,
+					DecimalPrec: &precVal,
+				}
+			}(),
+			wantErr: ast.ErrDecimalPrecisionInvalid,
+		},
+		{
+			name: "DataType invalid decimal zero precision",
+			node: func() ast.Node {
+				precVal := 0
+				return &ast.DataType{
+					Kind:        ast.TypeDecimal,
+					DecimalPrec: &precVal,
+				}
+			}(),
+			wantErr: ast.ErrDecimalPrecisionInvalid,
+		},
+		{
+			name: "DataType invalid decimal scale without precision",
+			node: func() ast.Node {
+				scaleVal := 2
+				return &ast.DataType{
+					Kind:         ast.TypeDecimal,
+					DecimalScale: &scaleVal,
+				}
+			}(),
+			wantErr: ast.ErrDecimalScaleInvalid,
+		},
+		{
+			name: "DataType invalid decimal scale negative",
+			node: func() ast.Node {
+				precVal := 10
+				scaleVal := -1
+				return &ast.DataType{
+					Kind:         ast.TypeDecimal,
+					DecimalPrec:  &precVal,
+					DecimalScale: &scaleVal,
+				}
+			}(),
+			wantErr: ast.ErrDecimalScaleInvalid,
+		},
+		{
+			name: "DataType invalid decimal scale larger than precision",
+			node: func() ast.Node {
+				precVal := 10
+				scaleVal := 11
+				return &ast.DataType{
+					Kind:         ast.TypeDecimal,
+					DecimalPrec:  &precVal,
+					DecimalScale: &scaleVal,
+				}
+			}(),
+			wantErr: ast.ErrDecimalScaleInvalid,
+		},
+		{
+			name: "DataType invalid int with decimal params",
+			node: func() ast.Node {
+				precVal := 10
+				return &ast.DataType{
+					Kind:        ast.TypeInt,
+					DecimalPrec: &precVal,
+				}
+			}(),
+			wantErr: ast.ErrDecimalParamsNotSupported,
+		},
+		{
 			name: "JoinClause valid inner",
 			node: &ast.JoinClause{
 				Type:  ast.JoinInner,
