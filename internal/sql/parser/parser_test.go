@@ -67,7 +67,7 @@ func deepEqualNoSpan(v1, v2 reflect.Value) bool {
 	}
 
 	switch v1.Kind() {
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if v1.IsNil() || v2.IsNil() {
 			return v1.IsNil() == v2.IsNil()
 		}
