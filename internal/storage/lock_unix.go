@@ -30,7 +30,7 @@ func lockDirectory(dir string) (interface{ Close() error }, error) {
 	if err != nil {
 		closeErr := file.Close()
 		if closeErr != nil {
-			return nil, fmt.Errorf("failed to acquire exclusive LOCK on directory %s (already in use?): %w; additionally failed to close lock file: %v", dir, err, closeErr)
+			return nil, fmt.Errorf("failed to acquire exclusive LOCK on directory %s (already in use?): %w; additionally failed to close lock file: %w", dir, err, closeErr)
 		}
 		return nil, fmt.Errorf("failed to acquire exclusive LOCK on directory %s (already in use?): %w", dir, err)
 	}
