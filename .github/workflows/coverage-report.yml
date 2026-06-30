@@ -13,7 +13,10 @@ jobs:
   coverage:
     if: >
       github.event.issue.pull_request != null &&
-      contains(github.event.comment.body, '/coverage')
+      contains(github.event.comment.body, '/coverage') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
     name: Package Coverage
     runs-on: ubuntu-latest
 
@@ -42,22 +45,29 @@ jobs:
             core.setOutput('sha', pr.data.head.sha);
             core.setOutput('ref', pr.data.head.ref);
 
-      - uses: actions/checkout@v6
+      # UNTRUSTED: checks out PR head code. No credentials persisted here,
+      # so the write-scoped token is never reachable from this code.
+      - name: Checkout PR code (untrusted)
+        uses: actions/checkout@v6
         with:
           ref: ${{ steps.pr.outputs.sha }}
+          path: pr-code
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: pr-code/go.mod
 
       - name: Download dependencies
+        working-directory: pr-code
         run: go mod download
 
       - name: Run tests with coverage
+        working-directory: pr-code
         run: go test -coverprofile=coverage.out -covermode=set ./...
 
       - name: Build per-package coverage table
-        id: table
+        working-directory: pr-code
         run: |
           python3 - <<'EOF' > table.md
           from collections import defaultdict
@@ -99,14 +109,25 @@ jobs:
           cat table.md
 
       - name: Install go-cover-treemap
+        working-directory: pr-code
         run: go install github.com/nikolaydubina/go-cover-treemap@latest
 
       - name: Generate treemap SVG
+        working-directory: pr-code
         run: |
           $(go env GOPATH)/bin/go-cover-treemap -coverprofile coverage.out > treemap.svg
 
+      # TRUSTED: separate checkout of the base repo, no PR code involved.
+      # This is the only place the write-scoped token is used/persisted.
+      - name: Checkout base repo (trusted, for publishing)
+        uses: actions/checkout@v6
+        with:
+          path: report-repo
+          fetch-depth: 0
+
       - name: Publish treemap to coverage-reports branch
         id: publish
+        working-directory: report-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -122,7 +143,7 @@ jobs:
           fi
 
           mkdir -p "$(dirname "$IMG_PATH")"
-          cp "$GITHUB_WORKSPACE"/treemap.svg "$IMG_PATH" 2>/dev/null || cp treemap.svg "$IMG_PATH"
+          cp "$GITHUB_WORKSPACE/pr-code/treemap.svg" "$IMG_PATH"
 
           git add "$IMG_PATH"
           git commit -m "Coverage treemap for PR #${{ github.event.issue.number }} (${{ steps.pr.outputs.sha }})"
@@ -135,7 +156,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const table = fs.readFileSync('table.md', 'utf8');
+            const table = fs.readFileSync('pr-code/table.md', 'utf8');
             const imgPath = '${{ steps.publish.outputs.img_path }}';
             const imgUrl = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/coverage-reports/${imgPath}`;
             const sha = '${{ steps.pr.outputs.sha }}'.substring(0, 7);
