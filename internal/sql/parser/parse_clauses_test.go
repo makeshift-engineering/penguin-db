@@ -661,22 +661,24 @@ func TestParse_LimitAndOffset(t *testing.T) {
 
 func TestParse_ClauseErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr error
+		name     string
+		input    string
+		wantErr  error
+		wantLine int
+		wantCol  int
 	}{
-		{"join missing table", "SELECT * FROM a JOIN ;", CodeUnexpectedToken},
-		{"join missing ON", "SELECT * FROM a INNER JOIN b;", CodeUnexpectedToken},
-		{"limit invalid count", "SELECT * FROM t LIMIT 'a';", CodeUnexpectedToken},
-		{"offset missing number", "SELECT * FROM t LIMIT 10 OFFSET ;", CodeUnexpectedToken},
-		{"cross join with ON", "SELECT * FROM a CROSS JOIN b ON a.id = b.id;", CodeUnexpectedToken},
-		{"group by missing column", "SELECT * FROM t GROUP BY;", CodeUnexpectedToken},
-		{"having without group by standalone condition", "SELECT * FROM t HAVING ;", CodeExpectedExpression},
+		{"join missing table", "SELECT * FROM a JOIN ;", CodeUnexpectedToken, 1, 22},
+		{"join missing ON", "SELECT * FROM a INNER JOIN b;", CodeUnexpectedToken, 1, 29},
+		{"limit invalid count", "SELECT * FROM t LIMIT 'a';", CodeUnexpectedToken, 1, 23},
+		{"offset missing number", "SELECT * FROM t LIMIT 10 OFFSET ;", CodeUnexpectedToken, 1, 33},
+		{"cross join with ON", "SELECT * FROM a CROSS JOIN b ON a.id = b.id;", CodeUnexpectedToken, 1, 30},
+		{"group by missing column", "SELECT * FROM t GROUP BY;", CodeUnexpectedToken, 1, 25},
+		{"having without group by standalone condition", "SELECT * FROM t HAVING ;", CodeExpectedExpression, 1, 24},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireParseError(t, tt.input, tt.wantErr)
+			requireParseError(t, tt.input, tt.wantErr, tt.wantLine, tt.wantCol)
 		})
 	}
 }

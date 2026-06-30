@@ -568,47 +568,49 @@ func TestParse_DropTable(t *testing.T) {
 
 func TestParse_DDLErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr error
+		name     string
+		input    string
+		wantErr  error
+		wantLine int
+		wantCol  int
 	}{
 		// CREATE DATABASE errors
-		{"CREATE DATABASE missing name", "CREATE DATABASE;", CodeUnexpectedToken},
+		{"CREATE DATABASE missing name", "CREATE DATABASE;", CodeUnexpectedToken, 1, 16},
 
 		// CREATE TABLE errors
-		{"CREATE TABLE missing lparen", "CREATE TABLE t id INT;", CodeUnexpectedToken},
-		{"CREATE TABLE missing rparen", "CREATE TABLE t (id INT", CodeUnexpectedToken},
-		{"CREATE TABLE invalid type", "CREATE TABLE t (id UNKNOWN_TYPE);", CodeInvalidDataType},
-		{"CREATE TABLE invalid constraint", "CREATE TABLE t (id INT NOT TRUE);", CodeUnexpectedToken},
-		{"CREATE TABLE missing column name", "CREATE TABLE t (INT);", CodeUnexpectedToken},
+		{"CREATE TABLE missing lparen", "CREATE TABLE t id INT;", CodeUnexpectedToken, 1, 16},
+		{"CREATE TABLE missing rparen", "CREATE TABLE t (id INT", CodeUnexpectedToken, 1, 23},
+		{"CREATE TABLE invalid type", "CREATE TABLE t (id UNKNOWN_TYPE);", CodeInvalidDataType, 1, 20},
+		{"CREATE TABLE invalid constraint", "CREATE TABLE t (id INT NOT TRUE);", CodeUnexpectedToken, 1, 28},
+		{"CREATE TABLE missing column name", "CREATE TABLE t (INT);", CodeUnexpectedToken, 1, 17},
 
 		// DEFAULT with + sign rejects non-numeric
-		{"DEFAULT plus string", "CREATE TABLE t (val TEXT DEFAULT +'hello');", CodeExpectedExpression},
-		{"DEFAULT minus string", "CREATE TABLE t (val TEXT DEFAULT -'hello');", CodeExpectedExpression},
+		{"DEFAULT plus string", "CREATE TABLE t (val TEXT DEFAULT +'hello');", CodeExpectedExpression, 1, 35},
+		{"DEFAULT minus string", "CREATE TABLE t (val TEXT DEFAULT -'hello');", CodeExpectedExpression, 1, 35},
 
 		// REFERENCES errors
-		{"REFERENCES missing table", "CREATE TABLE t (id INT REFERENCES);", CodeUnexpectedToken},
-		{"REFERENCES missing lparen", "CREATE TABLE t (id INT REFERENCES parent);", CodeUnexpectedToken},
-		{"REFERENCES missing column", "CREATE TABLE t (id INT REFERENCES parent());", CodeUnexpectedToken},
-		{"REFERENCES missing rparen", "CREATE TABLE t (id INT REFERENCES parent(id);", CodeUnexpectedToken},
+		{"REFERENCES missing table", "CREATE TABLE t (id INT REFERENCES);", CodeUnexpectedToken, 1, 34},
+		{"REFERENCES missing lparen", "CREATE TABLE t (id INT REFERENCES parent);", CodeUnexpectedToken, 1, 41},
+		{"REFERENCES missing column", "CREATE TABLE t (id INT REFERENCES parent());", CodeUnexpectedToken, 1, 42},
+		{"REFERENCES missing rparen", "CREATE TABLE t (id INT REFERENCES parent(id);", CodeUnexpectedToken, 1, 45},
 
 		// ALTER TABLE errors
-		{"ALTER TABLE missing action", "ALTER TABLE t;", CodeInvalidAlterAction},
-		{"ALTER TABLE RENAME missing TO", "ALTER TABLE t RENAME new_t;", CodeInvalidAlterAction},
-		{"ALTER TABLE RENAME COLUMN missing TO", "ALTER TABLE t RENAME COLUMN c1 new_c1;", CodeUnexpectedToken},
-		{"ALTER TABLE DROP missing COLUMN", "ALTER TABLE t DROP c;", CodeUnexpectedToken},
+		{"ALTER TABLE missing action", "ALTER TABLE t;", CodeInvalidAlterAction, 1, 14},
+		{"ALTER TABLE RENAME missing TO", "ALTER TABLE t RENAME new_t;", CodeInvalidAlterAction, 1, 22},
+		{"ALTER TABLE RENAME COLUMN missing TO", "ALTER TABLE t RENAME COLUMN c1 new_c1;", CodeUnexpectedToken, 1, 32},
+		{"ALTER TABLE DROP missing COLUMN", "ALTER TABLE t DROP c;", CodeUnexpectedToken, 1, 20},
 
 		// DROP TABLE errors
-		{"DROP TABLE missing name", "DROP TABLE;", CodeUnexpectedToken},
+		{"DROP TABLE missing name", "DROP TABLE;", CodeUnexpectedToken, 1, 11},
 
 		// CREATE/DROP bad target
-		{"CREATE unknown", "CREATE INDEX foo;", CodeMalformedStatement},
-		{"DROP unknown", "DROP INDEX foo;", CodeMalformedStatement},
+		{"CREATE unknown", "CREATE INDEX foo;", CodeMalformedStatement, 1, 8},
+		{"DROP unknown", "DROP INDEX foo;", CodeMalformedStatement, 1, 6},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireParseError(t, tt.input, tt.wantErr)
+			requireParseError(t, tt.input, tt.wantErr, tt.wantLine, tt.wantCol)
 		})
 	}
 }

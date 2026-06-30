@@ -336,21 +336,23 @@ func TestParse_Expressions(t *testing.T) {
 
 func TestParse_ExpressionErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr error
+		name     string
+		input    string
+		wantErr  error
+		wantLine int
+		wantCol  int
 	}{
-		{"missing right operand", "SELECT 1 + ;", CodeExpectedExpression},
-		{"unmatched paren", "SELECT (1 + 2;", CodeUnexpectedToken},
-		{"function missing rparen", "SELECT UPPER(a;", CodeUnexpectedToken},
-		{"invalid expression", "SELECT SELECT;", CodeExpectedExpression},
-		{"empty paren", "SELECT ();", CodeExpectedExpression},
-		{"trailing operator", "SELECT 1 *;", CodeExpectedExpression},
+		{"missing right operand", "SELECT 1 + ;", CodeExpectedExpression, 1, 12},
+		{"unmatched paren", "SELECT (1 + 2;", CodeUnexpectedToken, 1, 14},
+		{"function missing rparen", "SELECT UPPER(a;", CodeUnexpectedToken, 1, 15},
+		{"invalid expression", "SELECT SELECT;", CodeExpectedExpression, 1, 8},
+		{"empty paren", "SELECT ();", CodeExpectedExpression, 1, 9},
+		{"trailing operator", "SELECT 1 *;", CodeExpectedExpression, 1, 11},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireParseError(t, tt.input, tt.wantErr)
+			requireParseError(t, tt.input, tt.wantErr, tt.wantLine, tt.wantCol)
 		})
 	}
 }

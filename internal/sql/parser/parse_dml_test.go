@@ -363,30 +363,55 @@ func TestParse_Delete(t *testing.T) {
 
 func TestParse_DMLErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr error
+		name     string
+		input    string
+		wantErr  error
+		wantLine int
+		wantCol  int
 	}{
 		// INSERT errors
-		{"INSERT missing INTO", "INSERT t VALUES (1);", CodeUnexpectedToken},
-		{"INSERT missing table", "INSERT INTO VALUES (1);", CodeUnexpectedToken},
-		{"INSERT invalid source", "INSERT INTO t CREATE TABLE;", CodeMalformedStatement},
-		{"INSERT missing value rparen", "INSERT INTO t VALUES (1, 2;", CodeUnexpectedToken},
-		{"INSERT missing values lparen", "INSERT INTO t VALUES 1;", CodeUnexpectedToken},
+		{"INSERT missing INTO", "INSERT t VALUES (1);", CodeUnexpectedToken, 1, 8},
+		{"INSERT missing table", "INSERT INTO VALUES (1);", CodeUnexpectedToken, 1, 13},
+		{"INSERT invalid source", "INSERT INTO t CREATE TABLE;", CodeMalformedStatement, 1, 15},
+		{"INSERT missing value rparen", "INSERT INTO t VALUES (1, 2;", CodeUnexpectedToken, 1, 27},
+		{"INSERT missing values lparen", "INSERT INTO t VALUES 1;", CodeUnexpectedToken, 1, 22},
 
 		// UPDATE errors
-		{"UPDATE missing SET", "UPDATE t a = 1;", CodeUnexpectedToken},
-		{"UPDATE invalid SET item", "UPDATE t SET 1 = 1;", CodeUnexpectedToken},
-		{"UPDATE missing equals", "UPDATE t SET a 1;", CodeUnexpectedToken},
+		{"UPDATE missing SET", "UPDATE t a = 1;", CodeUnexpectedToken, 1, 10},
+		{"UPDATE invalid SET item", "UPDATE t SET 1 = 1;", CodeUnexpectedToken, 1, 14},
+		{"UPDATE missing equals", "UPDATE t SET a 1;", CodeUnexpectedToken, 1, 16},
 
 		// DELETE errors
-		{"DELETE missing FROM", "DELETE t;", CodeUnexpectedToken},
-		{"DELETE missing table", "DELETE FROM;", CodeUnexpectedToken},
+		{"DELETE missing FROM", "DELETE t;", CodeUnexpectedToken, 1, 8},
+		{"DELETE missing table", "DELETE FROM;", CodeUnexpectedToken, 1, 12},
+
+		// Multi-line fixtures
+		{
+			name:     "multi-line malformed INSERT",
+			input:    "INSERT INTO t\nVALUES (1,\n        2;",
+			wantErr:  CodeUnexpectedToken,
+			wantLine: 3,
+			wantCol:  10,
+		},
+		{
+			name:     "multi-line malformed UPDATE",
+			input:    "UPDATE t\nSET a = 1,\n    b  2;",
+			wantErr:  CodeUnexpectedToken,
+			wantLine: 3,
+			wantCol:  8,
+		},
+		{
+			name:     "multi-line malformed DELETE",
+			input:    "DELETE\nFROM;",
+			wantErr:  CodeUnexpectedToken,
+			wantLine: 2,
+			wantCol:  5,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireParseError(t, tt.input, tt.wantErr)
+			requireParseError(t, tt.input, tt.wantErr, tt.wantLine, tt.wantCol)
 		})
 	}
 }
