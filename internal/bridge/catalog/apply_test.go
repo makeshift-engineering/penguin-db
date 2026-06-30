@@ -1,14 +1,15 @@
-package catalog_test
+package catalog
 
 import (
 	"testing"
 
-	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
 
+// TestApplyCreateDatabase verifies that a database becomes visible in the catalog
+// after calling ApplyCreateDatabase with valid metadata.
 func TestApplyCreateDatabase(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	meta := testDB()
 
 	c.ApplyCreateDatabase(meta)
@@ -18,8 +19,11 @@ func TestApplyCreateDatabase(t *testing.T) {
 	}
 }
 
+// TestApplyCreateDatabase_InitializesTableMap verifies that ApplyCreateDatabase
+// initializes the internal table map so that ListTables succeeds without panicking,
+// even when no tables have been added yet.
 func TestApplyCreateDatabase_InitializesTableMap(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 
 	// ListTables should succeed (not panic) even with no tables.
@@ -32,8 +36,10 @@ func TestApplyCreateDatabase_InitializesTableMap(t *testing.T) {
 	}
 }
 
+// TestApplyDropDatabase verifies that dropping a database removes it from the
+// catalog and also removes all tables that belonged to it.
 func TestApplyDropDatabase(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
@@ -44,19 +50,23 @@ func TestApplyDropDatabase(t *testing.T) {
 	}
 	// Tables should also be gone.
 	_, err := c.GetTable("testdb", "users")
-	if err != catalog.ErrTableNotFound {
+	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
 
+// TestApplyDropDatabase_NonExistent verifies that dropping a database that does
+// not exist is a safe no-op and does not panic.
 func TestApplyDropDatabase_NonExistent(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	// Should not panic on a non-existent database.
 	c.ApplyDropDatabase("nonexistent")
 }
 
+// TestApplyCreateTable verifies that a table is retrievable from the catalog
+// after calling ApplyCreateTable, and that its name and version are set correctly.
 func TestApplyCreateTable(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 
 	meta := testTable()
@@ -74,8 +84,11 @@ func TestApplyCreateTable(t *testing.T) {
 	}
 }
 
+// TestApplyCreateTable_WithoutPriorDatabase verifies that ApplyCreateTable
+// lazily creates the database's table map when the database has not been
+// explicitly created beforehand.
 func TestApplyCreateTable_WithoutPriorDatabase(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	// ApplyCreateTable should lazily create the database table map.
 	meta := testTable()
 	c.ApplyCreateTable(meta)
@@ -89,35 +102,41 @@ func TestApplyCreateTable_WithoutPriorDatabase(t *testing.T) {
 	}
 }
 
+// TestApplyDropTable verifies that a table is no longer found after it has
+// been dropped via ApplyDropTable.
 func TestApplyDropTable(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
 	c.ApplyDropTable("testdb", "users")
 
 	_, err := c.GetTable("testdb", "users")
-	if err != catalog.ErrTableNotFound {
+	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
 
+// TestApplyDropTable_NonExistent verifies that dropping a table from a
+// non-existent database is a safe no-op and does not panic.
 func TestApplyDropTable_NonExistent(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	// Should not panic.
 	c.ApplyDropTable("nodb", "notable")
 }
 
+// TestApplyAlterTable verifies that ApplyAlterTable replaces the existing table
+// metadata with the new version, updating both the column list and the version number.
 func TestApplyAlterTable(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
-	newMeta := &catalog.TableMeta{
+	newMeta := &TableMeta{
 		Database:   "testdb",
 		Name:       "users",
 		PrimaryKey: []string{"id"},
-		Columns: []catalog.ColumnMeta{
+		Columns: []ColumnMeta{
 			{Name: "id", Type: ast.TypeInt, NotNull: true, PrimaryKey: true},
 			{Name: "name", Type: ast.TypeVarchar, VarcharLen: intPtr(255)},
 			{Name: "email", Type: ast.TypeText},
@@ -140,8 +159,10 @@ func TestApplyAlterTable(t *testing.T) {
 	}
 }
 
+// TestApplyRenameTable verifies that ApplyRenameTable removes the old table
+// name and registers the table under the new name with correct metadata.
 func TestApplyRenameTable(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
@@ -152,7 +173,7 @@ func TestApplyRenameTable(t *testing.T) {
 	c.ApplyRenameTable("testdb", "users", "customers", &renamed)
 
 	_, err := c.GetTable("testdb", "users")
-	if err != catalog.ErrTableNotFound {
+	if err != ErrTableNotFound {
 		t.Errorf("old name should not exist after rename")
 	}
 	got, err := c.GetTable("testdb", "customers")
@@ -164,11 +185,13 @@ func TestApplyRenameTable(t *testing.T) {
 	}
 }
 
+// TestApplyRenameTable_NonExistentOldName verifies that renaming a table whose
+// old name does not exist is a safe no-op and does not panic.
 func TestApplyRenameTable_NonExistentOldName(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 
-	meta := &catalog.TableMeta{Database: "testdb", Name: "new", Version: 1}
+	meta := &TableMeta{Database: "testdb", Name: "new", Version: 1}
 	// Should not panic when old name doesn't exist.
 	c.ApplyRenameTable("testdb", "nonexistent", "new", meta)
 }

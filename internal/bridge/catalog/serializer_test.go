@@ -7,9 +7,9 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
 
-// Serializer tests use package catalog (not catalog_test) to access
-// the unexported encodeXxx/decodeXxx functions.
-
+// TestSerializeRoundTrip_DatabaseMeta verifies that a DatabaseMeta value
+// survives an encode→decode round-trip with all fields (Name, CreatedAt)
+// preserved exactly.
 func TestSerializeRoundTrip_DatabaseMeta(t *testing.T) {
 	original := &DatabaseMeta{
 		Name:      "mydb",
@@ -34,6 +34,9 @@ func TestSerializeRoundTrip_DatabaseMeta(t *testing.T) {
 	}
 }
 
+// TestSerializeRoundTrip_TableMeta verifies that a full TableMeta value
+// (including columns with optional fields like VarcharLen and DefaultValue)
+// survives an encode→decode round-trip with all fields preserved.
 func TestSerializeRoundTrip_TableMeta(t *testing.T) {
 	varcharLen := 255
 	defaultVal := "true"
@@ -103,6 +106,8 @@ func TestSerializeRoundTrip_TableMeta(t *testing.T) {
 	}
 }
 
+// TestSerializeRoundTrip_DroppedColumn verifies that the Dropped flag on a
+// column is correctly preserved through an encode→decode round-trip.
 func TestSerializeRoundTrip_DroppedColumn(t *testing.T) {
 	original := &TableMeta{
 		Database: "db",
@@ -130,6 +135,9 @@ func TestSerializeRoundTrip_DroppedColumn(t *testing.T) {
 	}
 }
 
+// TestSerializeRoundTrip_ForeignKey verifies that a column's ForeignKey
+// reference (including ReferencedDB, ReferencedTable, and ReferencedColumn)
+// is correctly preserved through an encode→decode round-trip.
 func TestSerializeRoundTrip_ForeignKey(t *testing.T) {
 	original := &TableMeta{
 		Database: "db",
@@ -171,6 +179,8 @@ func TestSerializeRoundTrip_ForeignKey(t *testing.T) {
 	}
 }
 
+// TestDecodeDatabaseMeta_InvalidJSON verifies that decodeDatabaseMeta returns
+// an error when given input that is not valid JSON.
 func TestDecodeDatabaseMeta_InvalidJSON(t *testing.T) {
 	_, err := decodeDatabaseMeta([]byte("not json"))
 	if err == nil {
@@ -178,6 +188,8 @@ func TestDecodeDatabaseMeta_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestDecodeTableMeta_InvalidJSON verifies that decodeTableMeta returns an
+// error when given input that is not valid JSON.
 func TestDecodeTableMeta_InvalidJSON(t *testing.T) {
 	_, err := decodeTableMeta([]byte("{invalid"))
 	if err == nil {

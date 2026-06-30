@@ -1,10 +1,9 @@
-package catalog_test
+package catalog
 
 import (
 	"context"
 	"testing"
 
-	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/kv"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
@@ -127,11 +126,11 @@ func dupBytes(b []byte) []byte {
 	return c
 }
 
-// ---------- NewCatalog bootstrap ----------
-
+// TestNewCatalog_EmptyKV verifies that NewCatalog succeeds when bootstrapping
+// from an empty KV store and produces a catalog with no databases.
 func TestNewCatalog_EmptyKV(t *testing.T) {
 	store := newMockKV()
-	c, err := catalog.NewCatalog(context.Background(), store)
+	c, err := NewCatalog(context.Background(), store)
 	if err != nil {
 		t.Fatalf("NewCatalog on empty KV: %v", err)
 	}
@@ -140,13 +139,16 @@ func TestNewCatalog_EmptyKV(t *testing.T) {
 	}
 }
 
+// TestNewCatalog_BootstrapFromExistingData verifies that NewCatalog correctly
+// reconstructs the in-memory catalog state from databases and tables that were
+// previously persisted to the KV store.
 func TestNewCatalog_BootstrapFromExistingData(t *testing.T) {
 	store := newMockKV()
 	ctx := context.Background()
 
 	// Persist a database and table via Build*Ops + WriteBatch.
 	dbMeta := testDB()
-	dbOps, err := catalog.BuildCreateDatabaseOps(dbMeta)
+	dbOps, err := BuildCreateDatabaseOps(dbMeta)
 	if err != nil {
 		t.Fatalf("BuildCreateDatabaseOps: %v", err)
 	}
@@ -154,11 +156,11 @@ func TestNewCatalog_BootstrapFromExistingData(t *testing.T) {
 		t.Fatalf("WriteBatch (db): %v", err)
 	}
 
-	tempCat := catalog.NewEmptyCatalog()
+	tempCat := NewEmptyCatalog()
 	tempCat.ApplyCreateDatabase(dbMeta)
 
 	tblMeta := testTable()
-	tblOps, err := catalog.BuildCreateTableOps(tempCat, tblMeta)
+	tblOps, err := BuildCreateTableOps(tempCat, tblMeta)
 	if err != nil {
 		t.Fatalf("BuildCreateTableOps: %v", err)
 	}
@@ -167,7 +169,7 @@ func TestNewCatalog_BootstrapFromExistingData(t *testing.T) {
 	}
 
 	// Bootstrap a fresh catalog from the KV store.
-	c, err := catalog.NewCatalog(ctx, store)
+	c, err := NewCatalog(ctx, store)
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
 	}
@@ -188,10 +190,10 @@ func TestNewCatalog_BootstrapFromExistingData(t *testing.T) {
 	}
 }
 
-// ---------- NewEmptyCatalog ----------
-
+// TestNewEmptyCatalog verifies that a freshly created empty catalog reports
+// no databases and returns an empty database list.
 func TestNewEmptyCatalog(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	if c.DatabaseExists("any") {
 		t.Error("empty catalog should not contain any databases")
 	}
@@ -201,10 +203,10 @@ func TestNewEmptyCatalog(t *testing.T) {
 	}
 }
 
-// ---------- Read methods ----------
-
+// TestDatabaseExists verifies that DatabaseExists returns false before creation
+// and true after a database has been added to the
 func TestDatabaseExists(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	if c.DatabaseExists("testdb") {
 		t.Error("should not exist before creation")
 	}
@@ -214,11 +216,13 @@ func TestDatabaseExists(t *testing.T) {
 	}
 }
 
+// TestGetDatabase verifies that GetDatabase returns ErrDatabaseNotFound for a
+// missing database and returns the correct metadata after creation.
 func TestGetDatabase(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 
 	_, err := c.GetDatabase("nonexistent")
-	if err != catalog.ErrDatabaseNotFound {
+	if err != ErrDatabaseNotFound {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
@@ -232,11 +236,13 @@ func TestGetDatabase(t *testing.T) {
 	}
 }
 
+// TestGetTable verifies that GetTable returns ErrTableNotFound when neither the
+// database nor the table exist, and returns correct metadata after creation.
 func TestGetTable(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 
 	_, err := c.GetTable("nodb", "notable")
-	if err != catalog.ErrTableNotFound {
+	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 
@@ -252,20 +258,22 @@ func TestGetTable(t *testing.T) {
 	}
 }
 
+// TestListTables verifies that ListTables returns ErrDatabaseNotFound for a
+// missing database and returns all tables after they have been added.
 func TestListTables(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 
 	_, err := c.ListTables("nodb")
-	if err != catalog.ErrDatabaseNotFound {
+	if err != ErrDatabaseNotFound {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
-	c.ApplyCreateTable(&catalog.TableMeta{
+	c.ApplyCreateTable(&TableMeta{
 		Database: "testdb",
 		Name:     "orders",
-		Columns:  []catalog.ColumnMeta{{Name: "id", Type: ast.TypeInt}},
+		Columns:  []ColumnMeta{{Name: "id", Type: ast.TypeInt}},
 		Version:  1,
 	})
 
@@ -278,10 +286,12 @@ func TestListTables(t *testing.T) {
 	}
 }
 
+// TestListDatabases verifies that ListDatabases returns all databases that
+// have been added to the
 func TestListDatabases(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
-	c.ApplyCreateDatabase(&catalog.DatabaseMeta{Name: "db1"})
-	c.ApplyCreateDatabase(&catalog.DatabaseMeta{Name: "db2"})
+	c := NewEmptyCatalog()
+	c.ApplyCreateDatabase(&DatabaseMeta{Name: "db1"})
+	c.ApplyCreateDatabase(&DatabaseMeta{Name: "db2"})
 
 	dbs := c.ListDatabases()
 	if len(dbs) != 2 {
@@ -297,8 +307,10 @@ func TestListDatabases(t *testing.T) {
 	}
 }
 
+// TestResolveColumn verifies that ResolveColumn returns the correct column
+// metadata (name and type) for an existing column.
 func TestResolveColumn(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
@@ -314,19 +326,23 @@ func TestResolveColumn(t *testing.T) {
 	}
 }
 
+// TestResolveColumn_NotFound verifies that ResolveColumn returns
+// ErrColumnNotFound when the requested column does not exist in the table.
 func TestResolveColumn_NotFound(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
 	_, err := c.ResolveColumn("testdb", "users", "nonexistent")
-	if err != catalog.ErrColumnNotFound {
+	if err != ErrColumnNotFound {
 		t.Errorf("expected ErrColumnNotFound, got %v", err)
 	}
 }
 
+// TestResolveColumn_DroppedColumn verifies that ResolveColumn returns
+// ErrColumnNotFound when the requested column exists but has been marked as dropped.
 func TestResolveColumn_DroppedColumn(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 
 	meta := testTable()
@@ -334,21 +350,25 @@ func TestResolveColumn_DroppedColumn(t *testing.T) {
 	c.ApplyCreateTable(meta)
 
 	_, err := c.ResolveColumn("testdb", "users", "name")
-	if err != catalog.ErrColumnNotFound {
+	if err != ErrColumnNotFound {
 		t.Errorf("expected ErrColumnNotFound for dropped column, got %v", err)
 	}
 }
 
+// TestResolveColumn_NoTable verifies that ResolveColumn returns
+// ErrTableNotFound when neither the database nor the table exist.
 func TestResolveColumn_NoTable(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	_, err := c.ResolveColumn("nodb", "notable", "nocol")
-	if err != catalog.ErrTableNotFound {
+	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
 
+// TestPKColumnTypes verifies that PKColumnTypes returns the correct column
+// types for a table with a single-column primary key.
 func TestPKColumnTypes(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
@@ -361,13 +381,15 @@ func TestPKColumnTypes(t *testing.T) {
 	}
 }
 
+// TestPKColumnTypes_SnowflakeID verifies that PKColumnTypes returns TypeBigInt
+// for tables that use a snowflake ID as their primary key.
 func TestPKColumnTypes_SnowflakeID(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
-	c.ApplyCreateTable(&catalog.TableMeta{
+	c.ApplyCreateTable(&TableMeta{
 		Database:       "testdb",
 		Name:           "events",
-		Columns:        []catalog.ColumnMeta{{Name: "data", Type: ast.TypeText}},
+		Columns:        []ColumnMeta{{Name: "data", Type: ast.TypeText}},
 		HasSnowflakeID: true,
 		Version:        1,
 	})
@@ -381,13 +403,15 @@ func TestPKColumnTypes_SnowflakeID(t *testing.T) {
 	}
 }
 
+// TestPKColumnTypes_CompositePK verifies that PKColumnTypes returns the
+// correct ordered list of types for a table with a composite primary key.
 func TestPKColumnTypes_CompositePK(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
-	c.ApplyCreateTable(&catalog.TableMeta{
+	c.ApplyCreateTable(&TableMeta{
 		Database: "testdb",
 		Name:     "composite",
-		Columns: []catalog.ColumnMeta{
+		Columns: []ColumnMeta{
 			{Name: "tenant", Type: ast.TypeVarchar, VarcharLen: intPtr(100)},
 			{Name: "id", Type: ast.TypeBigInt},
 			{Name: "data", Type: ast.TypeText},
@@ -405,18 +429,21 @@ func TestPKColumnTypes_CompositePK(t *testing.T) {
 	}
 }
 
+// TestPKColumnTypes_NotFound verifies that PKColumnTypes returns
+// ErrTableNotFound when the requested table does not exist.
 func TestPKColumnTypes_NotFound(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	_, err := c.PKColumnTypes("nodb", "notable")
-	if err != catalog.ErrTableNotFound {
+	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
 
-// ---------- Concurrent access ----------
-
+// TestCatalog_ConcurrentReadsDuringWrite exercises the catalog under concurrent
+// read and write pressure to verify that the RWMutex-based synchronization does
+// not produce data races or panics.
 func TestCatalog_ConcurrentReadsDuringWrite(t *testing.T) {
-	c := catalog.NewEmptyCatalog()
+	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
@@ -431,10 +458,10 @@ func TestCatalog_ConcurrentReadsDuringWrite(t *testing.T) {
 	}()
 
 	for i := range 100 {
-		meta := &catalog.TableMeta{
+		meta := &TableMeta{
 			Database: "testdb",
 			Name:     "table_" + string(rune('A'+i%26)),
-			Columns:  []catalog.ColumnMeta{{Name: "id", Type: ast.TypeInt}},
+			Columns:  []ColumnMeta{{Name: "id", Type: ast.TypeInt}},
 			Version:  1,
 		}
 		c.ApplyCreateTable(meta)
