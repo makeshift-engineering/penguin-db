@@ -146,7 +146,7 @@ type tokenDef struct {
 }
 
 // tokenTable is the single source of truth for display names and classes.
-// Indexed by TokenType iota value — O(1) lookup.
+// Indexed by TokenType iota value - O(1) lookup.
 var tokenTable = [...]tokenDef{
 	TOKEN_EOF:     {name: "EOF", class: classSpecial},
 	TOKEN_ILLEGAL: {name: "ILLEGAL", class: classSpecial},
@@ -249,7 +249,7 @@ var tokenTable = [...]tokenDef{
 }
 
 func init() {
-	for i := 0; i < int(tokenTypeSentinel); i++ {
+	for i := range int(tokenTypeSentinel) {
 		if tokenTable[i].name == "" {
 			panic(fmt.Sprintf("utils: TokenType %d has no entry in tokenTable", i))
 		}

@@ -138,8 +138,7 @@ func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
 }
 
 // parseUpdateStatement handles:
-//
-//	UPDATE QualifiedIdentifier SET SetItem (',' SetItem)* [WHERE Condition]
+// UPDATE QualifiedIdentifier SET SetItem (',' SetItem)* [WHERE Condition]
 func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	start := p.currentStart()
 	p.advance() // UPDATE
@@ -184,8 +183,7 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 }
 
 // parseSetItem parses one assignment in an UPDATE SET clause:
-//
-//	SetItem = QualifiedIdentifier '=' Expression
+// SetItem = QualifiedIdentifier '=' Expression
 func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 	start := p.currentStart()
 
@@ -211,8 +209,7 @@ func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 }
 
 // parseDeleteStatement handles:
-//
-//	DELETE FROM QualifiedIdentifier [WHERE Condition]
+// DELETE FROM QualifiedIdentifier [WHERE Condition]
 func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 	start := p.currentStart()
 	p.advance() // DELETE

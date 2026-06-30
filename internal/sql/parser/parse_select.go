@@ -134,7 +134,7 @@ func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 
 		switch p.tokens.Peek().Type {
 		case utils.TOKEN_STAR:
-			// Pattern: IDENT '.' '*'  →  single-level qualified wildcard (table.*)
+			// Pattern: IDENT '.' '*' : single-level qualified wildcard (table.*)
 			p.advance() // consume '.'
 			p.advance() // consume '*'
 			ident := &ast.Identifier{
@@ -153,7 +153,7 @@ func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 			p.advance() // consume second IDENT
 
 			if p.check(utils.TOKEN_DOT) && p.peekIs(utils.TOKEN_STAR) {
-				// Pattern: IDENT '.' IDENT '.' '*'  →  two-level wildcard (db.table.*)
+				// Pattern: IDENT '.' IDENT '.' '*' :  two-level wildcard (db.table.*)
 				p.advance() // consume '.'
 				p.advance() // consume '*'
 				ident := &ast.Identifier{
