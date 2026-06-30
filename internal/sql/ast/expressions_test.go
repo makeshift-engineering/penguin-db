@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 var (
@@ -75,7 +75,7 @@ func TestExpression_Validation(t *testing.T) {
 			name: "BinaryExpr valid",
 			node: &ast.BinaryExpr{
 				Left:  &ast.IntegerLiteral{Value: "1"},
-				Op:    lexer.TOKEN_PLUS,
+				Op:    utils.TOKEN_PLUS,
 				Right: &ast.IntegerLiteral{Value: "2"},
 			},
 			wantErr: nil,
@@ -83,7 +83,7 @@ func TestExpression_Validation(t *testing.T) {
 		{
 			name: "BinaryExpr nil left",
 			node: &ast.BinaryExpr{
-				Op:    lexer.TOKEN_PLUS,
+				Op:    utils.TOKEN_PLUS,
 				Right: &ast.IntegerLiteral{Value: "2"},
 			},
 			wantErr: ast.ErrNilExpression,
@@ -92,7 +92,7 @@ func TestExpression_Validation(t *testing.T) {
 			name: "BinaryExpr invalid operator",
 			node: &ast.BinaryExpr{
 				Left:  &ast.IntegerLiteral{Value: "1"},
-				Op:    lexer.TOKEN_AND,
+				Op:    utils.TOKEN_AND,
 				Right: &ast.IntegerLiteral{Value: "2"},
 			},
 			wantErr: ast.ErrInvalidBinaryOperator,
@@ -101,7 +101,7 @@ func TestExpression_Validation(t *testing.T) {
 			name: "BinaryExpr recursive error",
 			node: &ast.BinaryExpr{
 				Left:  &ast.Identifier{Name: ""},
-				Op:    lexer.TOKEN_PLUS,
+				Op:    utils.TOKEN_PLUS,
 				Right: &ast.IntegerLiteral{Value: "2"},
 			},
 			wantErr: ast.ErrEmptyIdentifierName,
@@ -109,7 +109,7 @@ func TestExpression_Validation(t *testing.T) {
 		{
 			name: "UnaryExpr valid",
 			node: &ast.UnaryExpr{
-				Op:      lexer.TOKEN_MINUS,
+				Op:      utils.TOKEN_MINUS,
 				Operand: &ast.IntegerLiteral{Value: "5"},
 			},
 			wantErr: nil,
@@ -117,14 +117,14 @@ func TestExpression_Validation(t *testing.T) {
 		{
 			name: "UnaryExpr nil operand",
 			node: &ast.UnaryExpr{
-				Op: lexer.TOKEN_MINUS,
+				Op: utils.TOKEN_MINUS,
 			},
 			wantErr: ast.ErrNilExpression,
 		},
 		{
 			name: "UnaryExpr invalid operator",
 			node: &ast.UnaryExpr{
-				Op:      lexer.TOKEN_NOT,
+				Op:      utils.TOKEN_NOT,
 				Operand: &ast.IntegerLiteral{Value: "5"},
 			},
 			wantErr: ast.ErrInvalidUnaryOperator,

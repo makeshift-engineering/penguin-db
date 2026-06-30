@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 var (
@@ -60,7 +60,7 @@ func TestCondition_Validation(t *testing.T) {
 			name: "BinaryCondition valid",
 			node: &ast.BinaryCondition{
 				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
-				Op:    lexer.TOKEN_AND,
+				Op:    utils.TOKEN_AND,
 				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
 			},
 			wantErr: nil,
@@ -69,7 +69,7 @@ func TestCondition_Validation(t *testing.T) {
 			name: "BinaryCondition invalid operator",
 			node: &ast.BinaryCondition{
 				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
-				Op:    lexer.TOKEN_PLUS,
+				Op:    utils.TOKEN_PLUS,
 				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
 			},
 			wantErr: ast.ErrInvalidConditionOperator,
@@ -78,7 +78,7 @@ func TestCondition_Validation(t *testing.T) {
 			name: "ComparisonPredicate valid",
 			node: &ast.ComparisonPredicate{
 				Left:  &ast.IntegerLiteral{Value: "1"},
-				Op:    lexer.TOKEN_EQ,
+				Op:    utils.TOKEN_EQ,
 				Right: &ast.IntegerLiteral{Value: "1"},
 			},
 			wantErr: nil,
@@ -87,7 +87,7 @@ func TestCondition_Validation(t *testing.T) {
 			name: "ComparisonPredicate invalid operator",
 			node: &ast.ComparisonPredicate{
 				Left:  &ast.IntegerLiteral{Value: "1"},
-				Op:    lexer.TOKEN_AND,
+				Op:    utils.TOKEN_AND,
 				Right: &ast.IntegerLiteral{Value: "1"},
 			},
 			wantErr: ast.ErrInvalidComparisonOperator,

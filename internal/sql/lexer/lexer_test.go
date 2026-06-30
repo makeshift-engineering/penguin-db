@@ -6,10 +6,102 @@ import (
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
+)
+
+type Token = utils.Token
+type TokenType = utils.TokenType
+
+//nolint:revive // We prefer ALL_CAPS for token constants
+const (
+	TOKEN_EOF        = utils.TOKEN_EOF
+	TOKEN_ILLEGAL    = utils.TOKEN_ILLEGAL
+	TOKEN_IDENT      = utils.TOKEN_IDENT
+	TOKEN_INTEGER    = utils.TOKEN_INTEGER
+	TOKEN_FLOAT      = utils.TOKEN_FLOAT
+	TOKEN_STRING     = utils.TOKEN_STRING
+	TOKEN_CREATE     = utils.TOKEN_CREATE
+	TOKEN_DATABASE   = utils.TOKEN_DATABASE
+	TOKEN_USE        = utils.TOKEN_USE
+	TOKEN_DROP       = utils.TOKEN_DROP
+	TOKEN_IF         = utils.TOKEN_IF
+	TOKEN_EXISTS     = utils.TOKEN_EXISTS
+	TOKEN_TABLE      = utils.TOKEN_TABLE
+	TOKEN_ALTER      = utils.TOKEN_ALTER
+	TOKEN_ADD        = utils.TOKEN_ADD
+	TOKEN_COLUMN     = utils.TOKEN_COLUMN
+	TOKEN_MODIFY     = utils.TOKEN_MODIFY
+	TOKEN_RENAME     = utils.TOKEN_RENAME
+	TOKEN_TO         = utils.TOKEN_TO
+	TOKEN_SELECT     = utils.TOKEN_SELECT
+	TOKEN_DISTINCT   = utils.TOKEN_DISTINCT
+	TOKEN_ALL        = utils.TOKEN_ALL
+	TOKEN_FROM       = utils.TOKEN_FROM
+	TOKEN_WHERE      = utils.TOKEN_WHERE
+	TOKEN_AS         = utils.TOKEN_AS
+	TOKEN_INSERT     = utils.TOKEN_INSERT
+	TOKEN_INTO       = utils.TOKEN_INTO
+	TOKEN_VALUES     = utils.TOKEN_VALUES
+	TOKEN_UPDATE     = utils.TOKEN_UPDATE
+	TOKEN_SET        = utils.TOKEN_SET
+	TOKEN_DELETE     = utils.TOKEN_DELETE
+	TOKEN_JOIN       = utils.TOKEN_JOIN
+	TOKEN_INNER      = utils.TOKEN_INNER
+	TOKEN_LEFT       = utils.TOKEN_LEFT
+	TOKEN_RIGHT      = utils.TOKEN_RIGHT
+	TOKEN_FULL       = utils.TOKEN_FULL
+	TOKEN_OUTER      = utils.TOKEN_OUTER
+	TOKEN_CROSS      = utils.TOKEN_CROSS
+	TOKEN_ON         = utils.TOKEN_ON
+	TOKEN_GROUP      = utils.TOKEN_GROUP
+	TOKEN_BY         = utils.TOKEN_BY
+	TOKEN_HAVING     = utils.TOKEN_HAVING
+	TOKEN_ORDER      = utils.TOKEN_ORDER
+	TOKEN_ASC        = utils.TOKEN_ASC
+	TOKEN_DESC       = utils.TOKEN_DESC
+	TOKEN_LIMIT      = utils.TOKEN_LIMIT
+	TOKEN_OFFSET     = utils.TOKEN_OFFSET
+	TOKEN_PRIMARY    = utils.TOKEN_PRIMARY
+	TOKEN_KEY        = utils.TOKEN_KEY
+	TOKEN_NOT        = utils.TOKEN_NOT
+	TOKEN_NULL       = utils.TOKEN_NULL
+	TOKEN_DEFAULT    = utils.TOKEN_DEFAULT
+	TOKEN_UNIQUE     = utils.TOKEN_UNIQUE
+	TOKEN_REFERENCES = utils.TOKEN_REFERENCES
+	TOKEN_AND        = utils.TOKEN_AND
+	TOKEN_OR         = utils.TOKEN_OR
+	TOKEN_TRUE       = utils.TOKEN_TRUE
+	TOKEN_FALSE      = utils.TOKEN_FALSE
+	TOKEN_LIKE       = utils.TOKEN_LIKE
+	TOKEN_IS         = utils.TOKEN_IS
+	TOKEN_IN         = utils.TOKEN_IN
+	TOKEN_BETWEEN    = utils.TOKEN_BETWEEN
+	TOKEN_INT        = utils.TOKEN_INT
+	TOKEN_BIGINT     = utils.TOKEN_BIGINT
+	TOKEN_VARCHAR    = utils.TOKEN_VARCHAR
+	TOKEN_BOOLEAN    = utils.TOKEN_BOOLEAN
+	TOKEN_TEXT       = utils.TOKEN_TEXT
+	TOKEN_TIMESTAMP  = utils.TOKEN_TIMESTAMP
+	TOKEN_EQ         = utils.TOKEN_EQ
+	TOKEN_NEQ        = utils.TOKEN_NEQ
+	TOKEN_LT         = utils.TOKEN_LT
+	TOKEN_GT         = utils.TOKEN_GT
+	TOKEN_LTE        = utils.TOKEN_LTE
+	TOKEN_GTE        = utils.TOKEN_GTE
+	TOKEN_PLUS       = utils.TOKEN_PLUS
+	TOKEN_MINUS      = utils.TOKEN_MINUS
+	TOKEN_STAR       = utils.TOKEN_STAR
+	TOKEN_SLASH      = utils.TOKEN_SLASH
+	TOKEN_PERCENT    = utils.TOKEN_PERCENT
+	TOKEN_LPAREN     = utils.TOKEN_LPAREN
+	TOKEN_RPAREN     = utils.TOKEN_RPAREN
+	TOKEN_COMMA      = utils.TOKEN_COMMA
+	TOKEN_DOT        = utils.TOKEN_DOT
+	TOKEN_SEMICOLON  = utils.TOKEN_SEMICOLON
 )
 
 // tok is a compact constructor for expected Token values in table-driven tests.
-func tok(typ TokenType, lit string, line, col int) Token {
+func tok(typ utils.TokenType, lit string, line, col int) utils.Token {
 	endLine := line
 	endCol := col
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 var _ ast.Node = (*ast.Program)(nil)
@@ -36,14 +36,14 @@ func TestSpan_ReturnsStoredSpan(t *testing.T) {
 		{"BooleanLiteral", &ast.BooleanLiteral{ExprBase: eb(span), Value: "TRUE"}},
 		{"NullLiteral", &ast.NullLiteral{ExprBase: eb(span)}},
 		{"Identifier", &ast.Identifier{ExprBase: eb(span), Name: "id"}},
-		{"BinaryExpr", &ast.BinaryExpr{ExprBase: eb(span), Op: lexer.TOKEN_PLUS}},
-		{"UnaryExpr", &ast.UnaryExpr{ExprBase: eb(span), Op: lexer.TOKEN_MINUS}},
+		{"BinaryExpr", &ast.BinaryExpr{ExprBase: eb(span), Op: utils.TOKEN_PLUS}},
+		{"UnaryExpr", &ast.UnaryExpr{ExprBase: eb(span), Op: utils.TOKEN_MINUS}},
 		{"ParenExpr", &ast.ParenExpr{ExprBase: eb(span)}},
 		{"FunctionCall", &ast.FunctionCall{ExprBase: eb(span), Name: "COUNT"}},
 
-		{"BinaryCondition", &ast.BinaryCondition{CondBase: cb(span), Op: lexer.TOKEN_AND}},
+		{"BinaryCondition", &ast.BinaryCondition{CondBase: cb(span), Op: utils.TOKEN_AND}},
 		{"NotCondition", &ast.NotCondition{CondBase: cb(span)}},
-		{"ComparisonPredicate", &ast.ComparisonPredicate{CondBase: cb(span), Op: lexer.TOKEN_EQ}},
+		{"ComparisonPredicate", &ast.ComparisonPredicate{CondBase: cb(span), Op: utils.TOKEN_EQ}},
 		{"LikePredicate", &ast.LikePredicate{CondBase: cb(span)}},
 		{"IsNullPredicate", &ast.IsNullPredicate{CondBase: cb(span)}},
 		{"InPredicate", &ast.InPredicate{CondBase: cb(span)}},

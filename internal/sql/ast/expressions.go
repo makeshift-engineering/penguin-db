@@ -1,6 +1,6 @@
 package ast
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+import "github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 
 // IntegerLiteral represents a whole-number literal (e.g. 42).
 type IntegerLiteral struct {
@@ -8,22 +8,24 @@ type IntegerLiteral struct {
 	Value string
 }
 
-// FloatLiteral represents a fractional-number literal (e.g. 3.14, .5, 10.).
+// FloatLiteral represents a fractional-number literal (e.g. 3.14, .5).
 type FloatLiteral struct {
 	ExprBase
 	Value string
 }
 
 // StringLiteral represents a single-quoted string value (e.g. 'hello').
+// The lexer strips the surrounding quotes and decodes SQL escape sequences
+// before storing the value here.
 type StringLiteral struct {
 	ExprBase
 	Value string
 }
 
-// BooleanLiteral represents a TRUE or FALSE keyword.
+// BooleanLiteral represents the TRUE or FALSE keyword.
 type BooleanLiteral struct {
 	ExprBase
-	Value string
+	Value string // "TRUE" or "FALSE" — kept as string to preserve original casing
 }
 
 // NullLiteral represents the NULL keyword.
@@ -32,8 +34,9 @@ type NullLiteral struct {
 }
 
 // Identifier represents a simple or dot-qualified SQL name.
-// For unqualified names (e.g. "id"), Qualifier is empty.
-// For qualified names (e.g. "users.id"), Qualifier holds the prefix.
+//
+//	users.id  →  Identifier{Name: "id", Qualifier: "users"}
+//	id        →  Identifier{Name: "id", Qualifier: ""}
 type Identifier struct {
 	ExprBase
 	Name      string
@@ -48,11 +51,11 @@ func (i *Identifier) Validate() error {
 }
 
 // BinaryExpr represents an infix arithmetic expression: Left Op Right.
-// Op is one of TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, or TOKEN_PERCENT.
+// Op is one of TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, TOKEN_PERCENT.
 type BinaryExpr struct {
 	ExprBase
 	Left  Expression
-	Op    lexer.TokenType
+	Op    utils.TokenType
 	Right Expression
 }
 
@@ -61,7 +64,8 @@ func (b *BinaryExpr) Validate() error {
 		return ErrNilExpression
 	}
 	switch b.Op {
-	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS, lexer.TOKEN_STAR, lexer.TOKEN_SLASH, lexer.TOKEN_PERCENT:
+	case utils.TOKEN_PLUS, utils.TOKEN_MINUS,
+		utils.TOKEN_STAR, utils.TOKEN_SLASH, utils.TOKEN_PERCENT:
 	default:
 		return ErrInvalidBinaryOperator
 	}
@@ -71,10 +75,11 @@ func (b *BinaryExpr) Validate() error {
 	return b.Right.Validate()
 }
 
-// UnaryExpr represents a prefix unary expression: (+|-) Operand.
+// UnaryExpr represents a prefix unary expression: Op Operand.
+// Op is TOKEN_PLUS or TOKEN_MINUS.
 type UnaryExpr struct {
 	ExprBase
-	Op      lexer.TokenType
+	Op      utils.TokenType
 	Operand Expression
 }
 
@@ -83,14 +88,14 @@ func (u *UnaryExpr) Validate() error {
 		return ErrNilExpression
 	}
 	switch u.Op {
-	case lexer.TOKEN_PLUS, lexer.TOKEN_MINUS:
+	case utils.TOKEN_PLUS, utils.TOKEN_MINUS:
 	default:
 		return ErrInvalidUnaryOperator
 	}
 	return u.Operand.Validate()
 }
 
-// ParenExpr represents a parenthesized expression: ( Inner ).
+// ParenExpr represents a parenthesised arithmetic expression: ( Inner ).
 type ParenExpr struct {
 	ExprBase
 	Inner Expression
@@ -104,8 +109,8 @@ func (p *ParenExpr) Validate() error {
 }
 
 // FunctionCall represents a SQL function invocation: Name( Args ).
-// Star is true for COUNT(*). Distinct is true for aggregate calls
-// like COUNT(DISTINCT col).
+// Star is true for COUNT(*). Distinct is true for aggregate calls like
+// COUNT(DISTINCT col). Star and Distinct are mutually exclusive.
 type FunctionCall struct {
 	ExprBase
 	Name     string
@@ -132,9 +137,9 @@ func (f *FunctionCall) Validate() error {
 	return nil
 }
 
-// SelectExpression is a tagged union that can hold either an arithmetic
-// [Expression] or a boolean [Condition]. It appears in SELECT column lists
-// and function arguments. Exactly one of Expr or Cond is non-nil.
+// SelectExpression is the tagged union that can hold either an arithmetic
+// Expression or a boolean Condition. It appears in SELECT column lists and
+// function arguments. Exactly one of Expr or Cond must be non-nil.
 type SelectExpression struct {
 	NodeBase
 	Expr Expression

@@ -1,4 +1,4 @@
-package lexer
+package utils
 
 import (
 	"fmt"
@@ -6,9 +6,11 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
-// TokenType is an integer tag that identifies what kind of lexical unit a
-// Token represents. Every terminal in the grammar maps to exactly one
-// TokenType constant.
+// TokenType is an integer tag identifying what kind of lexical unit a Token
+// represents. Every terminal in the SQL grammar maps to exactly one constant.
+// The type lives in utils so that both the lexer (which produces tokens) and
+// the parser (which consumes them) can refer to it without either importing
+// the other.
 type TokenType int
 
 //nolint:revive // We prefer ALL_CAPS for token constants
@@ -98,6 +100,9 @@ const (
 	TOKEN_BOOLEAN
 	TOKEN_TEXT
 	TOKEN_TIMESTAMP
+	TOKEN_FLOAT_TYPE
+	TOKEN_DOUBLE
+	TOKEN_DECIMAL
 
 	// Comparison operators
 	TOKEN_EQ  // =
@@ -121,18 +126,18 @@ const (
 	TOKEN_DOT       // .
 	TOKEN_SEMICOLON // ;
 
-	tokenTypeSentinel // always last; never a real token; gives len of enum
+	tokenTypeSentinel // always last — used only to size the table
 )
 
-// tokenClass categorises what role a token plays.
+// tokenClass categorises the role a token plays in the grammar.
 type tokenClass uint8
 
 const (
-	classSpecial tokenClass = iota
-	classLiteral
-	classKeyword
-	classOperator
-	classPunct
+	classSpecial  tokenClass = iota
+	classLiteral             // IDENT, INTEGER, FLOAT, STRING
+	classKeyword             // reserved words
+	classOperator            // arithmetic and comparison operators
+	classPunct               // punctuation
 )
 
 type tokenDef struct {
@@ -141,19 +146,16 @@ type tokenDef struct {
 }
 
 // tokenTable is the single source of truth for display names and classes.
-// Indexed by iota value — O(1) lookup.
+// Indexed by TokenType iota value — O(1) lookup.
 var tokenTable = [...]tokenDef{
-	// Special
 	TOKEN_EOF:     {name: "EOF", class: classSpecial},
 	TOKEN_ILLEGAL: {name: "ILLEGAL", class: classSpecial},
 
-	// Literals
 	TOKEN_IDENT:   {name: "IDENT", class: classLiteral},
 	TOKEN_INTEGER: {name: "INTEGER", class: classLiteral},
 	TOKEN_FLOAT:   {name: "FLOAT", class: classLiteral},
 	TOKEN_STRING:  {name: "STRING", class: classLiteral},
 
-	// DDL keywords
 	TOKEN_CREATE:   {name: "CREATE", class: classKeyword},
 	TOKEN_DATABASE: {name: "DATABASE", class: classKeyword},
 	TOKEN_USE:      {name: "USE", class: classKeyword},
@@ -168,7 +170,6 @@ var tokenTable = [...]tokenDef{
 	TOKEN_RENAME:   {name: "RENAME", class: classKeyword},
 	TOKEN_TO:       {name: "TO", class: classKeyword},
 
-	// DML keywords
 	TOKEN_SELECT:   {name: "SELECT", class: classKeyword},
 	TOKEN_DISTINCT: {name: "DISTINCT", class: classKeyword},
 	TOKEN_ALL:      {name: "ALL", class: classKeyword},
@@ -182,7 +183,6 @@ var tokenTable = [...]tokenDef{
 	TOKEN_SET:      {name: "SET", class: classKeyword},
 	TOKEN_DELETE:   {name: "DELETE", class: classKeyword},
 
-	// JOIN keywords
 	TOKEN_JOIN:  {name: "JOIN", class: classKeyword},
 	TOKEN_INNER: {name: "INNER", class: classKeyword},
 	TOKEN_LEFT:  {name: "LEFT", class: classKeyword},
@@ -192,7 +192,6 @@ var tokenTable = [...]tokenDef{
 	TOKEN_CROSS: {name: "CROSS", class: classKeyword},
 	TOKEN_ON:    {name: "ON", class: classKeyword},
 
-	// Clause keywords
 	TOKEN_GROUP:  {name: "GROUP", class: classKeyword},
 	TOKEN_BY:     {name: "BY", class: classKeyword},
 	TOKEN_HAVING: {name: "HAVING", class: classKeyword},
@@ -202,7 +201,6 @@ var tokenTable = [...]tokenDef{
 	TOKEN_LIMIT:  {name: "LIMIT", class: classKeyword},
 	TOKEN_OFFSET: {name: "OFFSET", class: classKeyword},
 
-	// Constraint / type keywords
 	TOKEN_PRIMARY:    {name: "PRIMARY", class: classKeyword},
 	TOKEN_KEY:        {name: "KEY", class: classKeyword},
 	TOKEN_NOT:        {name: "NOT", class: classKeyword},
@@ -211,7 +209,6 @@ var tokenTable = [...]tokenDef{
 	TOKEN_UNIQUE:     {name: "UNIQUE", class: classKeyword},
 	TOKEN_REFERENCES: {name: "REFERENCES", class: classKeyword},
 
-	// Logical / predicate keywords
 	TOKEN_AND:     {name: "AND", class: classKeyword},
 	TOKEN_OR:      {name: "OR", class: classKeyword},
 	TOKEN_TRUE:    {name: "TRUE", class: classKeyword},
@@ -221,15 +218,16 @@ var tokenTable = [...]tokenDef{
 	TOKEN_IN:      {name: "IN", class: classKeyword},
 	TOKEN_BETWEEN: {name: "BETWEEN", class: classKeyword},
 
-	// Data-type keywords
-	TOKEN_INT:       {name: "INT", class: classKeyword},
-	TOKEN_BIGINT:    {name: "BIGINT", class: classKeyword},
-	TOKEN_VARCHAR:   {name: "VARCHAR", class: classKeyword},
-	TOKEN_BOOLEAN:   {name: "BOOLEAN", class: classKeyword},
-	TOKEN_TEXT:      {name: "TEXT", class: classKeyword},
-	TOKEN_TIMESTAMP: {name: "TIMESTAMP", class: classKeyword},
+	TOKEN_INT:        {name: "INT", class: classKeyword},
+	TOKEN_BIGINT:     {name: "BIGINT", class: classKeyword},
+	TOKEN_VARCHAR:    {name: "VARCHAR", class: classKeyword},
+	TOKEN_BOOLEAN:    {name: "BOOLEAN", class: classKeyword},
+	TOKEN_TEXT:       {name: "TEXT", class: classKeyword},
+	TOKEN_TIMESTAMP:  {name: "TIMESTAMP", class: classKeyword},
+	TOKEN_FLOAT_TYPE: {name: "FLOAT", class: classKeyword},
+	TOKEN_DOUBLE:     {name: "DOUBLE", class: classKeyword},
+	TOKEN_DECIMAL:    {name: "DECIMAL", class: classKeyword},
 
-	// Comparison operators
 	TOKEN_EQ:  {name: "=", class: classOperator},
 	TOKEN_NEQ: {name: "!=", class: classOperator},
 	TOKEN_LT:  {name: "<", class: classOperator},
@@ -237,14 +235,12 @@ var tokenTable = [...]tokenDef{
 	TOKEN_LTE: {name: "<=", class: classOperator},
 	TOKEN_GTE: {name: ">=", class: classOperator},
 
-	// Arithmetic operators
 	TOKEN_PLUS:    {name: "+", class: classOperator},
 	TOKEN_MINUS:   {name: "-", class: classOperator},
 	TOKEN_STAR:    {name: "*", class: classOperator},
 	TOKEN_SLASH:   {name: "/", class: classOperator},
 	TOKEN_PERCENT: {name: "%", class: classOperator},
 
-	// Punctuation
 	TOKEN_LPAREN:    {name: "(", class: classPunct},
 	TOKEN_RPAREN:    {name: ")", class: classPunct},
 	TOKEN_COMMA:     {name: ",", class: classPunct},
@@ -254,9 +250,8 @@ var tokenTable = [...]tokenDef{
 
 func init() {
 	for i := 0; i < int(tokenTypeSentinel); i++ {
-		def := tokenTable[i]
-		if def.name == "" {
-			panic(fmt.Sprintf("lexer: TokenType %d has no entry in tokenTable", i))
+		if tokenTable[i].name == "" {
+			panic(fmt.Sprintf("utils: TokenType %d has no entry in tokenTable", i))
 		}
 	}
 }
@@ -271,31 +266,6 @@ func (t TokenType) String() string {
 	return fmt.Sprintf("TokenType(%d)", int(t))
 }
 
-// IsKeyword returns true if the token is a keyword.
-func (t TokenType) IsKeyword() bool {
-	return t.class() == classKeyword
-}
-
-// IsLiteral returns true if the token is a literal (IDENT, INTEGER, FLOAT, STRING).
-func (t TokenType) IsLiteral() bool {
-	return t.class() == classLiteral
-}
-
-// IsOperator returns true if the token is an operator.
-func (t TokenType) IsOperator() bool {
-	return t.class() == classOperator
-}
-
-// IsPunct returns true if the token is punctuation.
-func (t TokenType) IsPunct() bool {
-	return t.class() == classPunct
-}
-
-// IsSpecial returns true if the token is special (EOF, ILLEGAL).
-func (t TokenType) IsSpecial() bool {
-	return t.class() == classSpecial
-}
-
 func (t TokenType) class() tokenClass {
 	if i := int(t); i >= 0 && i < len(tokenTable) {
 		return tokenTable[i].class
@@ -303,13 +273,31 @@ func (t TokenType) class() tokenClass {
 	return classSpecial
 }
 
-// Token is a single lexical unit produced by the Lexer.
+// IsKeyword reports whether t is a reserved keyword.
+func (t TokenType) IsKeyword() bool { return t.class() == classKeyword }
+
+// IsLiteral reports whether t is a literal (IDENT, INTEGER, FLOAT, STRING).
+func (t TokenType) IsLiteral() bool { return t.class() == classLiteral }
+
+// IsOperator reports whether t is an arithmetic or comparison operator.
+func (t TokenType) IsOperator() bool { return t.class() == classOperator }
+
+// IsPunct reports whether t is a punctuation symbol.
+func (t TokenType) IsPunct() bool { return t.class() == classPunct }
+
+// IsSpecial reports whether t is EOF or ILLEGAL.
+func (t TokenType) IsSpecial() bool { return t.class() == classSpecial }
+
+// Token is a single lexical unit. It is the currency passed from the lexer to
+// the parser. Neither package imports the other; both import utils to share
+// this type.
 type Token struct {
 	Type    TokenType       // what kind of token this is
-	Literal string          // raw source text (string tokens have quotes stripped and escapes decoded)
-	Span    diagnostic.Span // start and end range of this token
+	Literal string          // raw source text (strings have quotes stripped)
+	Span    diagnostic.Span // source range [start, end)
 }
 
+// String returns a human-readable representation for debugging.
 func (t Token) String() string {
 	return fmt.Sprintf("Token{%-12s %q  %d:%d-%d:%d}",
 		t.Type, t.Literal,
