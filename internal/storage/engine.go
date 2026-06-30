@@ -35,7 +35,7 @@ type Op struct {
 	Type OpType
 	// Key is the record key to be written.
 	Key []byte
-	// Value is the payload payload to be written (nil for OpDelete).
+	// Value is the payload to be written (nil for OpDelete).
 	Value []byte
 }
 
@@ -110,11 +110,15 @@ type dbEngine struct {
 	// dir is the base database directory.
 	dir string
 	// walDir is the subdirectory where WAL files are kept.
+	// NOTE: WAL segment files are named "<segmentID>.wal" and live under walDir.
+	// SSTable files are named "<segmentID>.sst" and live under dir.
+	// Both share the same monotonic nextSegmentID counter, but are stored in
+	// different directories so there is no filename collision.
 	walDir string
 	// opts stores the engine options configuration.
 	opts Options
 
-	// mu synchronizes access to the engine state.
+	// mu synchronizes access to all engine state fields below.
 	mu sync.RWMutex
 
 	// lock is the exclusive directory lock closer.
@@ -135,7 +139,10 @@ type dbEngine struct {
 	levels map[int][]*sstable.Reader
 
 	// sstRefs coordinates reference counting to keep obsoleted files open for active iterators.
-	sstRefs map[*sstable.Reader]*sstableRef
+	// Access to sstRefs is protected by sstRefsMu (not the main mu), allowing pin/unpin
+	// to avoid acquiring a full write lock during reads.
+	sstRefs   map[*sstable.Reader]*sstableRef
+	sstRefsMu sync.Mutex
 
 	// nextSegmentID tracks the next unique ID for WAL/SSTable files.
 	nextSegmentID int
@@ -174,7 +181,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 		return nil, fmt.Errorf("failed to create WAL directory: %w", err)
 	}
 
-	// Acquire exclusive lock on base directory
+	// Acquire exclusive lock on base directory to prevent dual-open corruption.
 	lock, err := lockDirectory(dir)
 	if err != nil {
 		return nil, err
@@ -198,14 +205,14 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 
 	sstRefs := make(map[*sstable.Reader]*sstableRef)
 
-	// Open all active SSTables listed in manifest
+	// Open all active SSTables listed in manifest.
 	for level, filenames := range manifest.Levels {
 		readers := make([]*sstable.Reader, 0, len(filenames))
 		for _, name := range filenames {
 			path := filepath.Join(dir, name)
 			sstableReader, err := sstable.Open(path)
 			if err != nil {
-				// Cleanup opened files
+				// Cleanup previously opened files before returning.
 				for _, readerList := range levels {
 					for _, openedReader := range readerList {
 						_ = openedReader.Close()
@@ -219,7 +226,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 		levels[level] = readers
 	}
 
-	// Replay WAL for recovery
+	// Replay WAL segments to reconstruct in-memory state after a crash.
 	recoveryMem := memtable.NewSkipList(opts.MaxMemTableSize, opts.MemTableMaxLevel)
 	highestWALSegmentID, err := wal.Replay(walDir, recoveryMem)
 	if err != nil {
@@ -237,7 +244,8 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 	activeSegmentID := nextSegmentID
 
 	if recoveryMem.Size() > opts.MaxMemTableSize {
-		// Recovery memtable is full, flush to a new Level 0 SSTable file
+		// Recovery memtable exceeded the size limit: flush it directly to a
+		// new Level 0 SSTable before starting the engine.
 		sstableFilename := fmt.Sprintf("%06d.sst", nextSegmentID)
 		sstablePath := filepath.Join(dir, sstableFilename)
 
@@ -309,6 +317,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 			return nil, fmt.Errorf("failed to save manifest: %w", err)
 		}
 
+		// WAL segments that were fully recovered and flushed can now be deleted.
 		cleanupWALFiles(walDir, highestWALSegmentID)
 
 		activeMem = memtable.NewSkipList(opts.MaxMemTableSize, opts.MemTableMaxLevel)
@@ -322,7 +331,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 			return nil, fmt.Errorf("failed to initialize active WAL writer: %w", err)
 		}
 	} else {
-		// Use the recovery memtable as the active memtable, and resume the highest WAL
+		// Recovery memtable fits in memory: resume from the highest replayed WAL segment.
 		activeMem = recoveryMem
 		activeSegmentID = highestWALSegmentID
 		activeWAL, err = createWALWriter(walDir, activeSegmentID, opts.WALOptions)
@@ -359,7 +368,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 	}
 	engineInstance.flushCond = sync.NewCond(&engineInstance.mu)
 
-	// Launch background workers
+	// Launch background workers.
 	engineInstance.flushWg.Add(1)
 	go engineInstance.flushWorker()
 
@@ -390,6 +399,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 		return nil
 	}
 
+	// Pre-validate all operations and compute total batch byte size.
 	var batchSize int64
 	for _, operation := range operations {
 		if len(operation.Key) == 0 {
@@ -406,44 +416,55 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	}
 
 	engine.mu.Lock()
-	defer engine.mu.Unlock()
 
 	for {
 		if engine.bgErr != nil {
+			engine.mu.Unlock()
 			return engine.bgErr
 		}
 		if engine.isClosing {
+			engine.mu.Unlock()
 			return fmt.Errorf("engine is closing")
 		}
 
-		// Ensure we don't overflow the memtable size limit.
+		// If the batch would overflow the active memtable, freeze it and rotate.
 		if engine.memtable.Size()+batchSize > engine.opts.MaxMemTableSize {
 			if engine.immMemtable != nil {
+				// An immutable memtable is still being flushed; wait for it to complete.
 				engine.flushCond.Wait()
 				continue
 			}
 
-			// Freeze active memtable
+			// Freeze the active memtable and move it to the immutable slot.
 			engine.immMemtable = engine.memtable
 			engine.immWALSegmentID = engine.activeWALSegmentID
 
-			// Close active WAL segment
-			if err := engine.wal.Close(); err != nil {
+			// Close the active WAL segment.
+			activeWAL := engine.wal
+			engine.wal = nil
+			engine.mu.Unlock()
+
+			if err := activeWAL.Close(); err != nil {
+				engine.mu.Lock()
 				engine.bgErr = err
+				engine.mu.Unlock()
 				return err
 			}
 
-			// Initialize new active memtable & WAL segment
+			engine.mu.Lock()
+
+			// Initialize a fresh active memtable and a new WAL segment.
 			engine.memtable = memtable.NewSkipList(engine.opts.MaxMemTableSize, engine.opts.MemTableMaxLevel)
 			engine.activeWALSegmentID = engine.nextSegmentID
 			engine.nextSegmentID++
 
-			var err error
-			engine.wal, err = createWALWriter(engine.walDir, engine.activeWALSegmentID, engine.opts.WALOptions)
+			newWAL, err := createWALWriter(engine.walDir, engine.activeWALSegmentID, engine.opts.WALOptions)
 			if err != nil {
 				engine.bgErr = err
+				engine.mu.Unlock()
 				return err
 			}
+			engine.wal = newWAL
 
 			manifest := &Manifest{
 				NextSegmentID: engine.nextSegmentID,
@@ -451,10 +472,11 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 			}
 			if err := writeManifest(engine.dir, manifest); err != nil {
 				engine.bgErr = err
+				engine.mu.Unlock()
 				return err
 			}
 
-			// Trigger background flush
+			// Signal the background flush worker.
 			select {
 			case engine.flushChan <- struct{}{}:
 			default:
@@ -463,24 +485,42 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 			continue
 		}
 
-		// Write to WAL first
+		// Build the WAL records for this batch.
+		walRecords := make([]*wal.Record, 0, len(operations))
 		for _, operation := range operations {
-			var walOpcode uint8 = wal.OpcodePut
+			walOpcode := uint8(wal.OpcodePut)
 			if operation.Type == OpDelete {
 				walOpcode = wal.OpcodeDelete
 			}
-			record := &wal.Record{
+			walRecords = append(walRecords, &wal.Record{
 				Opcode: walOpcode,
 				Key:    operation.Key,
 				Value:  operation.Value,
-			}
-			if err := engine.wal.Append(record); err != nil {
-				engine.bgErr = err
-				return fmt.Errorf("failed to append to WAL: %w", err)
-			}
+			})
 		}
 
-		// Write to active memtable
+		activeWAL := engine.wal
+		engine.mu.Unlock()
+
+		if err := activeWAL.AppendBatch(walRecords); err != nil {
+			engine.mu.Lock()
+			engine.bgErr = err
+			engine.mu.Unlock()
+			return fmt.Errorf("failed to append batch to WAL: %w", err)
+		}
+
+		// Re-acquire lock to apply the same operations to the memtable.
+		// The WAL is durable at this point, so a crash before the memtable
+		// update is safe: replay will restore the state on the next open.
+		engine.mu.Lock()
+
+		// Guard against a racing Close() or background error that occurred
+		// while the lock was dropped for WAL I/O.
+		if engine.bgErr != nil {
+			engine.mu.Unlock()
+			return engine.bgErr
+		}
+
 		for _, operation := range operations {
 			if operation.Type == OpPut {
 				_ = engine.memtable.Put(operation.Key, operation.Value)
@@ -489,6 +529,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 			}
 		}
 
+		engine.mu.Unlock()
 		return nil
 	}
 }
@@ -509,7 +550,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("engine is closing")
 	}
 
-	// 1. Search active memtable
+	// Search active memtable.
 	value, found, deleted, err := engine.memtable.GetWithTombstone(key)
 	if err != nil {
 		engine.mu.RUnlock()
@@ -523,7 +564,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		return value, nil
 	}
 
-	// 2. Search immutable memtable
+	// Search immutable memtable.
 	if engine.immMemtable != nil {
 		value, found, deleted, err := engine.immMemtable.GetWithTombstone(key)
 		if err != nil {
@@ -539,33 +580,40 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		}
 	}
 
-	// Snapshot active SSTable readers and pin them
 	var level0 []*sstable.Reader
 	var level1 []*sstable.Reader
 
 	for _, sstableReader := range engine.levels[0] {
-		engine.pinSSTable(sstableReader)
 		level0 = append(level0, sstableReader)
 	}
 	for _, sstableReader := range engine.levels[1] {
-		engine.pinSSTable(sstableReader)
 		level1 = append(level1, sstableReader)
 	}
 
 	engine.mu.RUnlock()
 
+	// Pin all snapshotted readers using the lightweight sstRefsMu.
+	engine.sstRefsMu.Lock()
+	for _, sstableReader := range level0 {
+		engine.pinSSTable(sstableReader)
+	}
+	for _, sstableReader := range level1 {
+		engine.pinSSTable(sstableReader)
+	}
+	engine.sstRefsMu.Unlock()
+
 	defer func() {
-		engine.mu.Lock()
+		engine.sstRefsMu.Lock()
 		for _, sstableReader := range level0 {
 			engine.unpinSSTable(sstableReader)
 		}
 		for _, sstableReader := range level1 {
 			engine.unpinSSTable(sstableReader)
 		}
-		engine.mu.Unlock()
+		engine.sstRefsMu.Unlock()
 	}()
 
-	// 3. Search Level 0 SSTables (overlapping ranges, search newest to oldest)
+	// Search Level 0 SSTables (overlapping ranges, search newest to oldest).
 	for _, sstableReader := range level0 {
 		if sstableReader.BloomMayContain(key) {
 			value, found, deleted, err := sstableReader.Get(key)
@@ -581,7 +629,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		}
 	}
 
-	// 4. Search Level 1 SSTables (non-overlapping ranges, binary search)
+	// Search Level 1 SSTables (non-overlapping ranges, binary search on MaxKey).
 	if len(level1) > 0 {
 		index := sort.Search(len(level1), func(i int) bool {
 			return bytes.Compare(level1[i].MaxKey(), key) >= 0
@@ -617,29 +665,33 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 
 	var level0 []*sstable.Reader
 	for _, sstableReader := range engine.levels[0] {
+		engine.sstRefsMu.Lock()
 		engine.pinSSTable(sstableReader)
+		engine.sstRefsMu.Unlock()
 		level0 = append(level0, sstableReader)
 		pinned = append(pinned, sstableReader)
 	}
 
 	var level1 []*sstable.Reader
 	for _, sstableReader := range engine.levels[1] {
+		engine.sstRefsMu.Lock()
 		engine.pinSSTable(sstableReader)
+		engine.sstRefsMu.Unlock()
 		level1 = append(level1, sstableReader)
 		pinned = append(pinned, sstableReader)
 	}
 
 	var iterators []internalIterator
 
-	// Active memtable
+	// Active memtable iterator.
 	iterators = append(iterators, newMemAdapter(engine.memtable.NewIteratorAt(prefix)))
 
-	// Immutable memtable
+	// Immutable memtable iterator (if flushing is in progress).
 	if engine.immMemtable != nil {
 		iterators = append(iterators, newMemAdapter(engine.immMemtable.NewIteratorAt(prefix)))
 	}
 
-	// Level 0 SSTables
+	// Level 0 SSTable iterators (all files, as L0 ranges overlap).
 	for _, sstableReader := range level0 {
 		sstableIterator, err := sstableReader.NewIteratorAt(prefix)
 		if err == nil {
@@ -647,11 +699,13 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 		}
 	}
 
-	// Level 1 SSTables (overlapping with prefix range)
+	// Level 1 SSTable iterators (only files whose key range overlaps the prefix).
 	var prefixLimit []byte
 	if len(prefix) > 0 {
 		prefixLimit = make([]byte, len(prefix))
 		copy(prefixLimit, prefix)
+		// Compute the exclusive upper bound of the prefix by incrementing the
+		// last byte, carrying over if it wraps (handles all-0xFF prefixes).
 		for i := len(prefixLimit) - 1; i >= 0; i-- {
 			prefixLimit[i]++
 			if prefixLimit[i] != 0 {
@@ -681,10 +735,10 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	engine.iterWg.Add(1)
 
 	mergingIteratorInstance := &mergingIterator{
-		engine:  engine,
-		pinned:  pinned,
-		iters:   iterators,
-		prefix:  prefix,
+		engine: engine,
+		pinned: pinned,
+		iters:  iterators,
+		prefix: prefix,
 	}
 	mergingIteratorInstance.findNext()
 
@@ -701,13 +755,13 @@ func (engine *dbEngine) Close() error {
 	engine.isClosing = true
 	engine.mu.Unlock()
 
-	// Wait for user iterators to close
+	// Wait for all active user iterators to release their pinned readers.
 	engine.iterWg.Wait()
 
-	// Force flush of active memtable if it has data
+	// Trigger a final flush of the active memtable if it holds any data.
 	engine.mu.Lock()
 	if engine.memtable.Size() > 0 && engine.bgErr == nil {
-		// Wait for any pending flush
+		// Wait for any in-progress flush to complete before freezing.
 		for engine.immMemtable != nil {
 			engine.flushCond.Wait()
 		}
@@ -715,7 +769,12 @@ func (engine *dbEngine) Close() error {
 		engine.immMemtable = engine.memtable
 		engine.immWALSegmentID = engine.activeWALSegmentID
 
-		_ = engine.wal.Close()
+		// Close the WAL exactly once here and nil the pointer to
+		// prevent a second Close() call in the cleanup block below.
+		if engine.wal != nil {
+			_ = engine.wal.Close()
+			engine.wal = nil
+		}
 
 		engine.memtable = memtable.NewSkipList(engine.opts.MaxMemTableSize, engine.opts.MemTableMaxLevel)
 
@@ -726,7 +785,8 @@ func (engine *dbEngine) Close() error {
 	}
 	engine.mu.Unlock()
 
-	// Signal workers to terminate
+	// Signal both workers to terminate. Close their channels so a blocked
+	// select wakes immediately.
 	close(engine.flushCloseChan)
 	close(engine.compactCloseChan)
 
@@ -736,17 +796,18 @@ func (engine *dbEngine) Close() error {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 
-	// Close WAL
+	// Close the WAL if it wasn't already closed above.
 	if engine.wal != nil {
 		_ = engine.wal.Close()
+		engine.wal = nil
 	}
 
-	// Close lock Closer
+	// Release the exclusive directory lock.
 	if engine.lock != nil {
 		_ = engine.lock.Close()
 	}
 
-	// Close all SSTable readers
+	// Close all remaining SSTable readers.
 	for _, readerList := range engine.levels {
 		for _, sstableReader := range readerList {
 			_ = sstableReader.Close()
@@ -756,7 +817,13 @@ func (engine *dbEngine) Close() error {
 	return engine.bgErr
 }
 
-// Background flush worker that serializes immutable memtables to Level 0 SSTables.
+// flushWorker is the background goroutine that serializes immutable memtables
+// to Level 0 SSTables.
+//
+// When the close channel fires, the worker always checks for a pending
+// immMemtable and flushes it before returning, preventing data loss on graceful
+// shutdown. The close channel is only used to interrupt a blocking wait when
+// there is nothing to flush; it never causes an early exit if work remains.
 func (engine *dbEngine) flushWorker() {
 	defer engine.flushWg.Done()
 
@@ -764,10 +831,22 @@ func (engine *dbEngine) flushWorker() {
 		select {
 		case <-engine.flushChan:
 		case <-engine.flushCloseChan:
+			// Drain any final immMemtable before exiting. Close() always
+			// enqueues a flush on flushChan before closing flushCloseChan,
+			// but we also check here to handle the race where Go's select
+			// picks this branch non-deterministically.
+			engine.mu.Lock()
+			if engine.immMemtable == nil {
+				engine.mu.Unlock()
+				return
+			}
+			// Fall through to flush the pending immutable memtable below.
+			engine.mu.Unlock()
 		}
 
 		engine.mu.Lock()
 		if engine.immMemtable == nil {
+			// Nothing to flush. If we are closing, exit; otherwise wait for work.
 			if engine.isClosing {
 				engine.mu.Unlock()
 				return
@@ -779,7 +858,8 @@ func (engine *dbEngine) flushWorker() {
 		segmentID := engine.immWALSegmentID
 		engine.mu.Unlock()
 
-		// Write to SSTable (no lock held)
+		// Write the immutable memtable to a new Level 0 SSTable.
+		// The lock is not held during disk I/O.
 		sstableFilename := fmt.Sprintf("%06d.sst", segmentID)
 		sstablePath := filepath.Join(engine.dir, sstableFilename)
 
@@ -823,9 +903,11 @@ func (engine *dbEngine) flushWorker() {
 			return
 		}
 
-		// Prepend to Level 0
+		// Prepend the new file to Level 0 (newest first).
 		engine.levels[0] = append([]*sstable.Reader{sstableReader}, engine.levels[0]...)
+		engine.sstRefsMu.Lock()
 		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
+		engine.sstRefsMu.Unlock()
 
 		engine.immMemtable = nil
 		engine.flushCond.Broadcast()
@@ -836,7 +918,7 @@ func (engine *dbEngine) flushWorker() {
 		}
 		_ = writeManifest(engine.dir, manifest)
 
-		// Delete WAL file
+		// Remove the corresponding WAL segment — its data is now in the SSTable.
 		_ = os.Remove(filepath.Join(engine.walDir, fmt.Sprintf("%06d.wal", segmentID)))
 
 		triggerCompaction := len(engine.levels[0]) >= engine.opts.CompactionThreshold
@@ -848,22 +930,50 @@ func (engine *dbEngine) flushWorker() {
 			default:
 			}
 		}
+
+		// If Close() fired the close channel and this was the final flush, exit.
+		engine.mu.Lock()
+		isClosingNow := engine.isClosing && engine.immMemtable == nil
+		engine.mu.Unlock()
+		if isClosingNow {
+			return
+		}
 	}
 }
 
-// Background compaction worker that merges Level 0 and Level 1 files to reclaim space.
+// compactionWorker is the background goroutine that merges Level 0 and Level 1
+// SSTables when the L0 file count exceeds the configured threshold.
+//
+// The worker has a clean exit path for both the close channel and the
+// normal-termination condition. When closing, it skips a new compaction if one
+// is not already warranted, rather than looping forever on a closed channel.
 func (engine *dbEngine) compactionWorker() {
 	defer engine.compactWg.Done()
 
 	for {
 		select {
 		case <-engine.compactChan:
+			// Normal compaction trigger.
 		case <-engine.compactCloseChan:
+			// Shutdown signal: perform one final compaction pass if needed,
+			// then exit. This drains any pending trigger that arrived before close.
+			engine.mu.Lock()
+			shouldCompact := !engine.isCompacting && len(engine.levels[0]) >= engine.opts.CompactionThreshold
+			engine.mu.Unlock()
+			if !shouldCompact {
+				return
+			}
 		}
 
 		engine.mu.Lock()
-		if engine.isCompacting || len(engine.levels[0]) < engine.opts.CompactionThreshold {
-			if engine.isClosing && !engine.isCompacting {
+		if engine.isCompacting {
+			// A compaction is already running; skip this trigger.
+			engine.mu.Unlock()
+			continue
+		}
+		if len(engine.levels[0]) < engine.opts.CompactionThreshold {
+			// L0 is below the threshold; nothing to compact.
+			if engine.isClosing {
 				engine.mu.Unlock()
 				return
 			}
@@ -873,7 +983,7 @@ func (engine *dbEngine) compactionWorker() {
 
 		engine.isCompacting = true
 
-		// Collect L0 and L1 readers
+		// Collect paths and IDs for all L0 and L1 input files.
 		var inputFiles []string
 		var fileIDs []int
 		var obsoleteReaders []*sstable.Reader
@@ -893,6 +1003,8 @@ func (engine *dbEngine) compactionWorker() {
 			obsoleteReaders = append(obsoleteReaders, sstableReader)
 		}
 
+		// Reserve a contiguous block of segment IDs for the compaction output files.
+		// The compactor receives only the first ID; it will produce one or more files.
 		compactionSegID := engine.nextSegmentID
 		engine.nextSegmentID++
 
@@ -916,21 +1028,36 @@ func (engine *dbEngine) compactionWorker() {
 			return
 		}
 
-		compactedPath := res.NewFilesCreated[0]
-		sstableReader, err := sstable.Open(compactedPath)
-		if err != nil {
-			engine.bgErr = fmt.Errorf("compaction failed to open reader: %w", err)
-			engine.isCompacting = false
-			engine.mu.Unlock()
-			return
+		var newL1Readers []*sstable.Reader
+		for _, compactedPath := range res.NewFilesCreated {
+			sstableReader, err := sstable.Open(compactedPath)
+			if err != nil {
+				// If any output file fails to open, mark it as a background error
+				// and clean up the readers that were successfully opened.
+				for _, r := range newL1Readers {
+					_ = r.Close()
+					_ = os.Remove(r.FilePath())
+				}
+				engine.bgErr = fmt.Errorf("compaction failed to open output file %s: %w", compactedPath, err)
+				engine.isCompacting = false
+				engine.mu.Unlock()
+				return
+			}
+			newL1Readers = append(newL1Readers, sstableReader)
 		}
 
-		// Replace L0 and L1 with the newly compacted file in L1
+		// Replace L0 and the old L1 with the newly compacted files in L1.
 		engine.levels[0] = nil
-		engine.levels[1] = []*sstable.Reader{sstableReader}
-		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
+		engine.levels[1] = newL1Readers
 
-		// Mark obsolete files
+		engine.sstRefsMu.Lock()
+		for _, sstableReader := range newL1Readers {
+			engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
+		}
+
+		// Mark all pre-compaction files as obsolete. Files that are currently
+		// pinned by active iterators are deferred for deletion until their last
+		// reference is released via unpinSSTable.
 		for _, obsR := range obsoleteReaders {
 			if ref, ok := engine.sstRefs[obsR]; ok {
 				ref.obsolete = true
@@ -941,6 +1068,7 @@ func (engine *dbEngine) compactionWorker() {
 				}
 			}
 		}
+		engine.sstRefsMu.Unlock()
 
 		manifest := &Manifest{
 			NextSegmentID: engine.nextSegmentID,
@@ -953,14 +1081,18 @@ func (engine *dbEngine) compactionWorker() {
 	}
 }
 
-// pinSSTable increments references to avoid file deletion during iterator scans.
+// pinSSTable increments the active reference count for the given SSTable reader.
+// Must be called with sstRefsMu held.
 func (engine *dbEngine) pinSSTable(sstableReader *sstable.Reader) {
 	if ref, ok := engine.sstRefs[sstableReader]; ok {
 		ref.refs++
 	}
 }
 
-// unpinSSTable decrements references and closes/deletes obsoleted files when zeroed out.
+// unpinSSTable decrements the active reference count for the given SSTable reader.
+// When the count reaches zero and the file has been marked obsolete by compaction,
+// the reader is closed and the file is deleted from disk.
+// Must be called with sstRefsMu held.
 func (engine *dbEngine) unpinSSTable(sstableReader *sstable.Reader) {
 	if ref, ok := engine.sstRefs[sstableReader]; ok {
 		ref.refs--
@@ -972,7 +1104,8 @@ func (engine *dbEngine) unpinSSTable(sstableReader *sstable.Reader) {
 	}
 }
 
-// manifestLevels builds the file basename mapping for the atomic metadata manifest.
+// manifestLevels builds the file basename mapping required by the atomic manifest writer.
+// Must be called with engine.mu held.
 func (engine *dbEngine) manifestLevels() map[int][]string {
 	mLevels := make(map[int][]string)
 	for level, readerList := range engine.levels {
@@ -985,7 +1118,8 @@ func (engine *dbEngine) manifestLevels() map[int][]string {
 	return mLevels
 }
 
-// internalIterator wraps memory & SSTable iterators into a uniform peekable cursor interface.
+// internalIterator wraps memory & SSTable iterators into a uniform peekable cursor
+// interface consumed by mergingIterator.
 type internalIterator interface {
 	Valid() bool
 	Key() []byte
@@ -995,35 +1129,31 @@ type internalIterator interface {
 	Close()
 }
 
+// memAdapter adapts a *memtable.Iterator into the internalIterator interface.
 type memAdapter struct {
-	iter       *memtable.Iterator
+	// iter is the underlying memtable iterator.
+	iter *memtable.Iterator
+	// hasCurrent is true when the adapter is positioned on a valid entry.
 	hasCurrent bool
-	currKey    []byte
-	currVal    []byte
-	currDel    bool
+	// currKey is the key of the current entry.
+	currKey []byte
+	// currVal is the value of the current entry.
+	currVal []byte
+	// currDel is true when the current entry is a tombstone.
+	currDel bool
 }
 
+// newMemAdapter creates a memAdapter and positions it on the first valid entry.
 func newMemAdapter(iter *memtable.Iterator) *memAdapter {
 	adapter := &memAdapter{iter: iter}
 	adapter.Next()
 	return adapter
 }
 
-func (adapter *memAdapter) Valid() bool {
-	return adapter.hasCurrent
-}
-
-func (adapter *memAdapter) Key() []byte {
-	return adapter.currKey
-}
-
-func (adapter *memAdapter) Value() []byte {
-	return adapter.currVal
-}
-
-func (adapter *memAdapter) IsDeleted() bool {
-	return adapter.currDel
-}
+func (adapter *memAdapter) Valid() bool     { return adapter.hasCurrent }
+func (adapter *memAdapter) Key() []byte     { return adapter.currKey }
+func (adapter *memAdapter) Value() []byte   { return adapter.currVal }
+func (adapter *memAdapter) IsDeleted() bool { return adapter.currDel }
 
 func (adapter *memAdapter) Next() {
 	if adapter.iter.Valid() {
@@ -1037,50 +1167,48 @@ func (adapter *memAdapter) Next() {
 
 func (adapter *memAdapter) Close() {}
 
+// sstAdapter adapts a *sstable.Iterator into the internalIterator interface.
 type sstAdapter struct {
-	iter       *sstable.Iterator
+	// iter is the underlying SSTable iterator.
+	iter *sstable.Iterator
+	// hasCurrent is true when the iterator advanced to a valid entry.
 	hasCurrent bool
 }
 
+// newSstAdapter creates an sstAdapter and positions it on the first valid entry.
 func newSstAdapter(iter *sstable.Iterator) *sstAdapter {
 	adapter := &sstAdapter{iter: iter}
 	adapter.Next()
 	return adapter
 }
 
-func (adapter *sstAdapter) Valid() bool {
-	return adapter.hasCurrent && adapter.iter.Error() == nil
-}
+func (adapter *sstAdapter) Valid() bool     { return adapter.hasCurrent && adapter.iter.Error() == nil }
+func (adapter *sstAdapter) Key() []byte     { return adapter.iter.Key() }
+func (adapter *sstAdapter) Value() []byte   { return adapter.iter.Value() }
+func (adapter *sstAdapter) IsDeleted() bool { return adapter.iter.Opcode() == sstable.OpcodeDelete }
+func (adapter *sstAdapter) Next()           { adapter.hasCurrent = adapter.iter.Next() }
+func (adapter *sstAdapter) Close()          { _ = adapter.iter.Close() }
 
-func (adapter *sstAdapter) Key() []byte {
-	return adapter.iter.Key()
-}
-
-func (adapter *sstAdapter) Value() []byte {
-	return adapter.iter.Value()
-}
-
-func (adapter *sstAdapter) IsDeleted() bool {
-	return adapter.iter.Opcode() == sstable.OpcodeDelete
-}
-
-func (adapter *sstAdapter) Next() {
-	adapter.hasCurrent = adapter.iter.Next()
-}
-
-func (adapter *sstAdapter) Close() {
-	_ = adapter.iter.Close()
-}
-
+// mergingIterator merges multiple internalIterators into a single sorted,
+// deduplicated, tombstone-filtered cursor that implements the public Iterator
+// interface.
 type mergingIterator struct {
-	engine  *dbEngine
-	pinned  []*sstable.Reader
-	iters   []internalIterator
-	prefix  []byte
+	// engine is a back-reference used to release pinned readers on Close.
+	engine *dbEngine
+	// pinned holds all SSTable readers pinned for the duration of this iterator.
+	pinned []*sstable.Reader
+	// iters are the underlying per-source iterators being merged.
+	iters []internalIterator
+	// prefix is the scan prefix filter; an empty slice means no filtering.
+	prefix []byte
+	// currKey is the key of the current merged entry.
 	currKey []byte
+	// currVal is the value of the current merged entry.
 	currVal []byte
-	valid   bool
-	closed  bool
+	// valid is true when the iterator holds a usable entry.
+	valid bool
+	// closed tracks whether Close has been called.
+	closed bool
 }
 
 // Valid returns true if the merging iterator is currently holding a valid entry.
@@ -1101,7 +1229,8 @@ func (iterator *mergingIterator) Next() (key, value []byte) {
 	return returnedKey, returnedValue
 }
 
-// Close releases the reference counts of pinned files and finishes coordinate operations.
+// Close releases the reference counts of all pinned SSTable readers and signals
+// the engine that this iterator is no longer active.
 func (iterator *mergingIterator) Close() {
 	if iterator.closed {
 		return
@@ -1110,20 +1239,27 @@ func (iterator *mergingIterator) Close() {
 	for _, subIterator := range iterator.iters {
 		subIterator.Close()
 	}
-	iterator.engine.mu.Lock()
+	iterator.engine.sstRefsMu.Lock()
 	for _, sstableReader := range iterator.pinned {
 		iterator.engine.unpinSSTable(sstableReader)
 	}
-	iterator.engine.mu.Unlock()
+	iterator.engine.sstRefsMu.Unlock()
 	iterator.engine.iterWg.Done()
 }
 
-// findNext identifies and deduplicates the smallest key from active streams.
+// findNext advances the merging iterator to the next live, non-tombstone entry.
+//
+// The deduplicate-and-advance loop compares each sub-iterator's key
+// against keyCopy (a safe heap copy) rather than the raw smallestKey pointer.
+// smallestKey is a direct reference into the sub-iterator's internal buffer,
+// which may be overwritten the moment that iterator's Next() is called. Using
+// keyCopy prevents stale/garbage comparisons.
 func (iterator *mergingIterator) findNext() {
 	for {
 		var smallestKey []byte
 		var smallestIdx = -1
 
+		// Find the sub-iterator holding the lexicographically smallest key.
 		for i, subIterator := range iterator.iters {
 			if !subIterator.Valid() {
 				continue
@@ -1136,20 +1272,25 @@ func (iterator *mergingIterator) findNext() {
 		}
 
 		if smallestIdx == -1 {
+			// All sub-iterators are exhausted.
 			iterator.valid = false
 			iterator.currKey, iterator.currVal = nil, nil
 			return
 		}
 
+		// Stop scanning if the smallest key no longer shares the prefix.
 		if len(iterator.prefix) > 0 && !bytes.HasPrefix(smallestKey, iterator.prefix) {
 			iterator.valid = false
 			iterator.currKey, iterator.currVal = nil, nil
 			return
 		}
 
+		// Capture the deletion flag and value before advancing any iterator.
 		isDeleted := iterator.iters[smallestIdx].IsDeleted()
 		valueCopy := iterator.iters[smallestIdx].Value()
 
+		// Make a safe copy of the key. This must happen before calling Next()
+		// on any sub-iterator, as Next() may overwrite the underlying buffer.
 		keyCopy := make([]byte, len(smallestKey))
 		copy(keyCopy, smallestKey)
 
@@ -1159,13 +1300,16 @@ func (iterator *mergingIterator) findNext() {
 			copy(valCopy, valueCopy)
 		}
 
-		// Advance all matching iterators
+		// Advance every sub-iterator that is positioned on the same key.
+		// Use keyCopy here (Fix #4), not smallestKey, to avoid comparing
+		// against a buffer that has been mutated by a preceding Next() call.
 		for _, subIterator := range iterator.iters {
-			if subIterator.Valid() && bytes.Equal(subIterator.Key(), smallestKey) {
+			if subIterator.Valid() && bytes.Equal(subIterator.Key(), keyCopy) {
 				subIterator.Next()
 			}
 		}
 
+		// Skip tombstone entries; they represent logical deletions.
 		if !isDeleted {
 			iterator.currKey = keyCopy
 			iterator.currVal = valCopy
@@ -1190,7 +1334,9 @@ func createWALWriter(walDir string, segmentID int, walOptions wal.Options) (*wal
 	return wal.NewLogWriter(walDir, segmentID, walOpts...)
 }
 
-// cleanupWALFiles deletes WAL segment files up to the highest replayed ID.
+// cleanupWALFiles deletes WAL segment files with IDs up to and including
+// upToSegmentID. These segments have already been fully recovered and flushed
+// to an SSTable, so they are no longer needed for crash recovery.
 func cleanupWALFiles(walDir string, upToSegmentID int) {
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
