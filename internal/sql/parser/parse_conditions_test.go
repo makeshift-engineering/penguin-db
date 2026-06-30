@@ -375,23 +375,25 @@ func TestParse_Conditions(t *testing.T) {
 
 func TestParse_ConditionErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr error
+		name     string
+		input    string
+		wantErr  error
+		wantLine int
+		wantCol  int
 	}{
-		{"incomplete comparison", "DELETE FROM t WHERE a = ;", CodeExpectedExpression},
-		{"is without null", "DELETE FROM t WHERE a IS TRUE;", CodeUnexpectedToken},
-		{"in missing rparen", "DELETE FROM t WHERE a IN (1, 2;", CodeUnexpectedToken},
-		{"between missing and", "DELETE FROM t WHERE a BETWEEN 1 OR 2;", CodeUnexpectedToken},
-		{"not missing predicate", "DELETE FROM t WHERE a NOT = 1;", CodeUnexpectedToken},
-		{"incomplete parenthesis", "DELETE FROM t WHERE (a = 1;", CodeUnexpectedToken},
-		{"empty where clause", "DELETE FROM t WHERE ;", CodeExpectedExpression},
-		{"in empty list", "DELETE FROM t WHERE a IN ();", CodeExpectedExpression},
+		{"incomplete comparison", "DELETE FROM t WHERE a = ;", CodeExpectedExpression, 1, 25},
+		{"is without null", "DELETE FROM t WHERE a IS TRUE;", CodeUnexpectedToken, 1, 26},
+		{"in missing rparen", "DELETE FROM t WHERE a IN (1, 2;", CodeUnexpectedToken, 1, 31},
+		{"between missing and", "DELETE FROM t WHERE a BETWEEN 1 OR 2;", CodeUnexpectedToken, 1, 33},
+		{"not missing predicate", "DELETE FROM t WHERE a NOT = 1;", CodeUnexpectedToken, 1, 23},
+		{"incomplete parenthesis", "DELETE FROM t WHERE (a = 1;", CodeUnexpectedToken, 1, 27},
+		{"empty where clause", "DELETE FROM t WHERE ;", CodeExpectedExpression, 1, 21},
+		{"in empty list", "DELETE FROM t WHERE a IN ();", CodeExpectedExpression, 1, 27},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireParseError(t, tt.input, tt.wantErr)
+			requireParseError(t, tt.input, tt.wantErr, tt.wantLine, tt.wantCol)
 		})
 	}
 }
