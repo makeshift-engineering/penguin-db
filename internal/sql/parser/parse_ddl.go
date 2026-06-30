@@ -395,7 +395,7 @@ func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
-		return &ast.ReferencesConstraint{
+		return &ast.ForeignRef{
 			ClauseBase: p.clauseBase(start),
 			Table:      table,
 			Column:     col,
@@ -437,6 +437,41 @@ func (p *Parser) parseDataType() (*ast.DataType, error) {
 		p.advance()
 		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeTimestamp}, nil
 
+	case utils.TOKEN_FLOAT_TYPE:
+		p.advance()
+		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeFloat}, nil
+
+	case utils.TOKEN_DOUBLE:
+		p.advance()
+		return &ast.DataType{ClauseBase: p.clauseBase(start), Kind: ast.TypeDouble}, nil
+
+	case utils.TOKEN_DECIMAL:
+		p.advance() // DECIMAL
+		var prec, scale *int
+		if p.match(utils.TOKEN_LPAREN) {
+			pVal, err := p.parseIntegerLiteralValue()
+			if err != nil {
+				return nil, err
+			}
+			prec = &pVal
+			if p.match(utils.TOKEN_COMMA) {
+				sVal, err := p.parseIntegerLiteralValue()
+				if err != nil {
+					return nil, err
+				}
+				scale = &sVal
+			}
+			if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
+				return nil, err
+			}
+		}
+		return &ast.DataType{
+			ClauseBase:   p.clauseBase(start),
+			Kind:         ast.TypeDecimal,
+			DecimalPrec:  prec,
+			DecimalScale: scale,
+		}, nil
+
 	case utils.TOKEN_VARCHAR:
 		p.advance() // VARCHAR
 		if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
@@ -459,7 +494,7 @@ func (p *Parser) parseDataType() (*ast.DataType, error) {
 		return nil, p.errorf(
 			p.current.Span,
 			CodeInvalidDataType,
-			"expected a data type (INT, BIGINT, VARCHAR, BOOLEAN, TEXT, TIMESTAMP), got %s (%q)",
+			"expected a data type (INT, BIGINT, VARCHAR, BOOLEAN, TEXT, TIMESTAMP, FLOAT, DOUBLE, DECIMAL), got %s (%q)",
 			p.current.Type, p.current.Literal,
 		)
 	}
@@ -500,18 +535,21 @@ func (p *Parser) parseQualifiedIdentifier() (*ast.Identifier, error) {
 func (p *Parser) parseSignedLiteral() (*ast.SignedLiteral, error) {
 	start := p.currentStart()
 	negative := false
+	signed := false
 
 	if p.check(utils.TOKEN_MINUS) {
 		p.advance()
 		negative = true
+		signed = true
 	} else if p.check(utils.TOKEN_PLUS) {
 		p.advance()
+		signed = true
 	}
 
 	// After a sign only numeric literals are valid.
 	var val ast.Expression
 	var err error
-	if negative {
+	if signed {
 		val, err = p.parseNumericLiteral()
 	} else {
 		val, err = p.parseLiteral()

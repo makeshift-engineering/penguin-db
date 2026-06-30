@@ -100,6 +100,9 @@ const (
 	TOKEN_BOOLEAN
 	TOKEN_TEXT
 	TOKEN_TIMESTAMP
+	TOKEN_FLOAT_TYPE
+	TOKEN_DOUBLE
+	TOKEN_DECIMAL
 
 	// Comparison operators
 	TOKEN_EQ  // =
@@ -215,12 +218,15 @@ var tokenTable = [...]tokenDef{
 	TOKEN_IN:      {name: "IN", class: classKeyword},
 	TOKEN_BETWEEN: {name: "BETWEEN", class: classKeyword},
 
-	TOKEN_INT:       {name: "INT", class: classKeyword},
-	TOKEN_BIGINT:    {name: "BIGINT", class: classKeyword},
-	TOKEN_VARCHAR:   {name: "VARCHAR", class: classKeyword},
-	TOKEN_BOOLEAN:   {name: "BOOLEAN", class: classKeyword},
-	TOKEN_TEXT:      {name: "TEXT", class: classKeyword},
-	TOKEN_TIMESTAMP: {name: "TIMESTAMP", class: classKeyword},
+	TOKEN_INT:        {name: "INT", class: classKeyword},
+	TOKEN_BIGINT:     {name: "BIGINT", class: classKeyword},
+	TOKEN_VARCHAR:    {name: "VARCHAR", class: classKeyword},
+	TOKEN_BOOLEAN:    {name: "BOOLEAN", class: classKeyword},
+	TOKEN_TEXT:       {name: "TEXT", class: classKeyword},
+	TOKEN_TIMESTAMP:  {name: "TIMESTAMP", class: classKeyword},
+	TOKEN_FLOAT_TYPE: {name: "FLOAT", class: classKeyword},
+	TOKEN_DOUBLE:     {name: "DOUBLE", class: classKeyword},
+	TOKEN_DECIMAL:    {name: "DECIMAL", class: classKeyword},
 
 	TOKEN_EQ:  {name: "=", class: classOperator},
 	TOKEN_NEQ: {name: "!=", class: classOperator},

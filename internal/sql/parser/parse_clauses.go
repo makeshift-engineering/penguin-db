@@ -28,7 +28,10 @@ func (p *Parser) parseTableReferences() ([]*ast.TableRef, error) {
 func (p *Parser) parseTableReference() (*ast.TableRef, error) {
 	start := p.currentStart()
 
-	// Parenthesised table reference
+	// Parenthesised table reference or named table with optional joins.
+	// Both paths fall through to the join loop below so that trailing
+	// JOINs after e.g. (t1) JOIN t2 ON ... are not dropped.
+	var ref *ast.TableRef
 	if p.check(utils.TOKEN_LPAREN) {
 		p.advance() // consume '('
 		inner, err := p.parseTableReference()
@@ -38,29 +41,25 @@ func (p *Parser) parseTableReference() (*ast.TableRef, error) {
 		if _, err := p.expect(utils.TOKEN_RPAREN); err != nil {
 			return nil, err
 		}
-		return &ast.TableRef{ClauseBase: p.clauseBase(start), Paren: inner}, nil
+		ref = &ast.TableRef{ClauseBase: p.clauseBase(start), Paren: inner}
+	} else {
+		primary, err := p.parseTablePrimary()
+		if err != nil {
+			return nil, err
+		}
+		ref = &ast.TableRef{ClauseBase: p.clauseBase(start), Primary: primary}
 	}
 
-	// Named table with optional joins
-	primary, err := p.parseTablePrimary()
-	if err != nil {
-		return nil, err
-	}
-
-	var joins []*ast.JoinClause
+	// Collect any trailing JOINs (applies to both parenthesised and named refs).
 	for p.isJoinStart() {
 		join, err := p.parseJoinClause()
 		if err != nil {
 			return nil, err
 		}
-		joins = append(joins, join)
+		ref.Joins = append(ref.Joins, join)
 	}
 
-	return &ast.TableRef{
-		ClauseBase: p.clauseBase(start),
-		Primary:    primary,
-		Joins:      joins,
-	}, nil
+	return ref, nil
 }
 
 // parseTablePrimary parses a named table with an optional alias.
