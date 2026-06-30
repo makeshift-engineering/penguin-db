@@ -5,6 +5,10 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
+// parseStatement inspects the current token and dispatches to the
+// appropriate statement-level parse function (DDL, DML, or USE). It returns a
+// [CodeMalformedStatement] error when the current token is not a recognised
+// statement keyword.
 func (p *Parser) parseStatement() (ast.Statement, error) {
 	switch p.current.Type {
 	case utils.TOKEN_CREATE:
@@ -33,6 +37,10 @@ func (p *Parser) parseStatement() (ast.Statement, error) {
 	}
 }
 
+// parseCreateStatement peeks at the token following CREATE and dispatches to
+// either parseCreateDatabaseStatement or parseCreateTableStatement.
+// If the lookahead is neither DATABASE nor TABLE, the CREATE token is consumed
+// first so the error span points at the unexpected token rather than at CREATE.
 func (p *Parser) parseCreateStatement() (ast.Statement, error) {
 	switch p.tokens.Peek().Type {
 	case utils.TOKEN_DATABASE:
@@ -50,6 +58,10 @@ func (p *Parser) parseCreateStatement() (ast.Statement, error) {
 	}
 }
 
+// parseDropStatement peeks at the token following DROP and dispatches to
+// either parseDropDatabaseStatement or parseDropTableStatement.
+// If the lookahead is neither DATABASE nor TABLE, the DROP token is consumed
+// first so the error span points at the unexpected token rather than at DROP.
 func (p *Parser) parseDropStatement() (ast.Statement, error) {
 	switch p.tokens.Peek().Type {
 	case utils.TOKEN_DATABASE:

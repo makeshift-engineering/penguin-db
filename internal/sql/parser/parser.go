@@ -37,7 +37,7 @@ func New(tokens []utils.Token, src *diagnostic.Source) *Parser {
 	}
 
 	p := &Parser{
-		tokens: utils.NewLookaheadIterator[utils.Token](next),
+		tokens: utils.NewLookaheadIterator(next),
 		source: src,
 	}
 	p.advance() // prime current with the first token
