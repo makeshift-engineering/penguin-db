@@ -397,21 +397,23 @@ func TestParse_Select(t *testing.T) {
 
 func TestParse_SelectErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr error
+		name     string
+		input    string
+		wantErr  error
+		wantLine int
+		wantCol  int
 	}{
-		{"SELECT missing list", "SELECT FROM t;", CodeExpectedExpression},
-		{"SELECT GROUP BY missing BY", "SELECT * FROM t GROUP t;", CodeUnexpectedToken},
-		{"SELECT ORDER BY missing BY", "SELECT * FROM t ORDER t;", CodeUnexpectedToken},
-		{"SELECT out of order clauses", "SELECT * FROM t LIMIT 10 WHERE id = 1;", CodeUnexpectedToken},
-		{"SELECT JOIN missing ON", "SELECT * FROM a JOIN b WHERE a.id = b.id;", CodeUnexpectedToken},
-		{"SELECT missing semicolon", "SELECT 1 SELECT 2;", CodeUnexpectedToken},
+		{"SELECT missing list", "SELECT FROM t;", CodeExpectedExpression, 1, 8},
+		{"SELECT GROUP BY missing BY", "SELECT * FROM t GROUP t;", CodeUnexpectedToken, 1, 23},
+		{"SELECT ORDER BY missing BY", "SELECT * FROM t ORDER t;", CodeUnexpectedToken, 1, 23},
+		{"SELECT out of order clauses", "SELECT * FROM t LIMIT 10 WHERE id = 1;", CodeUnexpectedToken, 1, 26},
+		{"SELECT JOIN missing ON", "SELECT * FROM a JOIN b WHERE a.id = b.id;", CodeUnexpectedToken, 1, 24},
+		{"SELECT missing semicolon", "SELECT 1 SELECT 2;", CodeUnexpectedToken, 1, 10},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireParseError(t, tt.input, tt.wantErr)
+			requireParseError(t, tt.input, tt.wantErr, tt.wantLine, tt.wantCol)
 		})
 	}
 }
@@ -433,5 +435,5 @@ func TestParse_EmptyInput(t *testing.T) {
 }
 
 func TestParse_UnknownStatementKeyword(t *testing.T) {
-	requireParseError(t, "BOGUS;", CodeMalformedStatement)
+	requireParseError(t, "BOGUS;", CodeMalformedStatement, 1, 1)
 }

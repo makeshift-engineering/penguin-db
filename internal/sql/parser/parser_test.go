@@ -40,8 +40,9 @@ func requireAST(t *testing.T, input string, expected *ast.Program) {
 	}
 }
 
-// requireParseError runs the parser and asserts that it produces a specific error.
-func requireParseError(t *testing.T, input string, expectedErr error) {
+// requireParseError runs the parser and asserts that it produces a specific error code
+// at a specific starting line and column.
+func requireParseError(t *testing.T, input string, expectedErr error, line, col int) {
 	t.Helper()
 	_, err := parseForTest(t, input)
 	if err == nil {
@@ -49,6 +50,27 @@ func requireParseError(t *testing.T, input string, expectedErr error) {
 	}
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected error wrapping %v, got: %v", expectedErr, err)
+	}
+	var diagList diagnostic.List
+	if errors.As(err, &diagList) {
+		if len(diagList) == 0 {
+			t.Fatalf("expected diagnostics, got empty list")
+		}
+		first := diagList[0]
+		if first.Span.Start.Line != line || first.Span.Start.Col != col {
+			t.Errorf("diagnostic location mismatch for %q:\nGot:  line %d, col %d\nWant: line %d, col %d\nDiagnostic: %v",
+				input, first.Span.Start.Line, first.Span.Start.Col, line, col, first)
+		}
+	} else {
+		var first *diagnostic.Diagnostic
+		if errors.As(err, &first) {
+			if first.Span.Start.Line != line || first.Span.Start.Col != col {
+				t.Errorf("diagnostic location mismatch for %q:\nGot:  line %d, col %d\nWant: line %d, col %d\nDiagnostic: %v",
+					input, first.Span.Start.Line, first.Span.Start.Col, line, col, first)
+			}
+		} else {
+			t.Fatalf("expected error to be *diagnostic.Diagnostic or diagnostic.List, got: %T (%v)", err, err)
+		}
 	}
 }
 
