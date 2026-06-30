@@ -1,6 +1,8 @@
 package ast
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/utils"
+import (
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
+)
 
 // IntegerLiteral represents a whole-number literal (e.g. 42).
 type IntegerLiteral struct {
@@ -34,6 +36,7 @@ type NullLiteral struct {
 }
 
 // Identifier represents a simple or dot-qualified SQL name.
+//
 //	users.id  -  Identifier{Name: "id", Qualifier: "users"}
 //	id        -  Identifier{Name: "id", Qualifier: ""}
 type Identifier struct {
