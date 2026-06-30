@@ -9,7 +9,7 @@ import (
 // Manifest represents the persistent database state metadata.
 type Manifest struct {
 	NextSegmentID int              `json:"next_segment_id"`
-	Levels        map[int][]string `json:"levels"` // level -> slice of sstable file basenames (e.g. "000001.sst")
+	Levels        map[int][]string `json:"levels"`
 }
 
 // newManifest creates a default initial manifest structure.
