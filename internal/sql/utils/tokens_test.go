@@ -10,7 +10,7 @@ import (
 // TestTokenType_String_KnownTypes tests token type string known types.
 func TestTokenType_String_KnownTypes(t *testing.T) {
 	// Every entry in the tokenTable should be returned by String().
-	for i := 0; i < int(tokenTypeSentinel); i++ {
+	for i := range int(tokenTypeSentinel) {
 		tt := TokenType(i)
 		name := tokenTable[i].name
 		t.Run(name, func(t *testing.T) {

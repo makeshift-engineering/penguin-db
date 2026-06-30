@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"slices"
+
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
@@ -18,11 +20,7 @@ type Parser struct {
 //
 // tokens must be the slice produced by lexer.Tokenize() — it must end with a
 // TOKEN_EOF entry. The lexer's diagnostic list (lex errors) should be merged
-// with the parser's own list by the caller after parsing; the parser itself
-// has no reference to the lexer.
-//
-// One advance() call primes p.current with the first token. The iterator
-// lazily buffers the second token on the first Peek() call.
+// with the parser's own list by the caller after parsing;
 func New(tokens []utils.Token, src *diagnostic.Source) *Parser {
 	// Build a closure over the slice that acts as a token source.
 	// Once the slice is exhausted the closure returns TOKEN_EOF repeatedly
@@ -65,11 +63,9 @@ func (p *Parser) peekIs(t utils.TokenType) bool {
 // match consumes current and returns true if it matches any of the given types.
 // Returns false without consuming if nothing matches.
 func (p *Parser) match(types ...utils.TokenType) bool {
-	for _, t := range types {
-		if p.check(t) {
-			p.advance()
-			return true
-		}
+	if slices.ContainsFunc(types, p.check) {
+		p.advance()
+		return true
 	}
 	return false
 }
@@ -168,9 +164,9 @@ func (p *Parser) Diagnostics() diagnostic.List {
 }
 
 // synchronize discards tokens until a safe recovery boundary:
-//   - TOKEN_SEMICOLON  → consumed, return (outer loop won't re-consume it)
-//   - Statement keyword → NOT consumed (outer loop will parse the next statement)
-//   - TOKEN_EOF        → stop
+//   - TOKEN_SEMICOLON: consumed, return (outer loop won't re-consume it)
+//   - Statement keyword: NOT consumed (outer loop will parse the next statement)
+//   - TOKEN_EOF: stop
 func (p *Parser) synchronize() {
 	for !p.check(utils.TOKEN_EOF) {
 		if p.check(utils.TOKEN_SEMICOLON) {

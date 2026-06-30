@@ -6,8 +6,7 @@ import (
 )
 
 // parseCreateDatabaseStatement handles:
-//
-//	CREATE DATABASE [IF NOT EXISTS] Identifier
+// CREATE DATABASE [IF NOT EXISTS] Identifier
 func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error) {
 	start := p.currentStart()
 	p.advance() // CREATE
@@ -31,8 +30,7 @@ func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error)
 }
 
 // parseUseDatabaseStatement handles:
-//
-//	USE Identifier
+// USE Identifier
 func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 	start := p.currentStart()
 	p.advance() // USE
@@ -49,8 +47,7 @@ func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 }
 
 // parseDropDatabaseStatement handles:
-//
-//	DROP DATABASE [IF EXISTS] Identifier
+// DROP DATABASE [IF EXISTS] Identifier
 func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 	start := p.currentStart()
 	p.advance() // DROP
@@ -74,8 +71,7 @@ func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 }
 
 // parseCreateTableStatement handles:
-//
-//	CREATE TABLE [IF NOT EXISTS] QualifiedIdentifier '(' ColumnDefinition (',' ColumnDefinition)* ')'
+// CREATE TABLE [IF NOT EXISTS] QualifiedIdentifier '(' ColumnDefinition (',' ColumnDefinition)* ')'
 func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 	start := p.currentStart()
 	p.advance() // CREATE
@@ -113,8 +109,7 @@ func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 }
 
 // parseAlterTableStatement handles:
-//
-//	ALTER TABLE QualifiedIdentifier AlterAction
+// ALTER TABLE QualifiedIdentifier AlterAction
 func (p *Parser) parseAlterTableStatement() (*ast.AlterTableStmt, error) {
 	start := p.currentStart()
 	p.advance() // ALTER
@@ -241,8 +236,7 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 }
 
 // parseDropTableStatement handles:
-//
-//	DROP TABLE [IF EXISTS] QualifiedIdentifier
+// DROP TABLE [IF EXISTS] QualifiedIdentifier
 func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 	start := p.currentStart()
 	p.advance() // DROP
@@ -267,8 +261,7 @@ func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 
 // parseColumnDefinitions parses a comma-separated list of column definitions.
 // Called after the opening '(' of a CREATE TABLE statement.
-//
-//	ColumnDefinitions = ColumnDefinition ( ',' ColumnDefinition )*
+// ColumnDefinitions = ColumnDefinition ( ',' ColumnDefinition )*
 func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 	col, err := p.parseColumnDefinition()
 	if err != nil {
@@ -287,8 +280,7 @@ func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 }
 
 // parseColumnDefinition parses a single column definition:
-//
-//	ColumnDefinition = Identifier DataType ColumnConstraint*
+// ColumnDefinition = Identifier DataType ColumnConstraint*
 func (p *Parser) parseColumnDefinition() (*ast.ColumnDef, error) {
 	start := p.currentStart()
 

@@ -8,7 +8,7 @@ var keywords map[string]TokenType
 
 func init() {
 	keywords = make(map[string]TokenType, int(tokenTypeSentinel))
-	for i := 0; i < int(tokenTypeSentinel); i++ {
+	for i := range int(tokenTypeSentinel) {
 		def := tokenTable[i]
 		if def.class == classKeyword {
 			keywords[def.name] = TokenType(i)

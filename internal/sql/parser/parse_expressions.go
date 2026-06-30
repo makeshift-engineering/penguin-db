@@ -9,8 +9,7 @@ import (
 )
 
 // parseExpression parses an additive expression (lowest precedence level).
-//
-//	Expression = Term ( ( '+' | '-' ) Term )*
+// Expression = Term ( ( '+' | '-' ) Term )*
 func (p *Parser) parseExpression() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -40,8 +39,7 @@ func (p *Parser) parseExpression() (ast.Expression, error) {
 }
 
 // parseTerm parses a multiplicative expression.
-//
-//	Term = Factor ( ( '*' | '/' | '%' ) Factor )*
+// Term = Factor ( ( '*' | '/' | '%' ) Factor )*
 func (p *Parser) parseTerm() (ast.Expression, error) {
 	start := p.currentStart()
 

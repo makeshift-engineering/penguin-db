@@ -13,8 +13,7 @@ func (p *Parser) parseCondition() (ast.Condition, error) {
 }
 
 // parseOrCondition parses the lowest-precedence boolean level.
-//
-//	OrCondition = AndCondition ( 'OR' AndCondition )*
+// OrCondition = AndCondition ( 'OR' AndCondition )*
 func (p *Parser) parseOrCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -40,8 +39,7 @@ func (p *Parser) parseOrCondition() (ast.Condition, error) {
 }
 
 // parseAndCondition parses the AND level.
-//
-//	AndCondition = NotCondition ( 'AND' NotCondition )*
+// AndCondition = NotCondition ( 'AND' NotCondition )*
 func (p *Parser) parseAndCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -67,8 +65,7 @@ func (p *Parser) parseAndCondition() (ast.Condition, error) {
 }
 
 // parseNotCondition handles the NOT prefix (right-recursive).
-//
-//	NotCondition = ConditionPrimary | 'NOT' NotCondition
+// NotCondition = ConditionPrimary | 'NOT' NotCondition
 func (p *Parser) parseNotCondition() (ast.Condition, error) {
 	start := p.currentStart()
 

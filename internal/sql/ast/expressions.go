@@ -34,9 +34,8 @@ type NullLiteral struct {
 }
 
 // Identifier represents a simple or dot-qualified SQL name.
-//
-//	users.id  →  Identifier{Name: "id", Qualifier: "users"}
-//	id        →  Identifier{Name: "id", Qualifier: ""}
+//	users.id  -  Identifier{Name: "id", Qualifier: "users"}
+//	id        -  Identifier{Name: "id", Qualifier: ""}
 type Identifier struct {
 	ExprBase
 	Name      string

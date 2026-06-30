@@ -47,11 +47,10 @@ const (
 
 // errorf creates a Diagnostic with SeverityError, appends it to the parser's
 // diagnostic list, and returns it as an error value.
-//
-// span   — the source range of the offending token(s)
-// code   — one of the Code constants above
-// format — printf-style message template
-// args   — format arguments
+// span : the source range of the offending token(s)
+// code : one of the Code constants above
+// format : printf-style message template
+// args : format arguments
 func (p *Parser) errorf(span diagnostic.Span, code diagnostic.Code, format string, args ...any) error {
 	d := &diagnostic.Diagnostic{
 		Severity: diagnostic.SeverityError,
