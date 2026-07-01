@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"strings"
+
 	"github.com/makeshift-engineering/penguin-db/internal/storage/compactor"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
@@ -1551,4 +1553,256 @@ func TestEngine_Compaction_RunFailure(t *testing.T) {
 	}
 
 	_ = engine.Close()
+}
+
+// TestEngine_ScanActiveMemtable covers memAdapter.Close by scanning
+// when there are active memtable entries.
+func TestEngine_ScanActiveMemtable(t *testing.T) {
+	dir := t.TempDir()
+	eng := mustNewEngine(t, dir, DefaultOptions())
+	_ = eng.Put([]byte("key1"), []byte("val1"))
+	iter := eng.Scan([]byte("k"))
+	if !iter.Valid() {
+		t.Error("expected valid iterator")
+	}
+	k, v := iter.Next()
+	if !bytes.Equal(k, []byte("key1")) || !bytes.Equal(v, []byte("val1")) {
+		t.Errorf("got (%s, %s)", k, v)
+	}
+	iter.Close()
+}
+
+// TestEngine_RotateActiveMemTableAndWAL_WALWriterFailure triggers createWALWriter
+// failure during rotation by pre-creating a blocking directory.
+func TestEngine_RotateActiveMemTableAndWAL_WALWriterFailure(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.MaxMemTableSize = 60
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	de := engine.(*dbEngine)
+
+	// Pre-create next segment ID's WAL file as a directory to block creation
+	de.mu.Lock()
+	nextWALPath := filepath.Join(de.walDir, fmt.Sprintf("%06d.wal", de.nextSegmentID))
+	de.mu.Unlock()
+	if err := os.Mkdir(nextWALPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	// Trigger rotation by writing a key that exceeds MaxMemTableSize = 60
+	err = engine.Put([]byte("key"), make([]byte, 70))
+	if err == nil {
+		t.Fatal("expected error during rotation due to WAL writer creation failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to open new WAL segment") {
+		t.Errorf("expected failed to open new WAL segment, got %v", err)
+	}
+
+	_ = engine.Close()
+}
+
+// TestEngine_Get_TombstonesAndErrors manually populates L0/L1 levels with
+// tombstones and closed readers to cover error paths in Get.
+func TestEngine_Get_TombstonesAndErrors(t *testing.T) {
+	dir := t.TempDir()
+	eng := mustNewEngine(t, dir, DefaultOptions())
+	de := eng.(*dbEngine)
+
+	// L0 Tombstone
+	memL0 := memtable.NewSkipList(1000, 12)
+	_ = memL0.Delete([]byte("l0-tombstone-key"))
+	pathL0 := filepath.Join(dir, "000002.sst")
+	rL0, _ := writeMemTableToSSTable(pathL0, memL0)
+
+	de.mu.Lock()
+	de.levels[0] = []*sstable.Reader{rL0}
+	de.mu.Unlock()
+
+	_, err := eng.Get([]byte("l0-tombstone-key"))
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("expected ErrKeyNotFound, got %v", err)
+	}
+
+	// L1 Tombstone
+	memL1 := memtable.NewSkipList(1000, 12)
+	_ = memL1.Delete([]byte("l1-tombstone-key"))
+	pathL1 := filepath.Join(dir, "000003.sst")
+	rL1, _ := writeMemTableToSSTable(pathL1, memL1)
+
+	de.mu.Lock()
+	de.levels[0] = nil
+	de.levels[1] = []*sstable.Reader{rL1}
+	de.mu.Unlock()
+
+	_, err = eng.Get([]byte("l1-tombstone-key"))
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("expected ErrKeyNotFound, got %v", err)
+	}
+
+	// L0 / L1 closed reader error
+	memErr := memtable.NewSkipList(1000, 12)
+	_ = memErr.Put([]byte("err-key"), []byte("v"))
+	pathErr := filepath.Join(dir, "000004.sst")
+	rErr, _ := writeMemTableToSSTable(pathErr, memErr)
+	rErr.Close()
+
+	de.mu.Lock()
+	de.levels[0] = []*sstable.Reader{rErr}
+	de.levels[1] = nil
+	de.mu.Unlock()
+
+	_, err = eng.Get([]byte("err-key"))
+	if err == nil {
+		t.Error("expected error from closed L0 reader, got nil")
+	}
+
+	de.mu.Lock()
+	de.levels[0] = nil
+	de.levels[1] = []*sstable.Reader{rErr}
+	de.mu.Unlock()
+
+	_, err = eng.Get([]byte("err-key"))
+	if err == nil {
+		t.Error("expected error from closed L1 reader, got nil")
+	}
+
+	// Clean up open file readers on Windows
+	_ = rL0.Close()
+	_ = rL1.Close()
+	_ = eng.Close()
+}
+
+// TestEngine_WriteManifest_FailOpenFile covers OpenFile failure in writeManifest
+// by pre-creating a blocking directory.
+func TestEngine_WriteManifest_FailOpenFile(t *testing.T) {
+	dir := t.TempDir()
+	tmpPath := filepath.Join(dir, "manifest.tmp")
+	if err := os.Mkdir(tmpPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	m := &Manifest{NextSegmentID: 1}
+	err := writeManifest(dir, m)
+	if err == nil {
+		t.Error("expected error writing manifest, got nil")
+	}
+}
+
+// TestEngine_LockDirectory_NullByte covers error path of lockDirectory
+// when key contains a null byte.
+func TestEngine_LockDirectory_NullByte(t *testing.T) {
+	_, err := lockDirectory("dir\x00with\x00null")
+	if err == nil {
+		t.Error("expected error locking directory with null byte, got nil")
+	}
+}
+
+// TestEngine_WriteBatch_ErrorPaths covers isClosing, bgErr, and flushCond.Wait
+// inside WriteBatch.
+func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
+	dir := t.TempDir()
+	eng := mustNewEngine(t, dir, DefaultOptions())
+	de := eng.(*dbEngine)
+
+	// Test isClosing
+	de.mu.Lock()
+	de.isClosing = true
+	de.mu.Unlock()
+	err := eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("k"), Value: []byte("v")}})
+	if err == nil || !strings.Contains(err.Error(), "engine is closing") {
+		t.Errorf("expected engine is closing error, got %v", err)
+	}
+
+	// Test bgErr
+	de.mu.Lock()
+	de.isClosing = false
+	de.bgErr = fmt.Errorf("mock background error")
+	de.mu.Unlock()
+	err = eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("k"), Value: []byte("v")}})
+	if err == nil || !strings.Contains(err.Error(), "mock background error") {
+		t.Errorf("expected mock background error, got %v", err)
+	}
+
+	// Test flushCond.Wait
+	de.mu.Lock()
+	de.bgErr = nil
+	de.immMemtable = memtable.NewSkipList(1000, 12)
+	de.mu.Unlock()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		de.mu.Lock()
+		de.immMemtable = nil
+		de.flushCond.Broadcast()
+		de.mu.Unlock()
+	}()
+
+	// WriteBatch with a large value exceeding MaxMemTableSize (which is 1<<20 by default, so we exceed it)
+	largeVal := make([]byte, 2*1024*1024)
+	err = eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("large"), Value: largeVal}})
+	if err != nil {
+		t.Errorf("unexpected error on large WriteBatch: %v", err)
+	}
+
+	_ = eng.Close()
+}
+
+// TestEngine_LoadManifest_ReadFileFail triggers ReadFile error in loadManifest
+// by pre-creating manifest.json as a directory.
+func TestEngine_LoadManifest_ReadFileFail(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.Mkdir(manifestPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	_, err := loadManifest(dir)
+	if err == nil {
+		t.Error("expected error loading manifest, got nil")
+	}
+}
+
+// TestEngine_Compaction_Failure triggers compaction failure by deleting
+// an L0 sstable file before compaction starts.
+func TestEngine_Compaction_Failure(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.CompactionThreshold = 999
+	opts.MaxMemTableSize = 1000
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	de := engine.(*dbEngine)
+
+	triggerFlush(t, engine, "dummy1", 1000)
+	triggerFlush(t, engine, "dummy2", 2000)
+
+	// Close the L0 reader to release file lock on Windows, then delete the file
+	de.mu.Lock()
+	targetReader := de.levels[0][0]
+	de.mu.Unlock()
+	_ = targetReader.Close()
+
+	targetFile := targetReader.FilePath()
+	if err := os.Remove(targetFile); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	// Manually run compaction synchronously
+	de.mu.Lock()
+	inputFiles, fileIDs, obsoleteReaders := de.collectCompactionInputs()
+	compactionSegID := de.nextSegmentID
+	de.nextSegmentID++
+	de.mu.Unlock()
+
+	err = de.runAndRegisterCompaction(inputFiles, fileIDs, compactionSegID, obsoleteReaders)
+	if err == nil {
+		t.Fatal("expected compaction to fail, got nil")
+	}
+
+	_ = engine.Close()
+	time.Sleep(50 * time.Millisecond)
 }

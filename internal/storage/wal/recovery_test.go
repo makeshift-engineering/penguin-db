@@ -584,3 +584,18 @@ func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
 		t.Error("bad record in malformed file was replayed, but should have been skipped")
 	}
 }
+
+// TestTruncateSegment_Failure verifies that truncateSegment returns an error
+// when called on an invalid path (like a directory).
+func TestTruncateSegment_Failure(t *testing.T) {
+	dir := t.TempDir()
+	invalidPath := filepath.Join(dir, "some-dir")
+	if err := os.Mkdir(invalidPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	err := truncateSegment(invalidPath, 0)
+	if err == nil {
+		t.Error("expected error from truncateSegment on directory path, got nil")
+	}
+}
