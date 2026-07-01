@@ -705,3 +705,84 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+// TestSkipList_Extensions covers Size(), GetWithTombstone(), and NewIteratorAt()
+// to verify correct LSM-tree semantics and iterator positioning.
+func TestSkipList_Extensions(t *testing.T) {
+	skipList := NewSkipList(1000, 12)
+
+	// Test Size()
+	if skipList.Size() != 0 {
+		t.Errorf("expected initial Size() to be 0, got %d", skipList.Size())
+	}
+
+	_ = skipList.Put([]byte("key1"), []byte("val1"))
+	_ = skipList.Put([]byte("key3"), []byte("val3"))
+	_ = skipList.Delete([]byte("key4"))
+
+	if skipList.Size() == 0 {
+		t.Error("expected non-zero size after puts and deletes")
+	}
+
+	// Test GetWithTombstone
+	// - nil/empty key
+	_, _, _, err := skipList.GetWithTombstone(nil)
+	if !errors.Is(err, ErrEmptyKey) {
+		t.Errorf("expected ErrEmptyKey, got %v", err)
+	}
+
+	// existing non-deleted key
+	val, found, deleted, err := skipList.GetWithTombstone([]byte("key1"))
+	if err != nil || !found || deleted || !bytes.Equal(val, []byte("val1")) {
+		t.Errorf("expected (val1, true, false, nil), got (%s, %v, %v, %v)", val, found, deleted, err)
+	}
+
+	// existing deleted key (tombstone)
+	val, found, deleted, err = skipList.GetWithTombstone([]byte("key4"))
+	if err != nil || !found || !deleted {
+		t.Errorf("expected (nil, true, true, nil), got (%s, %v, %v, %v)", val, found, deleted, err)
+	}
+
+	// missing key
+	val, found, deleted, err = skipList.GetWithTombstone([]byte("key2"))
+	if err != nil || found || deleted {
+		t.Errorf("expected (nil, false, false, nil), got (%s, %v, %v, %v)", val, found, deleted, err)
+	}
+
+	// Test NewIteratorAt
+	// - empty key (defaults to start of list)
+	iterEmpty := skipList.NewIteratorAt(nil)
+	if !iterEmpty.Valid() {
+		t.Error("expected valid iterator for empty start key")
+	}
+	k, _, _ := iterEmpty.Next()
+	if !bytes.Equal(k, []byte("key1")) {
+		t.Errorf("expected first key key1, got %s", k)
+	}
+
+	// startKey positioned exactly on a key
+	iterExact := skipList.NewIteratorAt([]byte("key3"))
+	if !iterExact.Valid() {
+		t.Error("expected valid iterator for startKey 'key3'")
+	}
+	k, _, _ = iterExact.Next()
+	if !bytes.Equal(k, []byte("key3")) {
+		t.Errorf("expected key3, got %s", k)
+	}
+
+	// startKey positioned between keys
+	iterBetween := skipList.NewIteratorAt([]byte("key2"))
+	if !iterBetween.Valid() {
+		t.Error("expected valid iterator for startKey 'key2' (should find key3)")
+	}
+	k, _, _ = iterBetween.Next()
+	if !bytes.Equal(k, []byte("key3")) {
+		t.Errorf("expected key3, got %s", k)
+	}
+
+	// startKey positioned after all keys
+	iterAfter := skipList.NewIteratorAt([]byte("key5"))
+	if iterAfter.Valid() {
+		t.Error("expected invalid iterator for startKey after all keys")
+	}
+}

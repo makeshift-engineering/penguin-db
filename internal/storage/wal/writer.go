@@ -174,6 +174,61 @@ func (writer *LogWriter) rotateActiveFile() error {
 	return nil
 }
 
+// AppendBatch writes a slice of Records into the Write-Ahead Log as a single
+// atomic unit. All records are pre-marshalled into one contiguous byte buffer
+// and submitted to the batch worker as a single commit ticket. This guarantees
+// that either all records are durably written and synced, or none are — making
+// it safe to use for atomic multi-operation batches (e.g., WriteBatch).
+//
+// AppendBatch blocks until the combined write is durably persisted or the log
+// is closed. An error is returned if any record fails to marshal, or if the
+// combined write fails.
+func (writer *LogWriter) AppendBatch(records []*Record) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	// Pre-validate and marshal all records into a single contiguous buffer.
+	// This happens before acquiring any lock so that marshalling errors are
+	// returned before any I/O is attempted.
+	var combinedFrameBuffer []byte
+	for i, record := range records {
+		if len(record.Key) == 0 {
+			return fmt.Errorf("record at index %d: %w", i, ErrEmptyKey)
+		}
+		if record.Opcode != OpcodePut && record.Opcode != OpcodeDelete {
+			return fmt.Errorf("record at index %d: %w", i, ErrInvalidOpcode)
+		}
+		frame, err := record.Marshal()
+		if err != nil {
+			return fmt.Errorf("record at index %d: failed to marshal: %w", i, err)
+		}
+		combinedFrameBuffer = append(combinedFrameBuffer, frame...)
+	}
+
+	// Submit the entire pre-marshalled buffer as one atomic commit ticket.
+	// The batch worker will write and fsync it in a single I/O pass.
+	ticket := &commitTicket{
+		frameData:  combinedFrameBuffer,
+		resultChan: make(chan error, 1),
+	}
+
+	writer.stateMutex.RLock()
+	if writer.isClosed {
+		writer.stateMutex.RUnlock()
+		return ErrWriterClosed
+	}
+	if writer.terminalErr != nil {
+		writer.stateMutex.RUnlock()
+		return writer.terminalErr
+	}
+
+	writer.ingestionChannel <- ticket
+	writer.stateMutex.RUnlock()
+
+	return <-ticket.resultChan
+}
+
 // Append writes a single Record into the Write-Ahead Log. It blocks until the
 // record is durably persisted (written and synced) or the log is closed.
 func (writer *LogWriter) Append(record *Record) error {

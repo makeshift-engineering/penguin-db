@@ -279,3 +279,19 @@ func (r *Reader) FilePath() string {
 	}
 	return r.file.Name()
 }
+
+// MinKey returns the smallest key in this SSTable.
+func (r *Reader) MinKey() []byte {
+	if len(r.index) == 0 {
+		return nil
+	}
+	return r.index[0].key
+}
+
+// MaxKey returns the largest key in this SSTable.
+func (r *Reader) MaxKey() []byte {
+	if len(r.index) == 0 {
+		return nil
+	}
+	return r.index[len(r.index)-1].key
+}

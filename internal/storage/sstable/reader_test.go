@@ -1607,3 +1607,80 @@ func TestReader_Get_UnknownOpcode(t *testing.T) {
 		t.Errorf("expected unknown opcode error, got: %v", err)
 	}
 }
+
+// TestReader_MinMaxAndIteratorAt covers MinKey, MaxKey, and NewIteratorAt
+// on Reader to verify boundaries and seeking positions.
+func TestReader_MinMaxAndIteratorAt(t *testing.T) {
+	dir := t.TempDir()
+	entries := []testEntry{
+		{key: []byte("key1"), value: []byte("val1"), opcode: OpcodePut},
+		{key: []byte("key3"), value: []byte("val3"), opcode: OpcodePut},
+		{key: []byte("key5"), value: []byte("val5"), opcode: OpcodePut},
+	}
+	path := writeTestSSTable(t, dir, "min_max_iter.sst", entries)
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	// MinKey / MaxKey
+	if !bytes.Equal(r.MinKey(), []byte("key1")) {
+		t.Errorf("expected MinKey 'key1', got %s", r.MinKey())
+	}
+	if !bytes.Equal(r.MaxKey(), []byte("key5")) {
+		t.Errorf("expected MaxKey 'key5', got %s", r.MaxKey())
+	}
+
+	// NewIteratorAt
+	// seek exactly to "key3"
+	iterExact, err := r.NewIteratorAt([]byte("key3"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt: %v", err)
+	}
+	defer iterExact.Close()
+	if !iterExact.Next() {
+		t.Fatal("expected iterExact to have next")
+	}
+	if !bytes.Equal(iterExact.Key(), []byte("key3")) {
+		t.Errorf("expected key3, got %s", iterExact.Key())
+	}
+
+	// seek to "key2" (should position on "key3")
+	iterBetween, err := r.NewIteratorAt([]byte("key2"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt: %v", err)
+	}
+	defer iterBetween.Close()
+	if !iterBetween.Next() {
+		t.Fatal("expected iterBetween to have next")
+	}
+	if !bytes.Equal(iterBetween.Key(), []byte("key3")) {
+		t.Errorf("expected key3, got %s", iterBetween.Key())
+	}
+
+	// seek past "key5" (should be exhausted)
+	iterAfter, err := r.NewIteratorAt([]byte("key6"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt: %v", err)
+	}
+	defer iterAfter.Close()
+	if iterAfter.Next() {
+		t.Error("expected iterAfter to be exhausted")
+	}
+
+	// Test empty SSTable
+	emptyPath := writeTestSSTable(t, dir, "empty.sst", nil)
+	rEmpty, err := Open(emptyPath)
+	if err != nil {
+		t.Fatalf("Open empty: %v", err)
+	}
+	defer rEmpty.Close()
+	if rEmpty.MinKey() != nil {
+		t.Errorf("expected nil MinKey for empty, got %s", rEmpty.MinKey())
+	}
+	if rEmpty.MaxKey() != nil {
+		t.Errorf("expected nil MaxKey for empty, got %s", rEmpty.MaxKey())
+	}
+}

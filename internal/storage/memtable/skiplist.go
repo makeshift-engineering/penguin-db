@@ -264,3 +264,42 @@ func (skipList *SkipList) randomLevel() int {
 	}
 	return level
 }
+
+// Size returns the current size in bytes of the skip list.
+func (skipList *SkipList) Size() int64 {
+	skipList.mutex.RLock()
+	defer skipList.mutex.RUnlock()
+	return skipList.currentSizeBytes
+}
+
+// GetWithTombstone searches the skip list for the given key and returns its value,
+// whether it was found, and whether it has a tombstone marker (isDeleted).
+func (skipList *SkipList) GetWithTombstone(key []byte) (value []byte, found, deleted bool, err error) {
+	if len(key) == 0 {
+		return nil, false, false, ErrEmptyKey
+	}
+	skipList.mutex.RLock()
+	defer skipList.mutex.RUnlock()
+	_, targetNode := skipList.findPredecessors(key)
+	if targetNode != nil && bytes.Equal(targetNode.key, key) {
+		return targetNode.value, true, targetNode.isDeleted, nil
+	}
+	return nil, false, false, nil
+}
+
+// NewIteratorAt returns a new Iterator positioned at the first node of the skip list
+// whose key is greater than or equal to startKey. If no such key exists, it returns
+// an iterator positioned at nil (Valid() returns false).
+func (skipList *SkipList) NewIteratorAt(startKey []byte) *Iterator {
+	if len(startKey) == 0 {
+		return skipList.NewIterator()
+	}
+	skipList.mutex.RLock()
+	defer skipList.mutex.RUnlock()
+	_, startNode := skipList.findPredecessors(startKey)
+	slog.Debug("created new iterator starting at sought node", "foundKey", startNode != nil)
+	return &Iterator{
+		skipList:    skipList,
+		currentNode: startNode,
+	}
+}
