@@ -602,7 +602,6 @@ func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 		}, nil
 
 	default:
-		// Should be unreachable if isConstraintStart is correct.
 		return nil, p.errorf(
 			p.current.Span,
 			CodeUnexpectedToken,
