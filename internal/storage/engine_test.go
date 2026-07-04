@@ -1592,8 +1592,13 @@ func TestEngine_RotateActiveMemTableAndWAL_WALWriterFailure(t *testing.T) {
 		t.Fatalf("Mkdir: %v", err)
 	}
 
-	// Trigger rotation by writing a key that exceeds MaxMemTableSize = 60
-	err = engine.Put([]byte("key"), make([]byte, 70))
+	// Write a first key to take up some space
+	if err := engine.Put([]byte("k1"), make([]byte, 35)); err != nil {
+		t.Fatalf("first Put failed: %v", err)
+	}
+
+	// Trigger rotation by writing a second key that makes cumulative size exceed MaxMemTableSize = 60
+	err = engine.Put([]byte("k2"), make([]byte, 25))
 	if err == nil {
 		t.Fatal("expected error during rotation due to WAL writer creation failure, got nil")
 	}
@@ -1729,6 +1734,7 @@ func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
 	// Test flushCond.Wait
 	de.mu.Lock()
 	de.bgErr = nil
+	_ = de.memtable.Put([]byte("prefill"), make([]byte, 3*1024*1024))
 	de.immMemtable = memtable.NewSkipList(1000, 12)
 	de.mu.Unlock()
 
@@ -1740,7 +1746,7 @@ func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
 		de.mu.Unlock()
 	}()
 
-	// WriteBatch with a large value exceeding MaxMemTableSize (which is 1<<20 by default, so we exceed it)
+	// WriteBatch with a large value exceeding remaining MaxMemTableSize (4MB by default)
 	largeVal := make([]byte, 2*1024*1024)
 	err = eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("large"), Value: largeVal}})
 	if err != nil {
@@ -1805,4 +1811,188 @@ func TestEngine_Compaction_Failure(t *testing.T) {
 
 	_ = engine.Close()
 	time.Sleep(50 * time.Millisecond)
+}
+
+// TestEngine_RecoverActiveState_ManifestWriteFailure covers manifest write failure
+// during recoverActiveState when recovery memtable is too large.
+func TestEngine_RecoverActiveState_ManifestWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.MaxMemTableSize = 60
+
+	// Create a WAL with a record larger than 60 bytes to force recovery flush
+	walPath := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walPath, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	walWriter, err := createWALWriter(walPath, 1, opts.WALOptions)
+	if err != nil {
+		t.Fatalf("createWALWriter: %v", err)
+	}
+	rec := &wal.Record{Opcode: wal.OpcodePut, Key: []byte("k"), Value: make([]byte, 70)}
+	if err := walWriter.AppendBatch([]*wal.Record{rec}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	_ = walWriter.Close()
+
+	// Create manifest.tmp as a directory in dir to force writeManifest to fail
+	tmpPath := filepath.Join(dir, "manifest.tmp")
+	if err := os.Mkdir(tmpPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	// Open engine, recovery should run and fail on writeManifest
+	_, err = NewEngine(dir, opts)
+	if err == nil {
+		t.Fatal("expected NewEngine to fail on manifest write error, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to save manifest during recovery flush") {
+		t.Errorf("expected failed to save manifest during recovery flush error, got %v", err)
+	}
+}
+
+// TestEngine_Scan_ClosedOrFailed checks Scan behavior on closed or failed engine.
+func TestEngine_Scan_ClosedOrFailed(t *testing.T) {
+	dir := t.TempDir()
+	eng := mustNewEngine(t, dir, DefaultOptions())
+	de := eng.(*dbEngine)
+
+	// Test closed engine
+	de.mu.Lock()
+	de.isClosing = true
+	de.mu.Unlock()
+
+	iter := eng.Scan([]byte("prefix"))
+	if iter.Valid() {
+		t.Error("expected invalid iterator on closed engine")
+	}
+	k, v := iter.Next()
+	if k != nil || v != nil {
+		t.Error("expected nil next on closed iterator")
+	}
+	iter.Close()
+
+	// Test failed engine (bgErr)
+	de.mu.Lock()
+	de.isClosing = false
+	de.bgErr = fmt.Errorf("mock background error")
+	de.mu.Unlock()
+
+	iter = eng.Scan([]byte("prefix"))
+	if iter.Valid() {
+		t.Error("expected invalid iterator on failed engine")
+	}
+	iter.Close()
+
+	_ = eng.Close()
+}
+
+// TestEngine_LoadManifest_InvalidJSON verifies that loadManifest returns an error
+// when the manifest.json file contains malformed JSON.
+func TestEngine_LoadManifest_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte("invalid json data"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := loadManifest(dir)
+	if err == nil {
+		t.Error("expected error loading manifest with invalid JSON, got nil")
+	}
+}
+
+// TestEngine_LoadManifest_NilLevels verifies that loadManifest initializes
+// the Levels map if it is missing (nil) in the JSON manifest.
+func TestEngine_LoadManifest_NilLevels(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"next_segment_id": 2}`), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	m, err := loadManifest(dir)
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+	if m.Levels == nil {
+		t.Error("expected Levels map to be initialized, got nil")
+	}
+}
+
+// TestEngine_WriteManifest_RenameFail verifies that writeManifest returns an error
+// when target manifest.json is a directory, causing Rename to fail.
+func TestEngine_WriteManifest_RenameFail(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.Mkdir(manifestPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	m := &Manifest{NextSegmentID: 1}
+	err := writeManifest(dir, m)
+	if err == nil {
+		t.Error("expected error writing manifest, got nil")
+	}
+}
+
+// TestEngine_CompactionWorker_AlreadyCompacting triggers isCompacting path inside compactionWorker.
+func TestEngine_CompactionWorker_AlreadyCompacting(t *testing.T) {
+	dir := t.TempDir()
+	eng := mustNewEngine(t, dir, DefaultOptions())
+	de := eng.(*dbEngine)
+
+	de.mu.Lock()
+	de.isCompacting = true
+	de.mu.Unlock()
+
+	select {
+	case de.compactChan <- struct{}{}:
+	default:
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	de.mu.Lock()
+	de.isCompacting = false
+	de.mu.Unlock()
+
+	_ = eng.Close()
+}
+
+// TestEngine_FlushWorker_Failure triggers flush failure path in flushWorker by creating a directory blocking the SSTable write.
+func TestEngine_FlushWorker_Failure(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.MaxMemTableSize = 60
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	de := engine.(*dbEngine)
+
+	targetSST := filepath.Join(dir, "000001.sst")
+	if err := os.Mkdir(targetSST, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	if err := engine.Put([]byte("k1"), make([]byte, 35)); err != nil {
+		t.Fatalf("first Put failed: %v", err)
+	}
+	_ = engine.Put([]byte("k2"), make([]byte, 25))
+
+	deadline := time.Now().Add(3 * time.Second)
+	var bgErr error
+	for time.Now().Before(deadline) {
+		de.mu.RLock()
+		bgErr = de.bgErr
+		de.mu.RUnlock()
+		if bgErr != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if bgErr == nil {
+		t.Fatal("expected flush background error, got nil")
+	}
+
+	_ = engine.Close()
 }

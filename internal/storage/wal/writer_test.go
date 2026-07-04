@@ -738,10 +738,8 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 	const numRecords = 100
 	var wg sync.WaitGroup
 	errs := make([]error, numRecords)
-
-	// Use a ready gate so all goroutines are scheduled before Close fires.
-	var ready sync.WaitGroup
-	ready.Add(numRecords)
+	firstSuccess := make(chan struct{})
+	var once sync.Once
 
 	// Spawn concurrent appends to race with Close.
 	for i := 0; i < numRecords; i++ {
@@ -753,12 +751,23 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 				Key:    []byte(fmt.Sprintf("drain-%04d", idx)),
 				Value:  []byte("v"),
 			}
-			ready.Done()
-			errs[idx] = w.Append(r)
+			err := w.Append(r)
+			errs[idx] = err
+			if err == nil {
+				once.Do(func() {
+					close(firstSuccess)
+				})
+			}
 		}(i)
 	}
 
-	ready.Wait()
+	// Wait for at least one concurrent append to succeed before calling Close.
+	// This ensures Close has to drain already-queued/active tickets.
+	select {
+	case <-firstSuccess:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent Appends failed to make any progress before Close")
+	}
 
 	closeErrChan := make(chan error, 1)
 	go func() {
@@ -786,8 +795,6 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 		t.Fatal("Close hung for more than 5 seconds")
 	}
 
-	// The anchor write always counts, so successCount is guaranteed >= 1.
-	// We count only the concurrent records here to report their outcome.
 	var successCount int
 	for _, e := range errs {
 		if e == nil {
@@ -795,6 +802,9 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 		} else if !errors.Is(e, ErrWriterClosed) {
 			t.Errorf("Append returned unexpected error: %v (expected nil or ErrWriterClosed)", e)
 		}
+	}
+	if successCount < 1 {
+		t.Fatal("expected at least one concurrent append to succeed")
 	}
 	t.Logf("concurrent appends: %d/%d succeeded before/during Close", successCount, numRecords)
 

@@ -298,7 +298,8 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 
 		manifest.NextSegmentID = engine.nextSegmentID
 		if err := writeManifest(engine.dir, manifest); err != nil {
-			sstableReader.Close()
+			_ = sstableReader.Close()
+			_ = os.Remove(sstablePath)
 			return fmt.Errorf("failed to save manifest during recovery flush: %w", err)
 		}
 
@@ -403,7 +404,6 @@ func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 	if err := activeWAL.Close(); err != nil {
 		engine.mu.Lock()
 		engine.bgErr = err
-		engine.mu.Unlock()
 		return err
 	}
 
@@ -448,6 +448,10 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	batchSize, err := validateOperations(operations)
 	if err != nil {
 		return err
+	}
+
+	if batchSize > engine.opts.MaxMemTableSize {
+		return fmt.Errorf("batch size %d exceeds MaxMemTableSize %d", batchSize, engine.opts.MaxMemTableSize)
 	}
 
 	engine.mu.Lock()
@@ -573,9 +577,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	level1 := make([]*sstable.Reader, 0, len(engine.levels[1]))
 	level1 = append(level1, engine.levels[1]...)
 
-	engine.mu.RUnlock()
-
-	// Pin all snapshotted readers using the lightweight sstRefsMu.
+	// Pin all snapshotted readers using the lightweight sstRefsMu while holding RLock.
 	engine.sstRefsMu.Lock()
 	for _, sstableReader := range level0 {
 		engine.pinSSTable(sstableReader)
@@ -584,6 +586,8 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		engine.pinSSTable(sstableReader)
 	}
 	engine.sstRefsMu.Unlock()
+
+	engine.mu.RUnlock()
 
 	defer func() {
 		engine.sstRefsMu.Lock()
@@ -641,37 +645,49 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 
 // Scan returns a prefix-filtering iterator sorted by key.
 func (engine *dbEngine) Scan(prefix []byte) Iterator {
-	engine.mu.Lock()
-	defer engine.mu.Unlock()
-
-	pinned := make([]*sstable.Reader, 0, len(engine.levels[0])+len(engine.levels[1]))
+	engine.mu.RLock()
+	if engine.isClosing || engine.bgErr != nil {
+		engine.mu.RUnlock()
+		return &closedIterator{}
+	}
 
 	level0 := make([]*sstable.Reader, 0, len(engine.levels[0]))
-	for _, sstableReader := range engine.levels[0] {
-		engine.sstRefsMu.Lock()
-		engine.pinSSTable(sstableReader)
-		engine.sstRefsMu.Unlock()
-		level0 = append(level0, sstableReader)
-		pinned = append(pinned, sstableReader)
-	}
+	level0 = append(level0, engine.levels[0]...)
 
 	level1 := make([]*sstable.Reader, 0, len(engine.levels[1]))
-	for _, sstableReader := range engine.levels[1] {
-		engine.sstRefsMu.Lock()
+	level1 = append(level1, engine.levels[1]...)
+
+	// Pin all snapshotted readers using the lightweight sstRefsMu.
+	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
+	engine.sstRefsMu.Lock()
+	for _, sstableReader := range level0 {
 		engine.pinSSTable(sstableReader)
-		engine.sstRefsMu.Unlock()
-		level1 = append(level1, sstableReader)
 		pinned = append(pinned, sstableReader)
 	}
+	for _, sstableReader := range level1 {
+		engine.pinSSTable(sstableReader)
+		pinned = append(pinned, sstableReader)
+	}
+	engine.sstRefsMu.Unlock()
+
+	// Get active and immutable memtables
+	memtableIter := engine.memtable.NewIteratorAt(prefix)
+	var immMemtableIter *memtable.Iterator
+	if engine.immMemtable != nil {
+		immMemtableIter = engine.immMemtable.NewIteratorAt(prefix)
+	}
+
+	engine.iterWg.Add(1)
+	engine.mu.RUnlock()
 
 	var iterators []internalIterator
 
 	// Active memtable iterator.
-	iterators = append(iterators, newMemAdapter(engine.memtable.NewIteratorAt(prefix)))
+	iterators = append(iterators, newMemAdapter(memtableIter))
 
-	// Immutable memtable iterator (if flushing is in progress).
-	if engine.immMemtable != nil {
-		iterators = append(iterators, newMemAdapter(engine.immMemtable.NewIteratorAt(prefix)))
+	// Immutable memtable iterator.
+	if immMemtableIter != nil {
+		iterators = append(iterators, newMemAdapter(immMemtableIter))
 	}
 
 	// Level 0 SSTable iterators (all files, as L0 ranges overlap).
@@ -687,11 +703,16 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	if len(prefix) > 0 {
 		prefixLimit = make([]byte, len(prefix))
 		copy(prefixLimit, prefix)
+		overflowed := true
 		for i := len(prefixLimit) - 1; i >= 0; i-- {
 			prefixLimit[i]++
 			if prefixLimit[i] != 0 {
+				overflowed = false
 				break
 			}
+		}
+		if overflowed {
+			prefixLimit = nil
 		}
 	}
 
@@ -713,8 +734,6 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 		}
 	}
 
-	engine.iterWg.Add(1)
-
 	mergingIteratorInstance := &mergingIterator{
 		engine: engine,
 		pinned: pinned,
@@ -725,6 +744,13 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 
 	return mergingIteratorInstance
 }
+
+// closedIterator is an Iterator that is always invalid.
+type closedIterator struct{}
+
+func (c *closedIterator) Valid() bool            { return false }
+func (c *closedIterator) Next() ([]byte, []byte) { return nil, nil }
+func (c *closedIterator) Close()                 {}
 
 // Close flushes in-memory contents and safely releases lock and worker resources.
 func (engine *dbEngine) Close() error {
@@ -750,7 +776,9 @@ func (engine *dbEngine) Close() error {
 		engine.immWALSegmentID = engine.activeWALSegmentID
 
 		if engine.wal != nil {
-			_ = engine.wal.Close()
+			if err := engine.wal.Close(); err != nil && engine.bgErr == nil {
+				engine.bgErr = err
+			}
 			engine.wal = nil
 		}
 
@@ -774,7 +802,9 @@ func (engine *dbEngine) Close() error {
 	defer engine.mu.Unlock()
 
 	if engine.wal != nil {
-		_ = engine.wal.Close()
+		if err := engine.wal.Close(); err != nil && engine.bgErr == nil {
+			engine.bgErr = err
+		}
 		engine.wal = nil
 	}
 
@@ -848,7 +878,11 @@ func (engine *dbEngine) flushWorker() {
 			NextSegmentID: engine.nextSegmentID,
 			Levels:        engine.manifestLevels(),
 		}
-		_ = writeManifest(engine.dir, manifest)
+		if err := writeManifest(engine.dir, manifest); err != nil {
+			engine.bgErr = err
+			engine.mu.Unlock()
+			return
+		}
 
 		// Remove the corresponding WAL segment.
 		_ = os.Remove(filepath.Join(engine.walDir, fmt.Sprintf("%06d.wal", segmentID)))
@@ -978,8 +1012,30 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		newL1Readers = append(newL1Readers, sstableReader)
 	}
 
+	oldL0 := engine.levels[0]
+	oldL1 := engine.levels[1]
+
 	engine.levels[0] = nil
 	engine.levels[1] = newL1Readers
+
+	manifest := &Manifest{
+		NextSegmentID: engine.nextSegmentID,
+		Levels:        engine.manifestLevels(),
+	}
+	if err := writeManifest(engine.dir, manifest); err != nil {
+		engine.levels[0] = oldL0
+		engine.levels[1] = oldL1
+
+		for _, r := range newL1Readers {
+			_ = r.Close()
+			_ = os.Remove(r.FilePath())
+		}
+
+		engine.bgErr = fmt.Errorf("compaction failed to write manifest: %w", err)
+		engine.isCompacting = false
+		engine.mu.Unlock()
+		return err
+	}
 
 	engine.sstRefsMu.Lock()
 	for _, sstableReader := range newL1Readers {
@@ -997,12 +1053,6 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		}
 	}
 	engine.sstRefsMu.Unlock()
-
-	manifest := &Manifest{
-		NextSegmentID: engine.nextSegmentID,
-		Levels:        engine.manifestLevels(),
-	}
-	_ = writeManifest(engine.dir, manifest)
 
 	engine.isCompacting = false
 	engine.mu.Unlock()

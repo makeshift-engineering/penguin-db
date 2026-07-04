@@ -154,6 +154,7 @@ func (writer *LogWriter) rotateActiveFile() error {
 		if err := writer.activeFile.Close(); err != nil {
 			return fmt.Errorf("failed to close WAL segment %d during rotation: %w", writer.currentSegmentID, err)
 		}
+		writer.activeFile = nil
 		writer.currentSegmentID++
 	}
 
