@@ -1,3 +1,9 @@
+// Package parser implements a single-pass recursive descent SQL parser.
+// This file covers rules for AST Condition nodes, including:
+// - Boolean logical operations (AND, OR, NOT)
+// - Comparison predicates (=, !=, <, >, <=, >=)
+// - Predicates (LIKE, IS NULL, IN, BETWEEN)
+// - Parenthesised condition blocks
 package parser
 
 import (
@@ -6,14 +12,15 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
+// Grammar Rule: Condition = OrCondition
 // parseCondition is the stable public entry point for all condition contexts
 // (WHERE, HAVING, JOIN ON, parenthesised conditions).
 func (p *Parser) parseCondition() (ast.Condition, error) {
 	return p.parseOrCondition()
 }
 
+// Grammar Rule: OrCondition = AndCondition ( 'OR' AndCondition )*
 // parseOrCondition parses the lowest-precedence boolean level.
-// OrCondition = AndCondition ( 'OR' AndCondition )*
 func (p *Parser) parseOrCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -38,8 +45,8 @@ func (p *Parser) parseOrCondition() (ast.Condition, error) {
 	return left, nil
 }
 
+// Grammar Rule: AndCondition = NotCondition ( 'AND' NotCondition )*
 // parseAndCondition parses the AND level.
-// AndCondition = NotCondition ( 'AND' NotCondition )*
 func (p *Parser) parseAndCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -64,8 +71,8 @@ func (p *Parser) parseAndCondition() (ast.Condition, error) {
 	return left, nil
 }
 
+// Grammar Rule: NotCondition = [ 'NOT' ] ConditionPrimary
 // parseNotCondition handles the NOT prefix (right-recursive).
-// NotCondition = ConditionPrimary | 'NOT' NotCondition
 func (p *Parser) parseNotCondition() (ast.Condition, error) {
 	start := p.currentStart()
 
@@ -81,6 +88,7 @@ func (p *Parser) parseNotCondition() (ast.Condition, error) {
 	return p.parseConditionPrimary()
 }
 
+// Grammar Rule: ConditionPrimary = '(' Condition ')' | Expression [ PredicateTail ]
 // parseConditionPrimary is the key disambiguation function.
 func (p *Parser) parseConditionPrimary() (ast.Condition, error) {
 	start := p.currentStart()
@@ -133,9 +141,9 @@ func (p *Parser) parseConditionPrimary() (ast.Condition, error) {
 	return &ast.ExprCondition{CondBase: p.condBase(start), Expr: expr}, nil
 }
 
+// Grammar Rule: ConditionContinuationFromExpr = PredicateTail [ OrConditionTail ] | OrConditionTail
 // parseConditionContinuationFromExpr is called when we have parsed `left` as
-// an Expression inside '(…)' but ')' is NOT the next token. The remaining
-// tokens inside the parens must form the continuation of a Condition.
+// an Expression inside '(…)' but ')' is NOT the next token.
 func (p *Parser) parseConditionContinuationFromExpr(start diagnostic.Pos, left ast.Expression) (ast.Condition, error) {
 	if p.isPredicateTailStart() {
 		pred, err := p.parsePredicateTail(start, left)
@@ -159,8 +167,8 @@ func (p *Parser) parseConditionContinuationFromExpr(start diagnostic.Pos, left a
 	)
 }
 
-// isPredicateTailStart reports whether the current token can begin a predicate
-// tail (i.e. the operator that turns an expression into a condition).
+// Grammar Rule: isPredicateTailStart = ComparisonOp | 'LIKE' | 'IS' | 'IN' | 'BETWEEN' | 'NOT' ( 'LIKE' | 'IN' | 'BETWEEN' )
+// isPredicateTailStart reports whether the current token can begin a predicate tail.
 func (p *Parser) isPredicateTailStart() bool {
 	switch p.current.Type {
 	case utils.TOKEN_EQ, utils.TOKEN_NEQ,
@@ -176,6 +184,13 @@ func (p *Parser) isPredicateTailStart() bool {
 	return false
 }
 
+// Grammar Rule: PredicateTail = ComparisonOp Expression
+//
+//	| [ 'NOT' ] 'LIKE' Expression
+//	| 'IS' [ 'NOT' ] 'NULL'
+//	| [ 'NOT' ] 'IN' '(' ExpressionList ')'
+//	| [ 'NOT' ] 'BETWEEN' Expression 'AND' Expression
+//
 // parsePredicateTail takes the already-parsed `left` Expression and constructs
 // the appropriate Condition node based on the predicate operator that follows.
 func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (ast.Condition, error) {
@@ -324,9 +339,8 @@ func (p *Parser) parsePredicateTail(start diagnostic.Pos, left ast.Expression) (
 	}
 }
 
+// Grammar Rule: OrConditionTailFromLeft = ( 'OR' AndCondition )*
 // parseOrConditionTailFromLeft continues an OR chain starting from `left`.
-// AND binds tighter than OR, so each right-side operand first collects any
-// pending AND terms before the OR node is built.
 func (p *Parser) parseOrConditionTailFromLeft(start diagnostic.Pos, left ast.Condition) (ast.Condition, error) {
 	left, err := p.parseAndConditionTailFromLeft(start, left)
 	if err != nil {
@@ -349,6 +363,7 @@ func (p *Parser) parseOrConditionTailFromLeft(start diagnostic.Pos, left ast.Con
 	return left, nil
 }
 
+// Grammar Rule: AndConditionTailFromLeft = ( 'AND' NotCondition )*
 // parseAndConditionTailFromLeft continues an AND chain starting from `left`.
 func (p *Parser) parseAndConditionTailFromLeft(start diagnostic.Pos, left ast.Condition) (ast.Condition, error) {
 	for p.check(utils.TOKEN_AND) {
@@ -367,6 +382,7 @@ func (p *Parser) parseAndConditionTailFromLeft(start diagnostic.Pos, left ast.Co
 	return left, nil
 }
 
+// Grammar Rule: ParenExpressionList = '(' Expression ( ',' Expression )* ')'
 // parseParenExpressionList parses '(' Expression ( ',' Expression )* ')'.
 // Used by IN predicates.
 func (p *Parser) parseParenExpressionList() ([]ast.Expression, error) {
