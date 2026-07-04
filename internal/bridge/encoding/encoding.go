@@ -3,6 +3,7 @@ package encoding
 import (
 	"encoding/binary"
 	"math"
+	"strings"
 )
 
 const (
@@ -54,10 +55,14 @@ func EncodeScanPrefix(db, table string) (buf []byte, err error) {
 	if len(table) > maxNameLen {
 		return nil, ErrNameTooLong
 	}
+	if strings.IndexByte(db, 0) >= 0 || strings.IndexByte(table, 0) >= 0 {
+		return nil, ErrNulInString
+	}
 
 	dbBytes := []byte(db)
 	tableBytes := []byte(table)
 
+	// 7 bytes = 1 (namespace) + 2 (db len) + 1 (sep) + 2 (table len) + 1 (sep)
 	buf = make([]byte, 0, 7+len(dbBytes)+len(tableBytes))
 	buf = append(buf, NamespaceUser)
 
@@ -145,6 +150,9 @@ func EncodeCatalogDBKey(db string) (buf []byte, err error) {
 	if len(db) > maxNameLen {
 		return nil, ErrNameTooLong
 	}
+	if strings.IndexByte(db, 0) >= 0 {
+		return nil, ErrNulInString
+	}
 	buf = make([]byte, 0, 1+3+2+len(db))
 	buf = append(buf, NamespaceSystem)
 	buf = append(buf, []byte("db\x00")...)
@@ -188,6 +196,9 @@ func encodeCatalogCompoundKey(tag, db, table string) (buf []byte, err error) {
 	}
 	if len(table) > maxNameLen {
 		return nil, ErrNameTooLong
+	}
+	if strings.IndexByte(db, 0) >= 0 || strings.IndexByte(table, 0) >= 0 {
+		return nil, ErrNulInString
 	}
 	buf = make([]byte, 0, 1+len(tag)+2+len(db)+1+2+len(table))
 	buf = append(buf, NamespaceSystem)

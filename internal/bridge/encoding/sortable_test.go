@@ -116,6 +116,85 @@ func TestDecodeInt64_ShortBuffer(t *testing.T) {
 	}
 }
 
+// TestEncodeFloat32_Roundtrip verifies that encoding and decoding float32
+// values preserves the original value for all finite values and infinities.
+func TestEncodeFloat32_Roundtrip(t *testing.T) {
+	cases := []struct {
+		name string
+		val  float32
+	}{
+		{"zero", 0.0},
+		{"negative_zero", float32(math.Copysign(0, -1))},
+		{"one", 1.0},
+		{"negative_one", -1.0},
+		{"max", math.MaxFloat32},
+		{"neg_max", -math.MaxFloat32},
+		{"smallest_positive", math.SmallestNonzeroFloat32},
+		{"neg_smallest", -math.SmallestNonzeroFloat32},
+		{"pos_inf", float32(math.Inf(1))},
+		{"neg_inf", float32(math.Inf(-1))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enc, err := EncodeFloat32(tc.val)
+			if err != nil {
+				t.Fatalf("EncodeFloat32(%v): unexpected error: %v", tc.val, err)
+			}
+			if len(enc) != 4 {
+				t.Fatalf("expected 4 bytes, got %d", len(enc))
+			}
+			got := DecodeFloat32(enc)
+			if got != tc.val {
+				t.Errorf("roundtrip: got %v, want %v", got, tc.val)
+			}
+		})
+	}
+}
+
+// TestEncodeFloat32_NaN verifies that encoding a NaN float32 returns the
+// ErrNaNNotAllowed sentinel error.
+func TestEncodeFloat32_NaN(t *testing.T) {
+	_, err := EncodeFloat32(float32(math.NaN()))
+	if !errors.Is(err, ErrNaNNotAllowed) {
+		t.Errorf("expected ErrNaNNotAllowed, got %v", err)
+	}
+}
+
+// TestEncodeFloat32_SortOrder verifies that encoded float32 bytes sort in the
+// same order as the numeric float32 values.
+func TestEncodeFloat32_SortOrder(t *testing.T) {
+	ordered := []float32{
+		float32(math.Inf(-1)),
+		-math.MaxFloat32,
+		-1.0,
+		-math.SmallestNonzeroFloat32,
+		float32(math.Copysign(0, -1)), // -0
+		0.0,
+		math.SmallestNonzeroFloat32,
+		1.0,
+		math.MaxFloat32,
+		float32(math.Inf(1)),
+	}
+	for i := 0; i < len(ordered)-1; i++ {
+		a, _ := EncodeFloat32(ordered[i])
+		b, _ := EncodeFloat32(ordered[i+1])
+		if bytes.Compare(a, b) >= 0 {
+			t.Errorf("sort order violation: encode(%v) >= encode(%v)", ordered[i], ordered[i+1])
+		}
+	}
+}
+
+// TestDecodeFloat32_ShortBuffer verifies that DecodeFloat32 returns 0 when the
+// input buffer is shorter than 4 bytes.
+func TestDecodeFloat32_ShortBuffer(t *testing.T) {
+	for _, b := range [][]byte{nil, {}, {0, 0, 0}} {
+		got := DecodeFloat32(b)
+		if got != 0 {
+			t.Errorf("DecodeFloat32(len=%d): expected 0, got %v", len(b), got)
+		}
+	}
+}
+
 // TestEncodeFloat64_Roundtrip verifies that encoding and decoding float64
 // values preserves the original value for all finite values and infinities.
 func TestEncodeFloat64_Roundtrip(t *testing.T) {
@@ -358,9 +437,12 @@ func TestEncodePK_AllTypes(t *testing.T) {
 		ast.TypeText,
 		ast.TypeBoolean,
 		ast.TypeTimestamp,
+		ast.TypeFloat,
+		ast.TypeDouble,
+		ast.TypeDecimal,
 	}
 	ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	vals := []any{int32(42), int64(-999), "hello", "world", true, ts}
+	vals := []any{int32(42), int64(-999), "hello", "world", true, ts, float32(1.5), float64(3.14), "123.45"}
 
 	encoded, err := EncodePK(cols, vals)
 	if err != nil {
@@ -391,6 +473,15 @@ func TestEncodePK_AllTypes(t *testing.T) {
 	if !decoded[5].(time.Time).Equal(ts) {
 		t.Errorf("timestamp: got %v", decoded[5])
 	}
+	if decoded[6].(float32) != float32(1.5) {
+		t.Errorf("float32: got %v", decoded[6])
+	}
+	if decoded[7].(float64) != float64(3.14) {
+		t.Errorf("float64: got %v", decoded[7])
+	}
+	if decoded[8].(string) != "123.45" {
+		t.Errorf("decimal: got %v", decoded[8])
+	}
 }
 
 // TestEncodePK_SingleColumn verifies EncodePK/DecodePK for each individual
@@ -409,6 +500,9 @@ func TestEncodePK_SingleColumn(t *testing.T) {
 		{"bool_true", ast.TypeBoolean, true},
 		{"bool_false", ast.TypeBoolean, false},
 		{"timestamp", ast.TypeTimestamp, ts},
+		{"float", ast.TypeFloat, float32(2.71)},
+		{"double", ast.TypeDouble, float64(3.1415)},
+		{"decimal", ast.TypeDecimal, "100.00"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,6 +560,9 @@ func TestEncodePK_TypeMismatch(t *testing.T) {
 		{"text_wants_string", ast.TypeText, 123},              // int instead of string
 		{"bool_wants_bool", ast.TypeBoolean, 1},               // int instead of bool
 		{"timestamp_wants_time", ast.TypeTimestamp, int64(0)}, // int64 instead of time.Time
+		{"float_wants_float32", ast.TypeFloat, float64(1)},    // float64 instead of float32
+		{"double_wants_float64", ast.TypeDouble, float32(1)},  // float32 instead of float64
+		{"decimal_wants_string", ast.TypeDecimal, 1.23},       // float instead of string
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -534,6 +631,9 @@ func TestDecodePK_TruncatedKey(t *testing.T) {
 		{"timestamp_short", ast.TypeTimestamp, make([]byte, 5)},
 		{"varchar_no_terminator", ast.TypeVarchar, []byte("hello")},
 		{"text_no_terminator", ast.TypeText, []byte("hello")},
+		{"float_too_short", ast.TypeFloat, make([]byte, 3)},
+		{"double_too_short", ast.TypeDouble, make([]byte, 7)},
+		{"decimal_no_terminator", ast.TypeDecimal, []byte("123.45")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

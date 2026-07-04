@@ -91,7 +91,7 @@ func NewCatalog(ctx context.Context, store kv.KV) (*Catalog, error) {
 		}
 
 		if c.tables[meta.Database] == nil {
-			c.tables[meta.Database] = make(map[string]*TableMeta)
+			return nil, fmt.Errorf("catalog: table %q belongs to missing database %q", meta.Name, meta.Database)
 		}
 		c.tables[meta.Database][meta.Name] = meta
 	}
@@ -140,7 +140,7 @@ func (catalog *Catalog) GetTable(db, table string) (*TableMeta, error) {
 
 	dbTables, ok := catalog.tables[db]
 	if !ok {
-		return nil, ErrTableNotFound
+		return nil, ErrDatabaseNotFound
 	}
 	meta, ok := dbTables[table]
 	if !ok {
@@ -176,7 +176,7 @@ func (catalog *Catalog) ResolveColumn(db, table, col string) (*ColumnMeta, error
 
 	dbTables, ok := catalog.tables[db]
 	if !ok {
-		return nil, ErrTableNotFound
+		return nil, ErrDatabaseNotFound
 	}
 	meta, ok := dbTables[table]
 	if !ok {
@@ -199,7 +199,7 @@ func (catalog *Catalog) PKColumnTypes(db, table string) ([]ast.DataTypeKind, err
 
 	dbTables, ok := catalog.tables[db]
 	if !ok {
-		return nil, ErrTableNotFound
+		return nil, ErrDatabaseNotFound
 	}
 	meta, ok := dbTables[table]
 	if !ok {
@@ -212,12 +212,11 @@ func (catalog *Catalog) PKColumnTypes(db, table string) ([]ast.DataTypeKind, err
 
 	types := make([]ast.DataTypeKind, 0, len(meta.PrimaryKey))
 	for _, pkName := range meta.PrimaryKey {
-		for _, col := range meta.Columns {
-			if col.Name == pkName && !col.Dropped {
-				types = append(types, col.Type)
-				break
-			}
+		col := meta.FindColumn(pkName)
+		if col == nil {
+			return nil, ErrColumnNotFound
 		}
+		types = append(types, col.Type)
 	}
 
 	return types, nil

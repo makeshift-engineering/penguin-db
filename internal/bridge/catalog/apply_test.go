@@ -50,8 +50,8 @@ func TestApplyDropDatabase(t *testing.T) {
 	}
 	// Tables should also be gone.
 	_, err := c.GetTable("testdb", "users")
-	if err != ErrTableNotFound {
-		t.Errorf("expected ErrTableNotFound, got %v", err)
+	if err != ErrDatabaseNotFound {
+		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 }
 

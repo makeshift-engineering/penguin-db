@@ -284,6 +284,46 @@ func TestErrNameTooLong(t *testing.T) {
 	}
 }
 
+// TestErrNulInString validates that all key-encoding functions correctly reject
+// database or table names containing NUL bytes (\x00) with ErrNulInString.
+func TestErrNulInString(t *testing.T) {
+	nulName := "db\x00name"
+
+	// EncodeScanPrefix
+	if _, err := EncodeScanPrefix(nulName, "t"); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeScanPrefix(nulDB): expected ErrNulInString, got %v", err)
+	}
+	if _, err := EncodeScanPrefix("db", nulName); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeScanPrefix(nulTable): expected ErrNulInString, got %v", err)
+	}
+
+	// EncodeRowKey propagates
+	if _, err := EncodeRowKey(nulName, "t", []byte{0x01}); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeRowKey(nulDB): expected ErrNulInString, got %v", err)
+	}
+
+	// EncodeCatalogDBKey
+	if _, err := EncodeCatalogDBKey(nulName); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeCatalogDBKey(nulDB): expected ErrNulInString, got %v", err)
+	}
+
+	// EncodeCatalogTableKey
+	if _, err := EncodeCatalogTableKey(nulName, "t"); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeCatalogTableKey(nulDB): expected ErrNulInString, got %v", err)
+	}
+	if _, err := EncodeCatalogTableKey("db", nulName); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeCatalogTableKey(nulTable): expected ErrNulInString, got %v", err)
+	}
+
+	// EncodeCatalogSeqKey
+	if _, err := EncodeCatalogSeqKey(nulName, "t"); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeCatalogSeqKey(nulDB): expected ErrNulInString, got %v", err)
+	}
+	if _, err := EncodeCatalogSeqKey("db", nulName); !errors.Is(err, ErrNulInString) {
+		t.Errorf("EncodeCatalogSeqKey(nulTable): expected ErrNulInString, got %v", err)
+	}
+}
+
 // TestDecodeParts_MalformedKey validates that DecodeParts correctly rejects
 // structurally invalid keys by returning the appropriate sentinel error:
 //   - ErrMalformedKey for wrong namespace prefix, missing db separator, and

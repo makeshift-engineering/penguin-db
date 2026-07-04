@@ -190,6 +190,36 @@ func TestNewCatalog_BootstrapFromExistingData(t *testing.T) {
 	}
 }
 
+// TestNewCatalog_OrphanedTable verifies that NewCatalog returns an error when
+// a table is present in the KV store but its parent database is missing.
+func TestNewCatalog_OrphanedTable(t *testing.T) {
+	store := newMockKV()
+	ctx := context.Background()
+
+	tempCat := NewEmptyCatalog()
+	tempCat.ApplyCreateDatabase(testDB())
+
+	tblMeta := testTable()
+	// Deliberately write the table to KV without writing its database.
+	tblOps, err := BuildCreateTableOps(tempCat, tblMeta)
+	if err != nil {
+		t.Fatalf("BuildCreateTableOps: %v", err)
+	}
+	if err := store.WriteBatch(ctx, tblOps); err != nil {
+		t.Fatalf("WriteBatch (table): %v", err)
+	}
+
+	_, err = NewCatalog(ctx, store)
+	if err == nil {
+		t.Fatal("expected NewCatalog to fail with missing database, but it succeeded")
+	}
+	expected := `catalog: table "users" belongs to missing database "testdb"`
+	if err.Error() != expected {
+		t.Errorf("expected error %q, got %q", expected, err.Error())
+	}
+}
+
+
 // TestNewEmptyCatalog verifies that a freshly created empty catalog reports
 // no databases and returns an empty database list.
 func TestNewEmptyCatalog(t *testing.T) {
@@ -236,17 +266,23 @@ func TestGetDatabase(t *testing.T) {
 	}
 }
 
-// TestGetTable verifies that GetTable returns ErrTableNotFound when neither the
-// database nor the table exist, and returns correct metadata after creation.
+// TestGetTable verifies that GetTable returns the correct errors when the
+// database or table does not exist, and returns correct metadata after creation.
 func TestGetTable(t *testing.T) {
 	c := NewEmptyCatalog()
 
 	_, err := c.GetTable("nodb", "notable")
+	if err != ErrDatabaseNotFound {
+		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
+	}
+
+	c.ApplyCreateDatabase(testDB())
+
+	_, err = c.GetTable("testdb", "notable")
 	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 
-	c.ApplyCreateDatabase(testDB())
 	c.ApplyCreateTable(testTable())
 
 	got, err := c.GetTable("testdb", "users")
@@ -356,10 +392,16 @@ func TestResolveColumn_DroppedColumn(t *testing.T) {
 }
 
 // TestResolveColumn_NoTable verifies that ResolveColumn returns
-// ErrTableNotFound when neither the database nor the table exist.
+// ErrDatabaseNotFound or ErrTableNotFound when the database or table do not exist.
 func TestResolveColumn_NoTable(t *testing.T) {
 	c := NewEmptyCatalog()
 	_, err := c.ResolveColumn("nodb", "notable", "nocol")
+	if err != ErrDatabaseNotFound {
+		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
+	}
+
+	c.ApplyCreateDatabase(testDB())
+	_, err = c.ResolveColumn("testdb", "notable", "nocol")
 	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
@@ -430,12 +472,34 @@ func TestPKColumnTypes_CompositePK(t *testing.T) {
 }
 
 // TestPKColumnTypes_NotFound verifies that PKColumnTypes returns
-// ErrTableNotFound when the requested table does not exist.
+// appropriate errors when the requested database or table does not exist.
 func TestPKColumnTypes_NotFound(t *testing.T) {
 	c := NewEmptyCatalog()
 	_, err := c.PKColumnTypes("nodb", "notable")
+	if err != ErrDatabaseNotFound {
+		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
+	}
+
+	c.ApplyCreateDatabase(testDB())
+	_, err = c.PKColumnTypes("testdb", "notable")
 	if err != ErrTableNotFound {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
+	}
+}
+
+// TestPKColumnTypes_Dropped verifies that PKColumnTypes returns
+// ErrColumnNotFound when a primary key column is dropped.
+func TestPKColumnTypes_Dropped(t *testing.T) {
+	c := NewEmptyCatalog()
+	c.ApplyCreateDatabase(testDB())
+	
+	meta := testTable()
+	meta.Columns[0].Dropped = true // Drop the 'id' column which is the PK
+	c.ApplyCreateTable(meta)
+
+	_, err := c.PKColumnTypes("testdb", "users")
+	if err != ErrColumnNotFound {
+		t.Errorf("expected ErrColumnNotFound, got %v", err)
 	}
 }
 

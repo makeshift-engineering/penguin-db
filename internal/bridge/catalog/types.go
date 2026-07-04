@@ -42,9 +42,9 @@ func (tm *TableMeta) ActiveColumns() []ColumnMeta {
 // FindColumn searches for a non-dropped column by name. Returns nil if
 // the column is not found or has been dropped.
 func (tm *TableMeta) FindColumn(name string) *ColumnMeta {
-	for _, col := range tm.Columns {
-		if col.Name == name && !col.Dropped {
-			return &col
+	for i := range tm.Columns {
+		if tm.Columns[i].Name == name && !tm.Columns[i].Dropped {
+			return &tm.Columns[i]
 		}
 	}
 	return nil

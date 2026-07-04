@@ -48,6 +48,37 @@ func DecodeInt64(b []byte) (v int64) {
 	return int64(u ^ 0x8000000000000000)
 }
 
+// EncodeFloat32 encodes a float32 into a 4-byte slice preserving numeric sort order.
+// It uses the same sign-flipping logic as EncodeFloat64.
+func EncodeFloat32(v float32) (b []byte, err error) {
+	if math.IsNaN(float64(v)) {
+		return nil, ErrNaNNotAllowed
+	}
+	u := math.Float32bits(v)
+	if (u & 0x80000000) != 0 {
+		u ^= 0xFFFFFFFF
+	} else {
+		u ^= 0x80000000
+	}
+	b = make([]byte, 4)
+	binary.BigEndian.PutUint32(b, u)
+	return b, nil
+}
+
+// DecodeFloat32 decodes a 4-byte slice produced by EncodeFloat32 back into a float32.
+func DecodeFloat32(b []byte) (v float32) {
+	if len(b) < 4 {
+		return 0
+	}
+	u := binary.BigEndian.Uint32(b)
+	if (u & 0x80000000) != 0 {
+		u ^= 0x80000000
+	} else {
+		u ^= 0xFFFFFFFF
+	}
+	return math.Float32frombits(u)
+}
+
 // EncodeFloat64 encodes a float64 into an 8-byte slice preserving numeric sort order.
 // Standard IEEE 754 float bytes do not sort correctly for negative numbers. The encoding fixes this by:
 // 1. If the number is negative (sign bit = 1), XOR all 64 bits to invert the value.
@@ -158,7 +189,27 @@ func EncodePK(cols []ast.DataTypeKind, vals []any) (out []byte, err error) {
 				return nil, ErrInvalidPK
 			}
 			out = append(out, EncodeInt64(v)...)
-		case ast.TypeVarchar, ast.TypeText:
+		case ast.TypeFloat:
+			v, ok := val.(float32)
+			if !ok {
+				return nil, ErrInvalidPK
+			}
+			b, err := EncodeFloat32(v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, b...)
+		case ast.TypeDouble:
+			v, ok := val.(float64)
+			if !ok {
+				return nil, ErrInvalidPK
+			}
+			b, err := EncodeFloat64(v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, b...)
+		case ast.TypeVarchar, ast.TypeText, ast.TypeDecimal:
 			v, ok := val.(string)
 			if !ok {
 				return nil, ErrInvalidPK
@@ -221,7 +272,19 @@ func DecodePK(cols []ast.DataTypeKind, pk []byte) (vals []any, err error) {
 			}
 			vals = append(vals, DecodeTimestamp(pk[offset:offset+8]))
 			offset += 8
-		case ast.TypeVarchar, ast.TypeText:
+		case ast.TypeFloat:
+			if offset+4 > len(pk) {
+				return nil, ErrKeyTooShort
+			}
+			vals = append(vals, DecodeFloat32(pk[offset:offset+4]))
+			offset += 4
+		case ast.TypeDouble:
+			if offset+8 > len(pk) {
+				return nil, ErrKeyTooShort
+			}
+			vals = append(vals, DecodeFloat64(pk[offset:offset+8]))
+			offset += 8
+		case ast.TypeVarchar, ast.TypeText, ast.TypeDecimal:
 			idx := bytes.IndexByte(pk[offset:], 0x00)
 			if idx < 0 {
 				return nil, ErrKeyTooShort

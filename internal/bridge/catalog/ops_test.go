@@ -338,7 +338,7 @@ func TestBuildRenameTableOps(t *testing.T) {
 	if ops[1].Type != kv.OpPut {
 		t.Errorf("second op should be OpPut, got %d", ops[1].Type)
 	}
-	if metaCopy.Name != "customers" {
-		t.Errorf("expected meta.Name updated to 'customers', got %q", metaCopy.Name)
+	if metaCopy.Name == "customers" {
+		t.Errorf("expected meta.Name to remain unchanged, but it was mutated to 'customers'")
 	}
 }

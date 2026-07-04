@@ -166,14 +166,15 @@ func BuildRenameTableOps(db, oldName, newName string, meta *TableMeta) ([]kv.Op,
 		return nil, fmt.Errorf("catalog: encoding old table key: %w", err)
 	}
 
-	meta.Name = newName
+	metaCopy := *meta
+	metaCopy.Name = newName
 
 	newKey, err := encoding.EncodeCatalogTableKey(db, newName)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: encoding new table key: %w", err)
 	}
 
-	value, err := encodeTableMeta(meta)
+	value, err := encodeTableMeta(&metaCopy)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: encoding table meta: %w", err)
 	}

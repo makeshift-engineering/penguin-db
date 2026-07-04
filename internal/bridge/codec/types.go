@@ -89,8 +89,12 @@ func DoubleValue(v float64) ColumnValue {
 
 // DecimalValue creates a non-null DECIMAL ColumnValue from v.
 // The raw bytes are [2-byte BE uint16 length][UTF-8 bytes], encoding the string representation.
+// Panics if the byte length of v exceeds 65535.
 func DecimalValue(v string) ColumnValue {
 	b := []byte(v)
+	if len(b) > math.MaxUint16 {
+		panic("codec: decimal value exceeds maximum length of 65535 bytes")
+	}
 	raw := make([]byte, sizeDecimalPrefix+len(b))
 	binary.BigEndian.PutUint16(raw, uint16(len(b)))
 	copy(raw[sizeDecimalPrefix:], b)
@@ -99,8 +103,12 @@ func DecimalValue(v string) ColumnValue {
 
 // VarcharValue creates a non-null VARCHAR ColumnValue from v.
 // The raw bytes are [2-byte BE uint16 length][UTF-8 bytes].
+// Panics if the byte length of v exceeds 65535.
 func VarcharValue(v string) ColumnValue {
 	b := []byte(v)
+	if len(b) > maxVarcharLen {
+		panic("codec: varchar value exceeds maximum length of 65535 bytes")
+	}
 	raw := make([]byte, sizeVarcharPrefix+len(b))
 	binary.BigEndian.PutUint16(raw, uint16(len(b)))
 	copy(raw[sizeVarcharPrefix:], b)
@@ -119,8 +127,12 @@ func BoolValue(v bool) ColumnValue {
 
 // TextValue creates a non-null TEXT ColumnValue from v.
 // The raw bytes are [4-byte BE uint32 length][UTF-8 bytes].
+// Panics if the byte length of v exceeds 4294967295.
 func TextValue(v string) ColumnValue {
 	b := []byte(v)
+	if len(b) > maxTextLen {
+		panic("codec: text value exceeds maximum length of 4294967295 bytes")
+	}
 	raw := make([]byte, sizeTextPrefix+len(b))
 	binary.BigEndian.PutUint32(raw, uint32(len(b)))
 	copy(raw[sizeTextPrefix:], b)

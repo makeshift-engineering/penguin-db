@@ -147,6 +147,7 @@ func TestRoundTripNull(t *testing.T) {
 	types := []ast.DataTypeKind{
 		ast.TypeInt, ast.TypeBigInt, ast.TypeVarchar,
 		ast.TypeBoolean, ast.TypeText, ast.TypeTimestamp,
+		ast.TypeFloat, ast.TypeDouble, ast.TypeDecimal,
 	}
 	for _, typ := range types {
 		data := encodeRow(t, NullValue(typ))
@@ -529,6 +530,7 @@ func TestTypeTagRoundTrip(t *testing.T) {
 	kinds := []ast.DataTypeKind{
 		ast.TypeInt, ast.TypeBigInt, ast.TypeVarchar,
 		ast.TypeBoolean, ast.TypeText, ast.TypeTimestamp,
+		ast.TypeFloat, ast.TypeDouble, ast.TypeDecimal,
 	}
 	for _, kind := range kinds {
 		tag, ok := typeTagFromKind(kind)
@@ -705,4 +707,26 @@ func TestMixedNullNonNull(t *testing.T) {
 	if bv != 42 {
 		t.Errorf("col 3: got %d, want 42", bv)
 	}
+}
+
+// TestDecimalValue_ExceedsMaxLength verifies that DecimalValue panics if the input length exceeds 65535.
+func TestDecimalValue_ExceedsMaxLength(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected DecimalValue to panic for length > 65535, but it did not")
+		}
+	}()
+	v := string(make([]byte, 65536))
+	DecimalValue(v)
+}
+
+// TestVarcharValue_ExceedsMaxLength verifies that VarcharValue panics if the input length exceeds 65535.
+func TestVarcharValue_ExceedsMaxLength(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected VarcharValue to panic for length > 65535, but it did not")
+		}
+	}()
+	v := string(make([]byte, 65536))
+	VarcharValue(v)
 }
