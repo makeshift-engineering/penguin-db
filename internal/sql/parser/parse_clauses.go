@@ -194,7 +194,9 @@ func (p *Parser) parseJoinClause() (*ast.JoinClause, error) {
 // Precondition: current == TOKEN_WHERE.
 func (p *Parser) parseWhereClause() (*ast.WhereClause, error) {
 	start := p.currentStart()
-	p.advance() // WHERE
+	if _, err := p.expect(utils.TOKEN_WHERE); err != nil {
+		return nil, err
+	}
 
 	cond, err := p.parseCondition()
 	if err != nil {
@@ -209,7 +211,9 @@ func (p *Parser) parseWhereClause() (*ast.WhereClause, error) {
 // Precondition: current == TOKEN_GROUP.
 func (p *Parser) parseGroupByClause() (*ast.GroupByClause, error) {
 	start := p.currentStart()
-	p.advance() // GROUP
+	if _, err := p.expect(utils.TOKEN_GROUP); err != nil {
+		return nil, err
+	}
 
 	if _, err := p.expect(utils.TOKEN_BY); err != nil {
 		return nil, err
@@ -237,7 +241,9 @@ func (p *Parser) parseGroupByClause() (*ast.GroupByClause, error) {
 // Precondition: current == TOKEN_HAVING.
 func (p *Parser) parseHavingClause() (*ast.HavingClause, error) {
 	start := p.currentStart()
-	p.advance() // HAVING
+	if _, err := p.expect(utils.TOKEN_HAVING); err != nil {
+		return nil, err
+	}
 
 	cond, err := p.parseCondition()
 	if err != nil {
@@ -252,7 +258,9 @@ func (p *Parser) parseHavingClause() (*ast.HavingClause, error) {
 // Precondition: current == TOKEN_ORDER.
 func (p *Parser) parseOrderByClause() (*ast.OrderByClause, error) {
 	start := p.currentStart()
-	p.advance() // ORDER
+	if _, err := p.expect(utils.TOKEN_ORDER); err != nil {
+		return nil, err
+	}
 
 	if _, err := p.expect(utils.TOKEN_BY); err != nil {
 		return nil, err
@@ -307,7 +315,9 @@ func (p *Parser) parseOrderByItem() (*ast.OrderByItem, error) {
 // Precondition: current == TOKEN_LIMIT.
 func (p *Parser) parseLimitClause() (*ast.LimitClause, error) {
 	start := p.currentStart()
-	p.advance() // LIMIT
+	if _, err := p.expect(utils.TOKEN_LIMIT); err != nil {
+		return nil, err
+	}
 
 	count, err := p.parseIntegerLiteralValue()
 	if err != nil {

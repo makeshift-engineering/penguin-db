@@ -188,9 +188,13 @@ func (p *Parser) parseNumericLiteral() (ast.Expression, error) {
 func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 	start := p.currentStart()
 
-	nameTok := p.current
-	p.advance() // consume function name (IDENT)
-	p.advance() // consume '('
+	nameTok, err := p.expect(utils.TOKEN_IDENT)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
+		return nil, err
+	}
 
 	fc := &ast.FunctionCall{Name: nameTok.Literal}
 

@@ -94,8 +94,12 @@ func (p *Parser) parseDropStatement() (ast.Statement, error) {
 // parseCreateDatabaseStatement handles: CREATE DATABASE [IF NOT EXISTS] Identifier
 func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error) {
 	start := p.currentStart()
-	p.advance() // CREATE
-	p.advance() // DATABASE
+	if _, err := p.expect(utils.TOKEN_CREATE); err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(utils.TOKEN_DATABASE); err != nil {
+		return nil, err
+	}
 
 	ifNotExists, err := p.parseIfNotExists()
 	if err != nil {
@@ -118,7 +122,9 @@ func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error)
 // parseUseDatabaseStatement handles: USE Identifier
 func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 	start := p.currentStart()
-	p.advance() // USE
+	if _, err := p.expect(utils.TOKEN_USE); err != nil {
+		return nil, err
+	}
 
 	name, err := p.expectIdent()
 	if err != nil {
@@ -135,8 +141,12 @@ func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 // parseDropDatabaseStatement handles: DROP DATABASE [IF EXISTS] Identifier
 func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 	start := p.currentStart()
-	p.advance() // DROP
-	p.advance() // DATABASE
+	if _, err := p.expect(utils.TOKEN_DROP); err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(utils.TOKEN_DATABASE); err != nil {
+		return nil, err
+	}
 
 	ifExists, err := p.parseIfExists()
 	if err != nil {
@@ -159,8 +169,12 @@ func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 // parseCreateTableStatement handles: CREATE TABLE [IF NOT EXISTS] QualifiedIdentifier '(' ColumnDefinition (',' ColumnDefinition)* ')'
 func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 	start := p.currentStart()
-	p.advance() // CREATE
-	p.advance() // TABLE
+	if _, err := p.expect(utils.TOKEN_CREATE); err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(utils.TOKEN_TABLE); err != nil {
+		return nil, err
+	}
 
 	ifNotExists, err := p.parseIfNotExists()
 	if err != nil {
@@ -197,7 +211,9 @@ func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 // parseAlterTableStatement handles: ALTER TABLE QualifiedIdentifier AlterAction
 func (p *Parser) parseAlterTableStatement() (*ast.AlterTableStmt, error) {
 	start := p.currentStart()
-	p.advance() // ALTER
+	if _, err := p.expect(utils.TOKEN_ALTER); err != nil {
+		return nil, err
+	}
 
 	if _, err := p.expect(utils.TOKEN_TABLE); err != nil {
 		return nil, err
@@ -224,8 +240,12 @@ func (p *Parser) parseAlterTableStatement() (*ast.AlterTableStmt, error) {
 // parseDropTableStatement handles: DROP TABLE [IF EXISTS] QualifiedIdentifier
 func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 	start := p.currentStart()
-	p.advance() // DROP
-	p.advance() // TABLE
+	if _, err := p.expect(utils.TOKEN_DROP); err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(utils.TOKEN_TABLE); err != nil {
+		return nil, err
+	}
 
 	ifExists, err := p.parseIfExists()
 	if err != nil {
@@ -277,7 +297,9 @@ func (p *Parser) parseIfExists() (bool, error) {
 // parseInsertStatement handles INSERT INTO statement.
 func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 	start := p.currentStart()
-	p.advance() // INSERT
+	if _, err := p.expect(utils.TOKEN_INSERT); err != nil {
+		return nil, err
+	}
 
 	if _, err := p.expect(utils.TOKEN_INTO); err != nil {
 		return nil, err
@@ -396,7 +418,9 @@ func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
 // parseUpdateStatement handles UPDATE statement.
 func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	start := p.currentStart()
-	p.advance() // UPDATE
+	if _, err := p.expect(utils.TOKEN_UPDATE); err != nil {
+		return nil, err
+	}
 
 	table, err := p.parseQualifiedIdentifier()
 	if err != nil {
@@ -441,7 +465,9 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 // parseDeleteStatement handles DELETE FROM statement.
 func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 	start := p.currentStart()
-	p.advance() // DELETE
+	if _, err := p.expect(utils.TOKEN_DELETE); err != nil {
+		return nil, err
+	}
 
 	if _, err := p.expect(utils.TOKEN_FROM); err != nil {
 		return nil, err
@@ -480,7 +506,9 @@ func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 // parseSelectStatement handles the full SELECT syntax.
 func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	start := p.currentStart()
-	p.advance() // SELECT
+	if _, err := p.expect(utils.TOKEN_SELECT); err != nil {
+		return nil, err
+	}
 
 	distinct, all := false, false
 	switch {
