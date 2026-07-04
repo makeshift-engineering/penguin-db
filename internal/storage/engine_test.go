@@ -1950,6 +1950,13 @@ func TestEngine_CompactionWorker_AlreadyCompacting(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
+	de.mu.RLock()
+	bgErr := de.bgErr
+	de.mu.RUnlock()
+	if bgErr != nil {
+		t.Errorf("expected no background error while isCompacting short-circuit is active, got %v", bgErr)
+	}
+
 	de.mu.Lock()
 	de.isCompacting = false
 	de.mu.Unlock()
@@ -1992,6 +1999,46 @@ func TestEngine_FlushWorker_Failure(t *testing.T) {
 
 	if bgErr == nil {
 		t.Fatal("expected flush background error, got nil")
+	}
+
+	_ = engine.Close()
+}
+
+// TestEngine_FlushWorker_ManifestFailure triggers manifest write failure in flushWorker.
+func TestEngine_FlushWorker_ManifestFailure(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.MaxMemTableSize = 60
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	de := engine.(*dbEngine)
+
+	tmpPath := filepath.Join(dir, "manifest.tmp")
+	if err := os.Mkdir(tmpPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	if err := engine.Put([]byte("k1"), make([]byte, 35)); err != nil {
+		t.Fatalf("first Put failed: %v", err)
+	}
+	_ = engine.Put([]byte("k2"), make([]byte, 25))
+
+	deadline := time.Now().Add(3 * time.Second)
+	var bgErr error
+	for time.Now().Before(deadline) {
+		de.mu.RLock()
+		bgErr = de.bgErr
+		de.mu.RUnlock()
+		if bgErr != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if bgErr == nil {
+		t.Fatal("expected flush manifest background error, got nil")
 	}
 
 	_ = engine.Close()

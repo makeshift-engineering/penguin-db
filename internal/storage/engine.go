@@ -511,6 +511,10 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 			engine.mu.Unlock()
 			return engine.bgErr
 		}
+		if engine.isClosing {
+			engine.mu.Unlock()
+			return fmt.Errorf("engine is closing")
+		}
 
 		for _, operation := range operations {
 			if operation.Type == OpPut {
@@ -748,9 +752,9 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 // closedIterator is an Iterator that is always invalid.
 type closedIterator struct{}
 
-func (c *closedIterator) Valid() bool            { return false }
-func (c *closedIterator) Next() ([]byte, []byte) { return nil, nil }
-func (c *closedIterator) Close()                 {}
+func (c *closedIterator) Valid() bool               { return false }
+func (c *closedIterator) Next() (key, value []byte) { return nil, nil }
+func (c *closedIterator) Close()                    {}
 
 // Close flushes in-memory contents and safely releases lock and worker resources.
 func (engine *dbEngine) Close() error {
