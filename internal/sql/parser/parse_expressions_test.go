@@ -325,6 +325,70 @@ func TestParse_Expressions(t *testing.T) {
 				},
 			}),
 		},
+		{
+			name:  "select column primary multiplication",
+			input: "SELECT tbl.col * 5;",
+			want: exprQuery(&ast.BinaryExpr{
+				Left:  &ast.Identifier{Qualifier: "tbl", Name: "col"},
+				Op:    utils.TOKEN_STAR,
+				Right: &ast.IntegerLiteral{Value: "5"},
+			}),
+		},
+		{
+			name:  "select column primary addition",
+			input: "SELECT tbl.col + 2;",
+			want: exprQuery(&ast.BinaryExpr{
+				Left:  &ast.Identifier{Qualifier: "tbl", Name: "col"},
+				Op:    utils.TOKEN_PLUS,
+				Right: &ast.IntegerLiteral{Value: "2"},
+			}),
+		},
+		{
+			name:  "select column condition comparison",
+			input: "SELECT tbl.col > 5;",
+			want: &ast.Program{
+				Statements: []ast.Statement{
+					&ast.SelectStmt{
+						Columns: []*ast.SelectColumn{
+							{
+								Expr: &ast.SelectExpression{
+									Cond: &ast.ComparisonPredicate{
+										Left:  &ast.Identifier{Qualifier: "tbl", Name: "col"},
+										Op:    utils.TOKEN_GT,
+										Right: &ast.IntegerLiteral{Value: "5"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "select column condition logic AND",
+			input: "SELECT tbl.col AND active;",
+			want: &ast.Program{
+				Statements: []ast.Statement{
+					&ast.SelectStmt{
+						Columns: []*ast.SelectColumn{
+							{
+								Expr: &ast.SelectExpression{
+									Cond: &ast.BinaryCondition{
+										Left: &ast.ExprCondition{
+											Expr: &ast.Identifier{Qualifier: "tbl", Name: "col"},
+										},
+										Op: utils.TOKEN_AND,
+										Right: &ast.ExprCondition{
+											Expr: &ast.Identifier{Name: "active"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -348,6 +412,8 @@ func TestParse_ExpressionErrors(t *testing.T) {
 		{"invalid expression", "SELECT SELECT;", CodeExpectedExpression, 1, 8},
 		{"empty paren", "SELECT ();", CodeExpectedExpression, 1, 9},
 		{"trailing operator", "SELECT 1 *;", CodeExpectedExpression, 1, 11},
+		{"select column trailing operator multiply", "SELECT tbl.col * ;", CodeExpectedExpression, 1, 18},
+		{"select column trailing operator plus", "SELECT tbl.col + ;", CodeExpectedExpression, 1, 18},
 	}
 
 	for _, tt := range tests {
