@@ -38,7 +38,7 @@ func (l *Lexer) Diagnostics() diagnostic.List {
 func (l *Lexer) Tokenize() []utils.Token {
 	var tokens []utils.Token
 	for {
-		tok := l.NextToken()
+		tok := l.nextToken()
 		tokens = append(tokens, tok)
 		if tok.Type == utils.TOKEN_EOF {
 			break
@@ -47,9 +47,9 @@ func (l *Lexer) Tokenize() []utils.Token {
 	return tokens
 }
 
-// NextToken scans and returns the next token from the source.
+// nextToken scans and returns the next token from the source.
 // It is retained for streaming use-cases and for internal use by Tokenize.
-func (l *Lexer) NextToken() utils.Token {
+func (l *Lexer) nextToken() utils.Token {
 	l.skipWhitespaceAndComments()
 
 	start := l.pos.snapshot()

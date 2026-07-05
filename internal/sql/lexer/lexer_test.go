@@ -147,7 +147,7 @@ func collectAll(t *testing.T, input string) []Token {
 	l := NewLexer("test", input)
 	var tokens []Token
 	for {
-		token := l.NextToken()
+		token := l.nextToken()
 		tokens = append(tokens, token)
 		if token.Type == TOKEN_EOF {
 			break
@@ -185,7 +185,7 @@ func requireError(t *testing.T, input string, sentinel error) {
 	t.Helper()
 	l := NewLexer("test", input)
 	for {
-		token := l.NextToken()
+		token := l.nextToken()
 		if token.Type == TOKEN_EOF {
 			break
 		}
@@ -224,7 +224,7 @@ func TestNextToken_OnlyWhitespace(t *testing.T) {
 func TestNextToken_RepeatedEOF(t *testing.T) {
 	l := NewLexer("test", "")
 	for i := 0; i < 5; i++ {
-		token := l.NextToken()
+		token := l.nextToken()
 		if l.Diagnostics().HasErrors() {
 			t.Fatalf("iteration %d: unexpected error: %v", i, l.Diagnostics().Error())
 		}
@@ -324,7 +324,7 @@ func TestNextToken_ComparisonOperators(t *testing.T) {
 // TestNextToken_LoneBang_IsIllegal tests next token lone bang is illegal.
 func TestNextToken_LoneBang_IsIllegal(t *testing.T) {
 	l := NewLexer("test", "!")
-	token := l.NextToken()
+	token := l.nextToken()
 	if !l.Diagnostics().HasErrors() {
 		t.Fatal("expected error for lone '!'")
 	}
@@ -456,7 +456,7 @@ func TestNextToken_Strings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			l := NewLexer("test", tc.input)
-			token := l.NextToken()
+			token := l.nextToken()
 			if l.Diagnostics().HasErrors() {
 				t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 			}
@@ -726,7 +726,7 @@ func TestNextToken_IllegalCharacters(t *testing.T) {
 	for _, ch := range illegals {
 		t.Run(ch, func(t *testing.T) {
 			l := NewLexer("test", ch)
-			token := l.NextToken()
+			token := l.nextToken()
 			if !l.Diagnostics().HasErrors() {
 				t.Fatal("expected error for illegal character")
 			}
@@ -1369,7 +1369,7 @@ func TestNextToken_MultiLineString(t *testing.T) {
 	// Strings can span newlines.
 	input := "'line1\nline2'"
 	l := NewLexer("test", input)
-	token := l.NextToken()
+	token := l.nextToken()
 	if l.Diagnostics().HasErrors() {
 		t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 	}
@@ -1481,7 +1481,7 @@ func TestNextToken_ErrorRecovery(t *testing.T) {
 	// After hitting an illegal character, the lexer should still be able to
 	// produce subsequent tokens.
 	l := NewLexer("test", "@ SELECT")
-	token := l.NextToken()
+	token := l.nextToken()
 	if token.Type != TOKEN_ILLEGAL {
 		t.Fatalf("expected ILLEGAL token, got %v", token)
 	}
@@ -1489,7 +1489,7 @@ func TestNextToken_ErrorRecovery(t *testing.T) {
 		t.Fatal("expected diagnostic error")
 	}
 	// The next call should produce SELECT.
-	token = l.NextToken()
+	token = l.nextToken()
 	if token.Type != TOKEN_SELECT {
 		t.Fatalf("expected SELECT after recovery, got %v", token.Type)
 	}
@@ -1541,7 +1541,7 @@ func TestNextToken_ScientificNotation(t *testing.T) {
 func TestNextToken_Unicode(t *testing.T) {
 	t.Run("unicode in string literal", func(t *testing.T) {
 		l := NewLexer("test", "'hello 🚀'")
-		token := l.NextToken()
+		token := l.nextToken()
 		if l.Diagnostics().HasErrors() {
 			t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 		}
@@ -1561,7 +1561,7 @@ func TestNextToken_Unicode(t *testing.T) {
 
 	t.Run("unicode character as illegal token", func(t *testing.T) {
 		l := NewLexer("test", "🚀")
-		token := l.NextToken()
+		token := l.nextToken()
 		if !l.Diagnostics().HasErrors() {
 			t.Fatal("expected error for unicode identifier character")
 		}
@@ -1733,7 +1733,7 @@ func TestTokenize_MatchesNextTokenLoop(t *testing.T) {
 	l2 := NewLexer("test", input)
 	var stream []Token
 	for {
-		tok := l2.NextToken()
+		tok := l2.nextToken()
 		stream = append(stream, tok)
 		if tok.Type == TOKEN_EOF {
 			break
