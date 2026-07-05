@@ -1593,3 +1593,241 @@ func TestLexer_EOFHelpers(t *testing.T) {
 		t.Errorf("advance() = %v, want 0 at EOF", got)
 	}
 }
+
+// TestTokenize_EmptyInput verifies that tokenizing an empty string produces
+// exactly one TOKEN_EOF and no diagnostics.
+func TestTokenize_EmptyInput(t *testing.T) {
+	l := NewLexer("test", "")
+	tokens := l.Tokenize()
+	if len(tokens) != 1 || tokens[0].Type != TOKEN_EOF {
+		t.Fatalf("expected [EOF], got %v", tokens)
+	}
+	if l.Diagnostics().HasErrors() {
+		t.Fatalf("unexpected errors: %v", l.Diagnostics().Error())
+	}
+}
+
+// TestTokenize_SimpleStatement verifies that Tokenize returns the correct
+// token sequence for a minimal SQL statement (keyword + literal + EOF).
+func TestTokenize_SimpleStatement(t *testing.T) {
+	l := NewLexer("test", "SELECT 1")
+	tokens := l.Tokenize()
+	if len(tokens) != 3 {
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Type != TOKEN_SELECT {
+		t.Errorf("[0] got %v, want SELECT", tokens[0].Type)
+	}
+	if tokens[1].Type != TOKEN_INTEGER || tokens[1].Literal != "1" {
+		t.Errorf("[1] got %v %q, want INTEGER '1'", tokens[1].Type, tokens[1].Literal)
+	}
+	if tokens[2].Type != TOKEN_EOF {
+		t.Errorf("[2] got %v, want EOF", tokens[2].Type)
+	}
+}
+
+// TestTokenize_AlwaysEndsWithEOF asserts that every call to Tokenize
+// terminates with TOKEN_EOF, regardless of input content.
+func TestTokenize_AlwaysEndsWithEOF(t *testing.T) {
+	for _, input := range []string{"", "   ", "SELECT *;", "-- comment", "/* block */"} {
+		l := NewLexer("test", input)
+		tokens := l.Tokenize()
+		if tokens[len(tokens)-1].Type != TOKEN_EOF {
+			t.Errorf("input %q: last token %v, want EOF", input, tokens[len(tokens)-1].Type)
+		}
+	}
+}
+
+// TestTokenize_MultipleStatements verifies that semicolon-separated
+// statements are tokenized into the expected number of tokens.
+func TestTokenize_MultipleStatements(t *testing.T) {
+	l := NewLexer("test", "SELECT 1; SELECT 2;")
+	tokens := l.Tokenize()
+	// SELECT 1 ; SELECT 2 ; EOF = 7
+	if len(tokens) != 7 {
+		t.Fatalf("expected 7 tokens, got %d", len(tokens))
+	}
+}
+
+// TestTokenize_WithErrors_StillCompletes verifies that the lexer
+// recovers from illegal characters and still produces valid tokens
+// interspersed with ILLEGAL tokens, terminating with EOF.
+func TestTokenize_WithErrors_StillCompletes(t *testing.T) {
+	l := NewLexer("test", "@ SELECT # 42")
+	tokens := l.Tokenize()
+	if tokens[len(tokens)-1].Type != TOKEN_EOF {
+		t.Fatal("expected EOF even with errors")
+	}
+	if !l.Diagnostics().HasErrors() {
+		t.Fatal("expected diagnostic errors")
+	}
+	var foundSelect, foundInt bool
+	for _, tok := range tokens {
+		if tok.Type == TOKEN_SELECT {
+			foundSelect = true
+		}
+		if tok.Type == TOKEN_INTEGER && tok.Literal == "42" {
+			foundInt = true
+		}
+	}
+	if !foundSelect || !foundInt {
+		t.Error("valid tokens missing among results")
+	}
+}
+
+// TestTokenize_UnterminatedString verifies that an unterminated string
+// literal records a CodeUnterminatedString diagnostic and still ends with EOF.
+func TestTokenize_UnterminatedString(t *testing.T) {
+	l := NewLexer("test", "'open")
+	tokens := l.Tokenize()
+	if tokens[len(tokens)-1].Type != TOKEN_EOF {
+		t.Fatal("expected EOF")
+	}
+	var found bool
+	for _, d := range l.Diagnostics() {
+		if errors.Is(d, CodeUnterminatedString) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected CodeUnterminatedString diagnostic")
+	}
+}
+
+// TestTokenize_UnterminatedComment verifies that an unterminated block
+// comment records a CodeUnterminatedComment diagnostic and still ends with EOF.
+func TestTokenize_UnterminatedComment(t *testing.T) {
+	l := NewLexer("test", "/* open")
+	tokens := l.Tokenize()
+	if tokens[len(tokens)-1].Type != TOKEN_EOF {
+		t.Fatal("expected EOF")
+	}
+	var found bool
+	for _, d := range l.Diagnostics() {
+		if errors.Is(d, CodeUnterminatedComment) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected CodeUnterminatedComment diagnostic")
+	}
+}
+
+// TestTokenize_MultipleErrors verifies that multiple illegal characters
+// each produce their own diagnostic entry.
+func TestTokenize_MultipleErrors(t *testing.T) {
+	l := NewLexer("test", "@ $ ^")
+	_ = l.Tokenize()
+	if len(l.Diagnostics()) != 3 {
+		t.Fatalf("expected 3 diagnostics, got %d", len(l.Diagnostics()))
+	}
+}
+
+// TestTokenize_MatchesNextTokenLoop verifies that the batch Tokenize
+// method produces an identical token sequence to a manual NextToken loop.
+func TestTokenize_MatchesNextTokenLoop(t *testing.T) {
+	input := "SELECT id, name FROM users WHERE age >= 18;"
+	l1 := NewLexer("test", input)
+	batch := l1.Tokenize()
+
+	l2 := NewLexer("test", input)
+	var stream []Token
+	for {
+		tok := l2.NextToken()
+		stream = append(stream, tok)
+		if tok.Type == TOKEN_EOF {
+			break
+		}
+	}
+	if len(batch) != len(stream) {
+		t.Fatalf("length mismatch: %d vs %d", len(batch), len(stream))
+	}
+	for i := range batch {
+		if batch[i] != stream[i] {
+			t.Errorf("[%d] mismatch: %v vs %v", i, batch[i], stream[i])
+		}
+	}
+}
+
+// TestTokenize_OnlyComments verifies that input consisting entirely of
+// comments produces only a single EOF token.
+func TestTokenize_OnlyComments(t *testing.T) {
+	l := NewLexer("test", "-- line\n/* block */")
+	tokens := l.Tokenize()
+	if len(tokens) != 1 || tokens[0].Type != TOKEN_EOF {
+		t.Fatalf("expected [EOF], got %v", tokens)
+	}
+}
+
+// TestTokenize_SpanOffsets verifies that byte offsets in token spans are
+// correctly tracked through Tokenize.
+func TestTokenize_SpanOffsets(t *testing.T) {
+	l := NewLexer("test", "SELECT *")
+	tokens := l.Tokenize()
+	if tokens[0].Span.Start.Offset != 0 {
+		t.Errorf("SELECT start offset: got %d, want 0", tokens[0].Span.Start.Offset)
+	}
+	if tokens[0].Span.End.Offset != 6 {
+		t.Errorf("SELECT end offset: got %d, want 6", tokens[0].Span.End.Offset)
+	}
+	if tokens[1].Span.Start.Offset != 7 {
+		t.Errorf("STAR start offset: got %d, want 7", tokens[1].Span.Start.Offset)
+	}
+}
+
+// TestDiagnostics_EmptyOnCleanInput verifies that Diagnostics returns
+// an empty, error-free list after tokenizing valid SQL.
+func TestDiagnostics_EmptyOnCleanInput(t *testing.T) {
+	l := NewLexer("test", "SELECT 1")
+	l.Tokenize()
+	if l.Diagnostics().HasErrors() || len(l.Diagnostics()) != 0 {
+		t.Fatal("expected zero diagnostics")
+	}
+}
+
+// TestDiagnostics_EmptyBeforeTokenization verifies that no diagnostics
+// are present before any tokenization has occurred.
+func TestDiagnostics_EmptyBeforeTokenization(t *testing.T) {
+	l := NewLexer("test", "@ bad")
+	if l.Diagnostics().HasErrors() {
+		t.Fatal("expected no diagnostics before tokenization")
+	}
+}
+
+// TestNewLexer_SourceNameInDiagnostic verifies that the source name
+// passed to NewLexer propagates into diagnostic Source metadata.
+func TestNewLexer_SourceNameInDiagnostic(t *testing.T) {
+	l := NewLexer("my_query.sql", "@")
+	l.Tokenize()
+	if !l.Diagnostics().HasErrors() {
+		t.Fatal("expected error")
+	}
+	d := l.Diagnostics()[0]
+	if d.Source == nil || d.Source.Name != "my_query.sql" {
+		t.Errorf("source name: got %v, want 'my_query.sql'", d.Source)
+	}
+}
+
+// TestPeekNext_SingleChar verifies that peekNext returns 0 when only
+// one character remains in the input.
+func TestPeekNext_SingleChar(t *testing.T) {
+	l := NewLexer("test", "a")
+	if got := l.peekNext(); got != 0 {
+		t.Errorf("peekNext() = %v, want 0 for single-char input", got)
+	}
+}
+
+// TestAdvance_ReturnsCorrectRunes verifies that advance returns each
+// rune in sequence and then returns 0 once the input is exhausted.
+func TestAdvance_ReturnsCorrectRunes(t *testing.T) {
+	l := NewLexer("test", "ab")
+	if got := l.advance(); got != 'a' {
+		t.Errorf("got %c, want 'a'", got)
+	}
+	if got := l.advance(); got != 'b' {
+		t.Errorf("got %c, want 'b'", got)
+	}
+	if got := l.advance(); got != 0 {
+		t.Errorf("got %c, want 0 at EOF", got)
+	}
+}

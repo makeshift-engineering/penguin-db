@@ -129,6 +129,8 @@ func (l *Lexer) NextToken() utils.Token {
 	}
 }
 
+// peek returns the current rune under the cursor without advancing.
+// Returns 0 if the cursor is at or past the end of input.
 func (l *Lexer) peek() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
@@ -137,6 +139,8 @@ func (l *Lexer) peek() rune {
 	return r
 }
 
+// peekNext returns the rune immediately after the current one without
+// advancing the cursor. Returns 0 if fewer than two runes remain.
 func (l *Lexer) peekNext() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
@@ -149,6 +153,8 @@ func (l *Lexer) peekNext() rune {
 	return r
 }
 
+// advance consumes the current rune, updates the cursor position
+// (line/column/offset), and returns the consumed rune. Returns 0 at EOF.
 func (l *Lexer) advance() rune {
 	if l.pos.index >= len(l.src) {
 		return 0
@@ -158,6 +164,8 @@ func (l *Lexer) advance() rune {
 	return r
 }
 
+// makeToken constructs a Token with the given type and literal, spanning
+// from start to the current cursor position.
 func (l *Lexer) makeToken(typ utils.TokenType, lit string, start diagnostic.Pos) utils.Token {
 	return utils.Token{
 		Type:    typ,
@@ -166,12 +174,17 @@ func (l *Lexer) makeToken(typ utils.TokenType, lit string, start diagnostic.Pos)
 	}
 }
 
+// skipLineComment consumes characters until a newline or EOF, discarding
+// the body of a SQL line comment (-- ...).
 func (l *Lexer) skipLineComment() {
 	for l.peek() != 0 && l.peek() != '\n' {
 		l.advance()
 	}
 }
 
+// skipBlockComment consumes characters until the closing */ delimiter.
+// Returns true if the comment was properly closed, false if EOF was reached
+// first (in which case an unterminated-comment diagnostic is recorded).
 func (l *Lexer) skipBlockComment(start diagnostic.Pos) bool {
 	for l.pos.index < len(l.src) {
 		if l.peek() == '*' && l.peekNext() == '/' {
@@ -186,6 +199,9 @@ func (l *Lexer) skipBlockComment(start diagnostic.Pos) bool {
 	return false
 }
 
+// skipWhitespaceAndComments advances past runs of whitespace, line comments
+// (-- ...), and block comments (/* ... */). It stops when a non-whitespace,
+// non-comment character is found or at EOF.
 func (l *Lexer) skipWhitespaceAndComments() {
 	for l.pos.index < len(l.src) {
 		ch := l.peek()
@@ -209,6 +225,9 @@ func (l *Lexer) skipWhitespaceAndComments() {
 	}
 }
 
+// scanIdentifier consumes an identifier or keyword starting at the current
+// position. The literal is passed through utils.LookupIdent to distinguish
+// keywords from ordinary identifiers.
 func (l *Lexer) scanIdentifier() utils.Token {
 	start := l.pos.snapshot()
 	startIndex := l.pos.index
@@ -220,12 +239,17 @@ func (l *Lexer) scanIdentifier() utils.Token {
 	return l.makeToken(typ, lit, start)
 }
 
+// scanDigits consumes a contiguous run of ASCII decimal digits.
 func (l *Lexer) scanDigits() {
 	for isDigit(l.peek()) {
 		l.advance()
 	}
 }
 
+// scanNumber consumes an integer or floating-point numeric literal,
+// including optional leading dot (.5), trailing dot (5.), and scientific
+// notation (1.5e-3). It disambiguates "42.col" (integer + dot + ident)
+// from "42.5" (float) by peeking at the character after the dot.
 func (l *Lexer) scanNumber() utils.Token {
 	start := l.pos.snapshot()
 	startIndex := l.pos.index
@@ -274,6 +298,9 @@ func (l *Lexer) scanNumber() utils.Token {
 	return l.makeToken(utils.TOKEN_INTEGER, lit, start)
 }
 
+// scanString consumes a single-quoted SQL string literal, handling
+// escaped quotes ('') as a single quote character. Records an
+// unterminated-string diagnostic if EOF is reached before the closing quote.
 func (l *Lexer) scanString() utils.Token {
 	start := l.pos.snapshot()
 	l.advance() // consume opening '
@@ -300,7 +327,14 @@ func (l *Lexer) scanString() utils.Token {
 	return l.makeToken(utils.TOKEN_STRING, buf.String(), start)
 }
 
+// isIdentStart reports whether ch can begin a SQL identifier (letter or underscore).
 func isIdentStart(ch rune) bool { return isLetter(ch) || ch == '_' }
-func isIdentPart(ch rune) bool  { return isLetter(ch) || isDigit(ch) || ch == '_' }
-func isLetter(ch rune) bool     { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') }
-func isDigit(ch rune) bool      { return ch >= '0' && ch <= '9' }
+
+// isIdentPart reports whether ch can appear after the first character of a SQL identifier.
+func isIdentPart(ch rune) bool { return isLetter(ch) || isDigit(ch) || ch == '_' }
+
+// isLetter reports whether ch is an ASCII letter (a-z, A-Z).
+func isLetter(ch rune) bool { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') }
+
+// isDigit reports whether ch is an ASCII decimal digit (0-9).
+func isDigit(ch rune) bool { return ch >= '0' && ch <= '9' }

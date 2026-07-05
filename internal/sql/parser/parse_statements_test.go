@@ -7,6 +7,7 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
+// TestParse_CreateDatabase tests parsing of CREATE DATABASE statements.
 func TestParse_CreateDatabase(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -40,6 +41,7 @@ func TestParse_CreateDatabase(t *testing.T) {
 	}
 }
 
+// TestParse_UseDatabase tests parsing of USE database statements.
 func TestParse_UseDatabase(t *testing.T) {
 	requireAST(t, "USE mydb;", &ast.Program{
 		Statements: []ast.Statement{
@@ -48,6 +50,7 @@ func TestParse_UseDatabase(t *testing.T) {
 	})
 }
 
+// TestParse_DropDatabase tests parsing of DROP DATABASE statements.
 func TestParse_DropDatabase(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -81,6 +84,7 @@ func TestParse_DropDatabase(t *testing.T) {
 	}
 }
 
+// TestParse_CreateTable tests parsing of CREATE TABLE statements, columns, and constraints.
 func TestParse_CreateTable(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -383,6 +387,7 @@ func TestParse_CreateTable(t *testing.T) {
 	}
 }
 
+// TestParse_AlterTable tests parsing of ALTER TABLE statements and their actions.
 func TestParse_AlterTable(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -534,6 +539,7 @@ func TestParse_AlterTable(t *testing.T) {
 	}
 }
 
+// TestParse_DropTable tests parsing of DROP TABLE statements.
 func TestParse_DropTable(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -567,6 +573,7 @@ func TestParse_DropTable(t *testing.T) {
 	}
 }
 
+// TestParse_DDLErrors tests parsing errors for various DDL statements.
 func TestParse_DDLErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -603,6 +610,7 @@ func TestParse_DDLErrors(t *testing.T) {
 	}
 }
 
+// TestParse_Insert tests parsing of INSERT statements.
 func TestParse_Insert(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -754,6 +762,7 @@ func TestParse_Insert(t *testing.T) {
 	}
 }
 
+// TestParse_Update tests parsing of UPDATE statements.
 func TestParse_Update(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -876,6 +885,7 @@ func TestParse_Update(t *testing.T) {
 	}
 }
 
+// TestParse_Delete tests parsing of DELETE statements.
 func TestParse_Delete(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -957,6 +967,7 @@ func TestParse_Delete(t *testing.T) {
 	}
 }
 
+// TestParse_DMLErrors tests parsing errors for various DML statements.
 func TestParse_DMLErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1005,6 +1016,7 @@ func TestParse_DMLErrors(t *testing.T) {
 	}
 }
 
+// TestParse_Select tests parsing of SELECT statements, columns, and logical clauses.
 func TestParse_Select(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1393,6 +1405,7 @@ func TestParse_Select(t *testing.T) {
 	}
 }
 
+// TestParse_SelectErrors tests parsing errors in SELECT statement clauses.
 func TestParse_SelectErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1416,6 +1429,7 @@ func TestParse_SelectErrors(t *testing.T) {
 	}
 }
 
+// TestParse_MultipleStatements tests parsing multiple statements separated by semicolons.
 func TestParse_MultipleStatements(t *testing.T) {
 	input := "CREATE DATABASE mydb; USE mydb; DROP DATABASE mydb;"
 	want := &ast.Program{
@@ -1428,10 +1442,12 @@ func TestParse_MultipleStatements(t *testing.T) {
 	requireAST(t, input, want)
 }
 
+// TestParse_EmptyInput tests parsing of empty inputs.
 func TestParse_EmptyInput(t *testing.T) {
 	requireAST(t, "", &ast.Program{})
 }
 
+// TestParse_UnknownStatementKeyword tests that unknown SQL statement keywords produce errors.
 func TestParse_UnknownStatementKeyword(t *testing.T) {
 	requireParseError(t, "BOGUS;", CodeMalformedStatement, 1, 1)
 }

@@ -24,6 +24,7 @@ func exprQuery(expr ast.Expression) *ast.Program {
 	}
 }
 
+// TestParse_Expressions tests parsing of various scalar, binary, unary, and function call expressions.
 func TestParse_Expressions(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -398,6 +399,7 @@ func TestParse_Expressions(t *testing.T) {
 	}
 }
 
+// TestParse_ExpressionErrors tests parsing errors related to expressions.
 func TestParse_ExpressionErrors(t *testing.T) {
 	tests := []struct {
 		name     string

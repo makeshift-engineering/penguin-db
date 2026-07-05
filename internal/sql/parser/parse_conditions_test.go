@@ -21,6 +21,7 @@ func condQuery(cond ast.Condition) *ast.Program {
 	}
 }
 
+// TestParse_Conditions tests parsing of WHERE clauses and logical/predicate conditions.
 func TestParse_Conditions(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -388,6 +389,7 @@ func TestParse_Conditions(t *testing.T) {
 	}
 }
 
+// TestParse_ConditionErrors tests parsing errors related to conditions.
 func TestParse_ConditionErrors(t *testing.T) {
 	tests := []struct {
 		name     string
