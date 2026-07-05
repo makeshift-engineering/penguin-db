@@ -21,6 +21,7 @@ func condQuery(cond ast.Condition) *ast.Program {
 	}
 }
 
+// TestParse_Conditions tests parsing of WHERE clauses and logical/predicate conditions.
 func TestParse_Conditions(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -364,6 +365,21 @@ func TestParse_Conditions(t *testing.T) {
 				Right: &ast.Identifier{Qualifier: "t", Name: "b"},
 			}),
 		},
+		{
+			name:  "parenthesized bare logical condition",
+			input: "DELETE FROM t WHERE (active AND ok);",
+			want: condQuery(&ast.ParenCondition{
+				Inner: &ast.BinaryCondition{
+					Left: &ast.ExprCondition{
+						Expr: &ast.Identifier{Name: "active"},
+					},
+					Op: utils.TOKEN_AND,
+					Right: &ast.ExprCondition{
+						Expr: &ast.Identifier{Name: "ok"},
+					},
+				},
+			}),
+		},
 	}
 
 	for _, tt := range tests {
@@ -373,6 +389,7 @@ func TestParse_Conditions(t *testing.T) {
 	}
 }
 
+// TestParse_ConditionErrors tests parsing errors related to conditions.
 func TestParse_ConditionErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -389,6 +406,8 @@ func TestParse_ConditionErrors(t *testing.T) {
 		{"incomplete parenthesis", "DELETE FROM t WHERE (a = 1;", CodeUnexpectedToken, 1, 27},
 		{"empty where clause", "DELETE FROM t WHERE ;", CodeExpectedExpression, 1, 21},
 		{"in empty list", "DELETE FROM t WHERE a IN ();", CodeExpectedExpression, 1, 27},
+		{"incomplete comparison in paren", "DELETE FROM t WHERE (a = );", CodeExpectedExpression, 1, 26},
+		{"malformed condition continuation in paren", "DELETE FROM t WHERE (a + 5 12);", CodeExpectedCondition, 1, 28},
 	}
 
 	for _, tt := range tests {

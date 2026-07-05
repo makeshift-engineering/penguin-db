@@ -7,6 +7,7 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
+// TestParse_TableReferences tests parsing table references and join clauses.
 func TestParse_TableReferences(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -403,6 +404,7 @@ func TestParse_TableReferences(t *testing.T) {
 	}
 }
 
+// TestParse_OrderBy tests parsing of the ORDER BY clause.
 func TestParse_OrderBy(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -514,6 +516,7 @@ func TestParse_OrderBy(t *testing.T) {
 	}
 }
 
+// TestParse_GroupByAndHaving tests parsing of GROUP BY and HAVING clauses.
 func TestParse_GroupByAndHaving(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -594,6 +597,7 @@ func TestParse_GroupByAndHaving(t *testing.T) {
 	}
 }
 
+// TestParse_LimitAndOffset tests parsing of LIMIT and OFFSET clauses.
 func TestParse_LimitAndOffset(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -659,6 +663,7 @@ func TestParse_LimitAndOffset(t *testing.T) {
 	}
 }
 
+// TestParse_ClauseErrors tests parsing errors related to clauses.
 func TestParse_ClauseErrors(t *testing.T) {
 	tests := []struct {
 		name     string

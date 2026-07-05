@@ -20,6 +20,8 @@ var (
 	_ ast.Statement = (*ast.DeleteStmt)(nil)
 )
 
+// TestStatement_TypeSwitchCoverage verifies that every concrete Statement
+// type is handled in a type-switch, guarding against missing cases.
 func TestStatement_TypeSwitchCoverage(t *testing.T) {
 	stmts := []ast.Statement{
 		&ast.CreateDatabaseStmt{},
@@ -52,85 +54,190 @@ func TestStatement_TypeSwitchCoverage(t *testing.T) {
 	}
 }
 
+// TestStatement_Validation exercises the Validate method on all Statement
+// node types, covering valid inputs, nil fields, empty required lists,
+// mutually exclusive flags, and recursive validation propagation.
 func TestStatement_Validation(t *testing.T) {
+	validCol := &ast.ColumnDef{Name: "id", Type: &ast.DataType{Kind: ast.TypeInt}}
+	validIdent := &ast.Identifier{Name: "t"}
+	validSelectCol := &ast.SelectColumn{Star: true}
+	validAction := &ast.AlterAction{Kind: ast.AlterAdd, Column: validCol}
+
 	tests := []struct {
 		name    string
 		node    ast.Node
 		wantErr error
 	}{
+		// CreateDatabaseStmt
+		{name: "CreateDatabaseStmt valid", node: &ast.CreateDatabaseStmt{Name: "db"}},
+		{name: "CreateDatabaseStmt empty name", node: &ast.CreateDatabaseStmt{}, wantErr: ast.ErrEmptyDatabaseName},
+		// UseDatabaseStmt
+		{name: "UseDatabaseStmt valid", node: &ast.UseDatabaseStmt{Name: "db"}},
+		{name: "UseDatabaseStmt empty name", node: &ast.UseDatabaseStmt{}, wantErr: ast.ErrEmptyDatabaseName},
+		// DropDatabaseStmt
+		{name: "DropDatabaseStmt valid", node: &ast.DropDatabaseStmt{Name: "db"}},
+		{name: "DropDatabaseStmt empty name", node: &ast.DropDatabaseStmt{}, wantErr: ast.ErrEmptyDatabaseName},
+		// CreateTableStmt
 		{
-			name:    "CreateDatabaseStmt empty name",
-			node:    &ast.CreateDatabaseStmt{Name: ""},
-			wantErr: ast.ErrEmptyDatabaseName,
-		},
-		{
-			name: "CreateTableStmt empty columns",
-			node: &ast.CreateTableStmt{
-				Table: &ast.Identifier{Name: "t"},
-			},
-			wantErr: ast.ErrEmptyCreateTableColumns,
-		},
-		{
-			name: "CreateTableStmt nil table",
-			node: &ast.CreateTableStmt{
-				Columns: []*ast.ColumnDef{
-					{Name: "id", Type: &ast.DataType{Kind: ast.TypeInt}},
-				},
-			},
+			name:    "CreateTableStmt nil table",
+			node:    &ast.CreateTableStmt{Columns: []*ast.ColumnDef{validCol}},
 			wantErr: ast.ErrNilIdentifier,
 		},
 		{
-			name: "SelectStmt valid",
-			node: &ast.SelectStmt{
-				Columns: []*ast.SelectColumn{
-					{Star: true},
-				},
-			},
+			name:    "CreateTableStmt empty columns",
+			node:    &ast.CreateTableStmt{Table: validIdent},
+			wantErr: ast.ErrEmptyCreateTableColumns,
+		},
+		{
+			name: "CreateTableStmt valid",
+			node: &ast.CreateTableStmt{Table: validIdent, Columns: []*ast.ColumnDef{validCol}},
+		},
+		{
+			name:    "CreateTableStmt nil column element",
+			node:    &ast.CreateTableStmt{Table: validIdent, Columns: []*ast.ColumnDef{nil}},
+			wantErr: ast.ErrNilClause,
+		},
+		// AlterTableStmt
+		{
+			name: "AlterTableStmt valid",
+			node: &ast.AlterTableStmt{Table: validIdent, Action: validAction},
+		},
+		{
+			name:    "AlterTableStmt nil table",
+			node:    &ast.AlterTableStmt{Action: validAction},
+			wantErr: ast.ErrNilIdentifier,
+		},
+		{
+			name:    "AlterTableStmt nil action",
+			node:    &ast.AlterTableStmt{Table: validIdent},
+			wantErr: ast.ErrNilAlterTableAction,
+		},
+		// DropTableStmt
+		{
+			name: "DropTableStmt valid",
+			node: &ast.DropTableStmt{Table: validIdent},
+		},
+		{
+			name:    "DropTableStmt nil table",
+			node:    &ast.DropTableStmt{},
+			wantErr: ast.ErrNilIdentifier,
+		},
+		// SelectStmt
+		{
+			name:    "SelectStmt valid",
+			node:    &ast.SelectStmt{Columns: []*ast.SelectColumn{validSelectCol}},
 			wantErr: nil,
 		},
 		{
-			name: "SelectStmt both distinct and all",
-			node: &ast.SelectStmt{
-				Distinct: true,
-				All:      true,
-				Columns: []*ast.SelectColumn{
-					{Star: true},
-				},
-			},
-			wantErr: ast.ErrMutuallyExclusiveSelectModifiers,
-		},
-		{
-			name: "SelectStmt empty columns",
-			node: &ast.SelectStmt{
-				Columns: []*ast.SelectColumn{},
-			},
+			name:    "SelectStmt empty columns",
+			node:    &ast.SelectStmt{},
 			wantErr: ast.ErrEmptySelectColumns,
 		},
 		{
-			name: "InsertStmt valid",
-			node: &ast.InsertStmt{
-				Table: &ast.Identifier{Name: "t"},
-				Rows:  [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}},
-			},
-			wantErr: nil,
+			name:    "SelectStmt both distinct and all",
+			node:    &ast.SelectStmt{Distinct: true, All: true, Columns: []*ast.SelectColumn{validSelectCol}},
+			wantErr: ast.ErrMutuallyExclusiveSelectModifiers,
 		},
 		{
-			name: "InsertStmt both rows and source nil",
+			name:    "SelectStmt nil column element",
+			node:    &ast.SelectStmt{Columns: []*ast.SelectColumn{nil}},
+			wantErr: ast.ErrNilClause,
+		},
+		{
+			name:    "SelectStmt nil from element",
+			node:    &ast.SelectStmt{Columns: []*ast.SelectColumn{validSelectCol}, From: []*ast.TableRef{nil}},
+			wantErr: ast.ErrNilClause,
+		},
+		{
+			name: "SelectStmt with where nil cond",
+			node: &ast.SelectStmt{
+				Columns: []*ast.SelectColumn{validSelectCol},
+				Where:   &ast.WhereClause{},
+			},
+			wantErr: ast.ErrNilCondition,
+		},
+		// InsertStmt
+		{
+			name: "InsertStmt valid rows",
 			node: &ast.InsertStmt{
-				Table: &ast.Identifier{Name: "t"},
+				Table: validIdent,
+				Rows:  [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}},
+			},
+		},
+		{
+			name: "InsertStmt valid source",
+			node: &ast.InsertStmt{
+				Table:  validIdent,
+				Source: &ast.SelectStmt{Columns: []*ast.SelectColumn{validSelectCol}},
+			},
+		},
+		{
+			name:    "InsertStmt nil table",
+			node:    &ast.InsertStmt{Rows: [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}}},
+			wantErr: ast.ErrNilIdentifier,
+		},
+		{
+			name:    "InsertStmt neither rows nor source",
+			node:    &ast.InsertStmt{Table: validIdent},
+			wantErr: ast.ErrInvalidInsertStmt,
+		},
+		{
+			name: "InsertStmt both rows and source",
+			node: &ast.InsertStmt{
+				Table:  validIdent,
+				Rows:   [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}},
+				Source: &ast.SelectStmt{Columns: []*ast.SelectColumn{validSelectCol}},
 			},
 			wantErr: ast.ErrInvalidInsertStmt,
 		},
 		{
-			name: "InsertStmt both rows and source set",
+			name: "InsertStmt nil value in row",
 			node: &ast.InsertStmt{
-				Table: &ast.Identifier{Name: "t"},
-				Rows:  [][]*ast.SelectExpression{{{Expr: &ast.IntegerLiteral{Value: "1"}}}},
-				Source: &ast.SelectStmt{
-					Columns: []*ast.SelectColumn{{Star: true}},
-				},
+				Table: validIdent,
+				Rows:  [][]*ast.SelectExpression{{nil}},
 			},
-			wantErr: ast.ErrInvalidInsertStmt,
+			wantErr: ast.ErrNilExpression,
+		},
+		// UpdateStmt
+		{
+			name: "UpdateStmt valid",
+			node: &ast.UpdateStmt{
+				Table: validIdent,
+				Set:   []*ast.SetItem{{Column: &ast.Identifier{Name: "c"}, Value: &ast.IntegerLiteral{Value: "1"}}},
+			},
+		},
+		{
+			name:    "UpdateStmt nil table",
+			node:    &ast.UpdateStmt{Set: []*ast.SetItem{{Column: &ast.Identifier{Name: "c"}, Value: &ast.IntegerLiteral{Value: "1"}}}},
+			wantErr: ast.ErrNilIdentifier,
+		},
+		{
+			name:    "UpdateStmt empty set",
+			node:    &ast.UpdateStmt{Table: validIdent},
+			wantErr: ast.ErrEmptyUpdateAssignments,
+		},
+		{
+			name:    "UpdateStmt nil set item",
+			node:    &ast.UpdateStmt{Table: validIdent, Set: []*ast.SetItem{nil}},
+			wantErr: ast.ErrNilClause,
+		},
+		// DeleteStmt
+		{
+			name: "DeleteStmt valid",
+			node: &ast.DeleteStmt{Table: validIdent},
+		},
+		{
+			name:    "DeleteStmt nil table",
+			node:    &ast.DeleteStmt{},
+			wantErr: ast.ErrNilIdentifier,
+		},
+		{
+			name: "DeleteStmt with where nil cond",
+			node: &ast.DeleteStmt{
+				Table: validIdent,
+				Where: &ast.WhereClause{},
+			},
+			wantErr: ast.ErrNilCondition,
 		},
 	}
 
