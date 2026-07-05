@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -50,7 +51,7 @@ func TestApplyDropDatabase(t *testing.T) {
 	}
 	// Tables should also be gone.
 	_, err := c.GetTable("testdb", "users")
-	if err != ErrDatabaseNotFound {
+	if !errors.Is(err, ErrDatabaseNotFound) {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 }
@@ -112,7 +113,7 @@ func TestApplyDropTable(t *testing.T) {
 	c.ApplyDropTable("testdb", "users")
 
 	_, err := c.GetTable("testdb", "users")
-	if err != ErrTableNotFound {
+	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
@@ -173,7 +174,7 @@ func TestApplyRenameTable(t *testing.T) {
 	c.ApplyRenameTable("testdb", "users", "customers", &renamed)
 
 	_, err := c.GetTable("testdb", "users")
-	if err != ErrTableNotFound {
+	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("old name should not exist after rename")
 	}
 	got, err := c.GetTable("testdb", "customers")

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/kv"
@@ -83,7 +84,7 @@ func TestBuildCreateTableOps(t *testing.T) {
 func TestBuildCreateTableOps_NoDB(t *testing.T) {
 	c := NewEmptyCatalog()
 	_, err := BuildCreateTableOps(c, testTable())
-	if err != ErrCatalogDBMissing {
+	if !errors.Is(err, ErrCatalogDBMissing) {
 		t.Errorf("expected ErrCatalogDBMissing, got %v", err)
 	}
 }
@@ -96,7 +97,7 @@ func TestBuildCreateTableOps_DuplicateTable(t *testing.T) {
 	c.ApplyCreateTable(testTable())
 
 	_, err := BuildCreateTableOps(c, testTable())
-	if err != ErrTableExists {
+	if !errors.Is(err, ErrTableExists) {
 		t.Errorf("expected ErrTableExists, got %v", err)
 	}
 }
@@ -120,7 +121,7 @@ func TestBuildCreateTableOps_DuplicateColumns(t *testing.T) {
 	}
 
 	_, err := BuildCreateTableOps(c, meta)
-	if err != ErrDuplicateColumn {
+	if !errors.Is(err, ErrDuplicateColumn) {
 		t.Errorf("expected ErrDuplicateColumn, got %v", err)
 	}
 }
@@ -141,7 +142,7 @@ func TestBuildCreateTableOps_PKColumnNotFound(t *testing.T) {
 	}
 
 	_, err := BuildCreateTableOps(c, meta)
-	if err != ErrPKColumnNotFound {
+	if !errors.Is(err, ErrPKColumnNotFound) {
 		t.Errorf("expected ErrPKColumnNotFound, got %v", err)
 	}
 }
@@ -229,7 +230,7 @@ func TestBuildAlterTableOps_AddNotNullWithoutDefault_Rejected(t *testing.T) {
 	}
 
 	_, err := BuildAlterTableOps(old, newMeta)
-	if err != ErrUnsupportedAlter {
+	if !errors.Is(err, ErrUnsupportedAlter) {
 		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
 	}
 }
@@ -273,7 +274,7 @@ func TestBuildAlterTableOps_DropPKColumn_Rejected(t *testing.T) {
 	}
 
 	_, err := BuildAlterTableOps(old, newMeta)
-	if err != ErrCannotDropPKColumn {
+	if !errors.Is(err, ErrCannotDropPKColumn) {
 		t.Errorf("expected ErrCannotDropPKColumn, got %v", err)
 	}
 }
@@ -295,7 +296,7 @@ func TestBuildAlterTableOps_ChangeColumnType_Rejected(t *testing.T) {
 	}
 
 	_, err := BuildAlterTableOps(old, newMeta)
-	if err != ErrUnsupportedAlter {
+	if !errors.Is(err, ErrUnsupportedAlter) {
 		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
 	}
 }
@@ -313,7 +314,7 @@ func TestBuildAlterTableOps_ChangePK_Rejected(t *testing.T) {
 	}
 
 	_, err := BuildAlterTableOps(old, newMeta)
-	if err != ErrUnsupportedAlter {
+	if !errors.Is(err, ErrUnsupportedAlter) {
 		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
 	}
 }

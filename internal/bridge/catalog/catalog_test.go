@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/kv"
@@ -219,7 +220,6 @@ func TestNewCatalog_OrphanedTable(t *testing.T) {
 	}
 }
 
-
 // TestNewEmptyCatalog verifies that a freshly created empty catalog reports
 // no databases and returns an empty database list.
 func TestNewEmptyCatalog(t *testing.T) {
@@ -252,7 +252,7 @@ func TestGetDatabase(t *testing.T) {
 	c := NewEmptyCatalog()
 
 	_, err := c.GetDatabase("nonexistent")
-	if err != ErrDatabaseNotFound {
+	if !errors.Is(err, ErrDatabaseNotFound) {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
@@ -272,14 +272,14 @@ func TestGetTable(t *testing.T) {
 	c := NewEmptyCatalog()
 
 	_, err := c.GetTable("nodb", "notable")
-	if err != ErrDatabaseNotFound {
+	if !errors.Is(err, ErrDatabaseNotFound) {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
 	c.ApplyCreateDatabase(testDB())
 
 	_, err = c.GetTable("testdb", "notable")
-	if err != ErrTableNotFound {
+	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestListTables(t *testing.T) {
 	c := NewEmptyCatalog()
 
 	_, err := c.ListTables("nodb")
-	if err != ErrDatabaseNotFound {
+	if !errors.Is(err, ErrDatabaseNotFound) {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
@@ -370,7 +370,7 @@ func TestResolveColumn_NotFound(t *testing.T) {
 	c.ApplyCreateTable(testTable())
 
 	_, err := c.ResolveColumn("testdb", "users", "nonexistent")
-	if err != ErrColumnNotFound {
+	if !errors.Is(err, ErrColumnNotFound) {
 		t.Errorf("expected ErrColumnNotFound, got %v", err)
 	}
 }
@@ -386,7 +386,7 @@ func TestResolveColumn_DroppedColumn(t *testing.T) {
 	c.ApplyCreateTable(meta)
 
 	_, err := c.ResolveColumn("testdb", "users", "name")
-	if err != ErrColumnNotFound {
+	if !errors.Is(err, ErrColumnNotFound) {
 		t.Errorf("expected ErrColumnNotFound for dropped column, got %v", err)
 	}
 }
@@ -396,13 +396,13 @@ func TestResolveColumn_DroppedColumn(t *testing.T) {
 func TestResolveColumn_NoTable(t *testing.T) {
 	c := NewEmptyCatalog()
 	_, err := c.ResolveColumn("nodb", "notable", "nocol")
-	if err != ErrDatabaseNotFound {
+	if !errors.Is(err, ErrDatabaseNotFound) {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
 	c.ApplyCreateDatabase(testDB())
 	_, err = c.ResolveColumn("testdb", "notable", "nocol")
-	if err != ErrTableNotFound {
+	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
@@ -476,13 +476,13 @@ func TestPKColumnTypes_CompositePK(t *testing.T) {
 func TestPKColumnTypes_NotFound(t *testing.T) {
 	c := NewEmptyCatalog()
 	_, err := c.PKColumnTypes("nodb", "notable")
-	if err != ErrDatabaseNotFound {
+	if !errors.Is(err, ErrDatabaseNotFound) {
 		t.Errorf("expected ErrDatabaseNotFound, got %v", err)
 	}
 
 	c.ApplyCreateDatabase(testDB())
 	_, err = c.PKColumnTypes("testdb", "notable")
-	if err != ErrTableNotFound {
+	if !errors.Is(err, ErrTableNotFound) {
 		t.Errorf("expected ErrTableNotFound, got %v", err)
 	}
 }
@@ -492,13 +492,13 @@ func TestPKColumnTypes_NotFound(t *testing.T) {
 func TestPKColumnTypes_Dropped(t *testing.T) {
 	c := NewEmptyCatalog()
 	c.ApplyCreateDatabase(testDB())
-	
+
 	meta := testTable()
 	meta.Columns[0].Dropped = true // Drop the 'id' column which is the PK
 	c.ApplyCreateTable(meta)
 
 	_, err := c.PKColumnTypes("testdb", "users")
-	if err != ErrColumnNotFound {
+	if !errors.Is(err, ErrColumnNotFound) {
 		t.Errorf("expected ErrColumnNotFound, got %v", err)
 	}
 }
