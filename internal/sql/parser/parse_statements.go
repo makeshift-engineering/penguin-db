@@ -12,18 +12,17 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
-// Grammar Rule: Statement = CreateStatement
-//
-//	| DropStatement
-//	| AlterTableStatement
-//	| UseDatabaseStatement
-//	| SelectStatement
-//	| InsertStatement
-//	| UpdateStatement
-//	| DeleteStatement
-//
 // parseStatement inspects the current token and dispatches to the
 // appropriate statement-level parse function.
+//
+//	Statement = CreateStatement
+//					| DropStatement
+//					| AlterTableStatement
+//					| UseDatabaseStatement
+//					| SelectStatement
+//					| InsertStatement
+//					| UpdateStatement
+//					| DeleteStatement
 func (p *Parser) parseStatement() (ast.Statement, error) {
 	switch p.current.Type {
 	case utils.TOKEN_CREATE:
@@ -52,8 +51,9 @@ func (p *Parser) parseStatement() (ast.Statement, error) {
 	}
 }
 
-// Grammar Rule: CreateStatement = 'CREATE' ( 'DATABASE' CreateDatabaseStmt | 'TABLE' CreateTableStmt )
 // parseCreateStatement peeks at the token following CREATE and dispatches.
+//
+//	CreateStatement = 'CREATE' ( 'DATABASE' CreateDatabaseStmt | 'TABLE' CreateTableStmt )
 func (p *Parser) parseCreateStatement() (ast.Statement, error) {
 	switch p.tokens.Peek().Type {
 	case utils.TOKEN_DATABASE:
@@ -71,8 +71,9 @@ func (p *Parser) parseCreateStatement() (ast.Statement, error) {
 	}
 }
 
-// Grammar Rule: DropStatement = 'DROP' ( 'DATABASE' DropDatabaseStmt | 'TABLE' DropTableStmt )
 // parseDropStatement peeks at the token following DROP and dispatches.
+//
+//	DropStatement = 'DROP' ( 'DATABASE' DropDatabaseStmt | 'TABLE' DropTableStmt )
 func (p *Parser) parseDropStatement() (ast.Statement, error) {
 	switch p.tokens.Peek().Type {
 	case utils.TOKEN_DATABASE:
@@ -90,8 +91,9 @@ func (p *Parser) parseDropStatement() (ast.Statement, error) {
 	}
 }
 
-// Grammar Rule: CreateDatabaseStmt = 'CREATE' 'DATABASE' [ 'IF' 'NOT' 'EXISTS' ] Identifier
 // parseCreateDatabaseStatement handles: CREATE DATABASE [IF NOT EXISTS] Identifier
+//
+//	CreateDatabaseStmt = 'CREATE' 'DATABASE' [ 'IF' 'NOT' 'EXISTS' ] Identifier
 func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_CREATE); err != nil {
@@ -118,8 +120,9 @@ func (p *Parser) parseCreateDatabaseStatement() (*ast.CreateDatabaseStmt, error)
 	}, nil
 }
 
-// Grammar Rule: UseDatabaseStmt = 'USE' Identifier
 // parseUseDatabaseStatement handles: USE Identifier
+//
+//	UseDatabaseStmt = 'USE' Identifier
 func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_USE); err != nil {
@@ -137,8 +140,9 @@ func (p *Parser) parseUseDatabaseStatement() (*ast.UseDatabaseStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: DropDatabaseStmt = 'DROP' 'DATABASE' [ 'IF' 'EXISTS' ] Identifier
 // parseDropDatabaseStatement handles: DROP DATABASE [IF EXISTS] Identifier
+//
+//	DropDatabaseStmt = 'DROP' 'DATABASE' [ 'IF' 'EXISTS' ] Identifier
 func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_DROP); err != nil {
@@ -165,8 +169,9 @@ func (p *Parser) parseDropDatabaseStatement() (*ast.DropDatabaseStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: CreateTableStmt = 'CREATE' 'TABLE' [ 'IF' 'NOT' 'EXISTS' ] QualifiedIdentifier '(' ColumnDefinitions ')'
 // parseCreateTableStatement handles: CREATE TABLE [IF NOT EXISTS] QualifiedIdentifier '(' ColumnDefinition (',' ColumnDefinition)* ')'
+//
+//	CreateTableStmt = 'CREATE' 'TABLE' [ 'IF' 'NOT' 'EXISTS' ] QualifiedIdentifier '(' ColumnDefinitions ')'
 func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_CREATE); err != nil {
@@ -207,8 +212,9 @@ func (p *Parser) parseCreateTableStatement() (*ast.CreateTableStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: AlterTableStmt = 'ALTER' 'TABLE' QualifiedIdentifier AlterAction
 // parseAlterTableStatement handles: ALTER TABLE QualifiedIdentifier AlterAction
+//
+//	AlterTableStmt = 'ALTER' 'TABLE' QualifiedIdentifier AlterAction
 func (p *Parser) parseAlterTableStatement() (*ast.AlterTableStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_ALTER); err != nil {
@@ -236,8 +242,9 @@ func (p *Parser) parseAlterTableStatement() (*ast.AlterTableStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: DropTableStmt = 'DROP' 'TABLE' [ 'IF' 'EXISTS' ] QualifiedIdentifier
 // parseDropTableStatement handles: DROP TABLE [IF EXISTS] QualifiedIdentifier
+//
+//	DropTableStmt = 'DROP' 'TABLE' [ 'IF' 'EXISTS' ] QualifiedIdentifier
 func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_DROP); err != nil {
@@ -264,8 +271,9 @@ func (p *Parser) parseDropTableStatement() (*ast.DropTableStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: IfNotExists = [ 'IF' 'NOT' 'EXISTS' ]
 // parseIfNotExists consumes [IF NOT EXISTS] and returns the flag.
+//
+//	IfNotExists = [ 'IF' 'NOT' 'EXISTS' ]
 func (p *Parser) parseIfNotExists() (bool, error) {
 	if !p.check(utils.TOKEN_IF) {
 		return false, nil
@@ -280,8 +288,9 @@ func (p *Parser) parseIfNotExists() (bool, error) {
 	return true, nil
 }
 
-// Grammar Rule: IfExists = [ 'IF' 'EXISTS' ]
 // parseIfExists consumes [IF EXISTS] and returns the flag.
+//
+//	IfExists = [ 'IF' 'EXISTS' ]
 func (p *Parser) parseIfExists() (bool, error) {
 	if !p.check(utils.TOKEN_IF) {
 		return false, nil
@@ -293,8 +302,9 @@ func (p *Parser) parseIfExists() (bool, error) {
 	return true, nil
 }
 
-// Grammar Rule: InsertStmt = 'INSERT' 'INTO' QualifiedIdentifier [ '(' IdentifierList ')' ] ( 'VALUES' ValueRowList | SelectStatement )
 // parseInsertStatement handles INSERT INTO statement.
+//
+//	InsertStmt = 'INSERT' 'INTO' QualifiedIdentifier [ '(' IdentifierList ')' ] ( 'VALUES' ValueRowList | SelectStatement )
 func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_INSERT); err != nil {
@@ -382,8 +392,9 @@ func (p *Parser) parseInsertStatement() (*ast.InsertStmt, error) {
 	}
 }
 
-// Grammar Rule: ValueRow = '(' Expression ( ',' Expression )* ')'
 // parseValueRow parses one row of INSERT VALUES.
+//
+//	ValueRow = '(' Expression ( ',' Expression )* ')'
 func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
 	if _, err := p.expect(utils.TOKEN_LPAREN); err != nil {
 		return nil, err
@@ -414,8 +425,9 @@ func (p *Parser) parseValueRow() ([]*ast.SelectExpression, error) {
 	return vals, nil
 }
 
-// Grammar Rule: UpdateStmt = 'UPDATE' QualifiedIdentifier 'SET' SetItemList [ WhereClause ]
 // parseUpdateStatement handles UPDATE statement.
+//
+//	UpdateStmt = 'UPDATE' QualifiedIdentifier 'SET' SetItemList [ WhereClause ]
 func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_UPDATE); err != nil {
@@ -461,8 +473,9 @@ func (p *Parser) parseUpdateStatement() (*ast.UpdateStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: DeleteStmt = 'DELETE' 'FROM' QualifiedIdentifier [ WhereClause ]
 // parseDeleteStatement handles DELETE FROM statement.
+//
+//	DeleteStmt = 'DELETE' 'FROM' QualifiedIdentifier [ WhereClause ]
 func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_DELETE); err != nil {
@@ -494,16 +507,15 @@ func (p *Parser) parseDeleteStatement() (*ast.DeleteStmt, error) {
 	}, nil
 }
 
-// Grammar Rule: SelectStmt = 'SELECT' [ 'DISTINCT' | 'ALL' ] SelectList
+// parseSelectStatement handles the full SELECT syntax.
 //
+//	SelectStmt = 'SELECT' [ 'DISTINCT' | 'ALL' ] SelectList
 //	[ 'FROM' TableReferences ]
 //	[ WhereClause ]
 //	[ GroupByClause ]
 //	[ HavingClause ]
 //	[ OrderByClause ]
 //	[ LimitClause ]
-//
-// parseSelectStatement handles the full SELECT syntax.
 func (p *Parser) parseSelectStatement() (*ast.SelectStmt, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_SELECT); err != nil {
