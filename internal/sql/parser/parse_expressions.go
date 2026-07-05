@@ -16,8 +16,9 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
-// Grammar Rule: Expression = Term ( ( '+' | '-' ) Term )*
 // parseExpression parses an additive expression (lowest precedence level).
+//
+//	Expression = Term ( ( '+' | '-' ) Term )*
 func (p *Parser) parseExpression() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -46,8 +47,9 @@ func (p *Parser) parseExpression() (ast.Expression, error) {
 	return left, nil
 }
 
-// Grammar Rule: Term = Factor ( ( '*' | '/' | '%' ) Factor )*
 // parseTerm parses a multiplicative expression.
+//
+//	Term = Factor ( ( '*' | '/' | '%' ) Factor )*
 func (p *Parser) parseTerm() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -76,8 +78,9 @@ func (p *Parser) parseTerm() (ast.Expression, error) {
 	return left, nil
 }
 
-// Grammar Rule: Factor = Literal | QualifiedIdentifier | FunctionCall | '(' Expression ')' | ( '+' | '-' ) Factor
 // parseFactor parses the primary level of an expression.
+//
+//	Factor = Literal | QualifiedIdentifier | FunctionCall | '(' Expression ')' | ( '+' | '-' ) Factor
 func (p *Parser) parseFactor() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -117,8 +120,9 @@ func (p *Parser) parseFactor() (ast.Expression, error) {
 	}
 }
 
-// Grammar Rule: Literal = IntegerLiteral | FloatLiteral | StringLiteral | BooleanLiteral | 'NULL'
 // parseLiteral parses any scalar literal.
+//
+//	Literal = IntegerLiteral | FloatLiteral | StringLiteral | BooleanLiteral | 'NULL'
 func (p *Parser) parseLiteral() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -157,8 +161,9 @@ func (p *Parser) parseLiteral() (ast.Expression, error) {
 	}
 }
 
-// Grammar Rule: NumericLiteral = IntegerLiteral | FloatLiteral
 // parseNumericLiteral is a restricted variant of parseLiteral that only accepts TOKEN_INTEGER or TOKEN_FLOAT.
+//
+//	NumericLiteral = IntegerLiteral | FloatLiteral
 func (p *Parser) parseNumericLiteral() (ast.Expression, error) {
 	start := p.currentStart()
 
@@ -183,8 +188,9 @@ func (p *Parser) parseNumericLiteral() (ast.Expression, error) {
 	}
 }
 
-// Grammar Rule: FunctionCall = Identifier '(' [ 'DISTINCT' ] '*' | [ Expression ( ',' Expression )* ] ')'
 // parseFunctionCall parses a SQL function invocation.
+//
+//	FunctionCall = Identifier '(' [ 'DISTINCT' ] '*' | [ Expression ( ',' Expression )* ] ')'
 func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 	start := p.currentStart()
 
@@ -237,8 +243,9 @@ func (p *Parser) parseFunctionCall() (*ast.FunctionCall, error) {
 	return fc, nil
 }
 
-// Grammar Rule: IntegerLiteralValue = Integer
 // parseIntegerLiteralValue expects and consumes a TOKEN_INTEGER, converts its literal to int.
+//
+//	IntegerLiteralValue = Integer
 func (p *Parser) parseIntegerLiteralValue() (int, error) {
 	tok, err := p.expect(utils.TOKEN_INTEGER)
 	if err != nil {
@@ -255,8 +262,9 @@ func (p *Parser) parseIntegerLiteralValue() (int, error) {
 	return n, nil
 }
 
-// Grammar Rule: ExpressionFromFactor = Factor (TermTail | ExprTail)
 // parseExpressionFromFactor continues parsing an Expression given that the Factor-level primary has already been assembled.
+//
+//	ExpressionFromFactor = Factor (TermTail | ExprTail)
 func (p *Parser) parseExpressionFromFactor(start diagnostic.Pos, factor ast.Expression) (ast.Expression, error) {
 	left := factor
 	for p.check(utils.TOKEN_STAR) || p.check(utils.TOKEN_SLASH) || p.check(utils.TOKEN_PERCENT) {
@@ -282,8 +290,9 @@ func (p *Parser) parseExpressionFromFactor(start diagnostic.Pos, factor ast.Expr
 	return left, nil
 }
 
-// Grammar Rule: QualifiedIdentifier = Identifier [ '.' Identifier ]
 // parseQualifiedIdentifier parses a simple or dot-qualified name.
+//
+//	QualifiedIdentifier = Identifier [ '.' Identifier ]
 func (p *Parser) parseQualifiedIdentifier() (*ast.Identifier, error) {
 	start := p.currentStart()
 
@@ -312,9 +321,10 @@ func (p *Parser) parseQualifiedIdentifier() (*ast.Identifier, error) {
 	}, nil
 }
 
-// Grammar Rule: SelectExpression = [ 'NOT' ] OrCondition | Expression [ PredicateTail | OrConditionTail ]
 // parseSelectExpression parses one column-list or function-argument item that
 // may be either an arithmetic Expression or a boolean Condition.
+//
+//	SelectExpression = [ 'NOT' ] OrCondition | Expression [ PredicateTail | OrConditionTail ]
 func (p *Parser) parseSelectExpression() (*ast.SelectExpression, error) {
 	start := p.currentStart()
 
@@ -337,8 +347,9 @@ func (p *Parser) parseSelectExpression() (*ast.SelectExpression, error) {
 	return p.selectExpressionFromExpression(start, expr)
 }
 
-// Grammar Rule: selectExpressionFromExpression = Expression [ PredicateTail | OrConditionTail ]
 // selectExpressionFromExpression converts an already-parsed arithmetic Expression into a *ast.SelectExpression.
+//
+//	selectExpressionFromExpression = Expression [ PredicateTail | OrConditionTail ]
 func (p *Parser) selectExpressionFromExpression(start diagnostic.Pos, expr ast.Expression) (*ast.SelectExpression, error) {
 	if p.isPredicateTailStart() {
 		cond, err := p.parsePredicateTail(start, expr)

@@ -14,9 +14,10 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
-// Grammar Rule: TableReferences = TableReference ( ',' TableReference )*
 // parseTableReferences parses a comma-separated list of TableReference nodes.
 // Called after the FROM keyword has been consumed by parseSelectStatement.
+//
+//	TableReferences = TableReference ( ',' TableReference )*
 func (p *Parser) parseTableReferences() ([]*ast.TableRef, error) {
 	ref, err := p.parseTableReference()
 	if err != nil {
@@ -34,8 +35,9 @@ func (p *Parser) parseTableReferences() ([]*ast.TableRef, error) {
 	return refs, nil
 }
 
-// Grammar Rule: TableReference = TablePrimary JoinClause* | '(' TableReference ')' JoinClause*
 // parseTableReference parses one table reference.
+//
+//	TableReference = TablePrimary JoinClause* | '(' TableReference ')' JoinClause*
 func (p *Parser) parseTableReference() (*ast.TableRef, error) {
 	start := p.currentStart()
 
@@ -73,8 +75,9 @@ func (p *Parser) parseTableReference() (*ast.TableRef, error) {
 	return ref, nil
 }
 
-// Grammar Rule: TablePrimary = QualifiedIdentifier [ [ 'AS' ] Identifier ]
 // parseTablePrimary parses a named table with an optional alias.
+//
+//	TablePrimary = QualifiedIdentifier [ [ 'AS' ] Identifier ]
 func (p *Parser) parseTablePrimary() (*ast.TablePrimary, error) {
 	start := p.currentStart()
 
@@ -103,8 +106,9 @@ func (p *Parser) parseTablePrimary() (*ast.TablePrimary, error) {
 	}, nil
 }
 
-// Grammar Rule: isJoinStart = 'CROSS' | 'INNER' | 'LEFT' | 'RIGHT' | 'FULL' | 'JOIN'
 // isJoinStart reports whether the current token begins a JoinClause.
+//
+//	isJoinStart = 'CROSS' | 'INNER' | 'LEFT' | 'RIGHT' | 'FULL' | 'JOIN'
 func (p *Parser) isJoinStart() bool {
 	switch p.current.Type {
 	case utils.TOKEN_JOIN,
@@ -118,8 +122,9 @@ func (p *Parser) isJoinStart() bool {
 	return false
 }
 
-// Grammar Rule: JoinClause = [ 'CROSS' | 'INNER' | 'LEFT' [ 'OUTER' ] | 'RIGHT' [ 'OUTER' ] | 'FULL' [ 'OUTER' ] ] 'JOIN' TablePrimary [ 'ON' Condition ]
 // parseJoinClause parses one JOIN operation.
+//
+//	JoinClause = [ 'CROSS' | 'INNER' | 'LEFT' [ 'OUTER' ] | 'RIGHT' [ 'OUTER' ] | 'FULL' [ 'OUTER' ] ] 'JOIN' TablePrimary [ 'ON' Condition ]
 func (p *Parser) parseJoinClause() (*ast.JoinClause, error) {
 	start := p.currentStart()
 
@@ -189,9 +194,10 @@ func (p *Parser) parseJoinClause() (*ast.JoinClause, error) {
 	}, nil
 }
 
-// Grammar Rule: WhereClause = 'WHERE' Condition
 // parseWhereClause handles: WHERE Condition
 // Precondition: current == TOKEN_WHERE.
+//
+//	WhereClause = 'WHERE' Condition
 func (p *Parser) parseWhereClause() (*ast.WhereClause, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_WHERE); err != nil {
@@ -206,9 +212,10 @@ func (p *Parser) parseWhereClause() (*ast.WhereClause, error) {
 	return &ast.WhereClause{ClauseBase: p.clauseBase(start), Cond: cond}, nil
 }
 
-// Grammar Rule: GroupByClause = 'GROUP' 'BY' QualifiedIdentifier ( ',' QualifiedIdentifier )*
 // parseGroupByClause handles: GROUP BY QualifiedIdentifier (',' QualifiedIdentifier)*
 // Precondition: current == TOKEN_GROUP.
+//
+//	GroupByClause = 'GROUP' 'BY' QualifiedIdentifier ( ',' QualifiedIdentifier )*
 func (p *Parser) parseGroupByClause() (*ast.GroupByClause, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_GROUP); err != nil {
@@ -236,9 +243,10 @@ func (p *Parser) parseGroupByClause() (*ast.GroupByClause, error) {
 	return &ast.GroupByClause{ClauseBase: p.clauseBase(start), Columns: cols}, nil
 }
 
-// Grammar Rule: HavingClause = 'HAVING' Condition
 // parseHavingClause handles: HAVING Condition
 // Precondition: current == TOKEN_HAVING.
+//
+//	HavingClause = 'HAVING' Condition
 func (p *Parser) parseHavingClause() (*ast.HavingClause, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_HAVING); err != nil {
@@ -253,9 +261,10 @@ func (p *Parser) parseHavingClause() (*ast.HavingClause, error) {
 	return &ast.HavingClause{ClauseBase: p.clauseBase(start), Cond: cond}, nil
 }
 
-// Grammar Rule: OrderByClause = 'ORDER' 'BY' OrderByItem ( ',' OrderByItem )*
 // parseOrderByClause handles: ORDER BY OrderByItem (',' OrderByItem)*
 // Precondition: current == TOKEN_ORDER.
+//
+//	OrderByClause = 'ORDER' 'BY' OrderByItem ( ',' OrderByItem )*
 func (p *Parser) parseOrderByClause() (*ast.OrderByClause, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_ORDER); err != nil {
@@ -283,10 +292,11 @@ func (p *Parser) parseOrderByClause() (*ast.OrderByClause, error) {
 	return &ast.OrderByClause{ClauseBase: p.clauseBase(start), Items: items}, nil
 }
 
-// Grammar Rule: OrderByItem = Expression [ 'ASC' | 'DESC' ]
 // parseOrderByItem parses one ordering term: Expression ['ASC' | 'DESC']
 // The grammar accepts any Expression (not just an identifier), so ORDER BY 1
 // (positional) and ORDER BY a + b (computed) are both valid.
+//
+//	OrderByItem = Expression [ 'ASC' | 'DESC' ]
 func (p *Parser) parseOrderByItem() (*ast.OrderByItem, error) {
 	start := p.currentStart()
 
@@ -310,9 +320,10 @@ func (p *Parser) parseOrderByItem() (*ast.OrderByItem, error) {
 	}, nil
 }
 
-// Grammar Rule: LimitClause = 'LIMIT' Integer [ 'OFFSET' Integer ]
 // parseLimitClause handles: LIMIT Integer ['OFFSET' Integer]
 // Precondition: current == TOKEN_LIMIT.
+//
+//	LimitClause = 'LIMIT' Integer [ 'OFFSET' Integer ]
 func (p *Parser) parseLimitClause() (*ast.LimitClause, error) {
 	start := p.currentStart()
 	if _, err := p.expect(utils.TOKEN_LIMIT); err != nil {
@@ -340,9 +351,9 @@ func (p *Parser) parseLimitClause() (*ast.LimitClause, error) {
 	}, nil
 }
 
-// Grammar Rule: SetItem = QualifiedIdentifier '=' Expression
-// parseSetItem parses one assignment in an UPDATE SET clause:
-// SetItem = QualifiedIdentifier '=' Expression
+// parseSetItem parses one assignment in an UPDATE SET clause.
+//
+//	SetItem = QualifiedIdentifier '=' Expression
 func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 	start := p.currentStart()
 
@@ -367,14 +378,13 @@ func (p *Parser) parseSetItem() (*ast.SetItem, error) {
 	}, nil
 }
 
-// Grammar Rule: AlterAction = 'ADD' [ 'COLUMN' ] ColumnDef
-//
-//	| 'MODIFY' [ 'COLUMN' ] ColumnDef
-//	| 'RENAME' 'TO' Identifier
-//	| 'RENAME' 'COLUMN' Identifier 'TO' Identifier
-//	| 'DROP' 'COLUMN' Identifier
-//
 // parseAlterAction handles the four ALTER TABLE action variants.
+//
+//	AlterAction = 'ADD' [ 'COLUMN' ] ColumnDef
+//					| 'MODIFY' [ 'COLUMN' ] ColumnDef
+//					| 'RENAME' 'TO' Identifier
+//					| 'RENAME' 'COLUMN' Identifier 'TO' Identifier
+//					| 'DROP' 'COLUMN' Identifier
 func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 	start := p.currentStart()
 
@@ -468,9 +478,10 @@ func (p *Parser) parseAlterAction() (*ast.AlterAction, error) {
 	}
 }
 
-// Grammar Rule: ColumnDefinitions = ColumnDef ( ',' ColumnDef )*
 // parseColumnDefinitions parses a comma-separated list of column definitions.
 // Called after the opening '(' of a CREATE TABLE statement.
+//
+//	ColumnDefinitions = ColumnDef ( ',' ColumnDef )*
 func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 	col, err := p.parseColumnDefinition()
 	if err != nil {
@@ -488,8 +499,9 @@ func (p *Parser) parseColumnDefinitions() ([]*ast.ColumnDef, error) {
 	return cols, nil
 }
 
-// Grammar Rule: ColumnDef = Identifier DataType ColumnConstraint*
 // parseColumnDefinition parses a single column definition.
+//
+//	ColumnDef = Identifier DataType ColumnConstraint*
 func (p *Parser) parseColumnDefinition() (*ast.ColumnDef, error) {
 	start := p.currentStart()
 
@@ -516,9 +528,10 @@ func (p *Parser) parseColumnDefinition() (*ast.ColumnDef, error) {
 	}, nil
 }
 
-// Grammar Rule: ColumnConstraints = ColumnConstraint*
 // parseColumnConstraints collects zero or more column-level constraints.
 // Stops as soon as the current token is not a constraint-starting keyword.
+//
+//	ColumnConstraints = ColumnConstraint*
 func (p *Parser) parseColumnConstraints() ([]ast.Clause, error) {
 	var constraints []ast.Clause
 	for p.isConstraintStart() {
@@ -531,8 +544,9 @@ func (p *Parser) parseColumnConstraints() ([]ast.Clause, error) {
 	return constraints, nil
 }
 
-// Grammar Rule: isConstraintStart = 'PRIMARY' | 'UNIQUE' | 'NOT' | 'NULL' | 'DEFAULT' | 'REFERENCES'
 // isConstraintStart reports whether the current token can begin a column constraint.
+//
+//	isConstraintStart = 'PRIMARY' | 'UNIQUE' | 'NOT' | 'NULL' | 'DEFAULT' | 'REFERENCES'
 func (p *Parser) isConstraintStart() bool {
 	switch p.current.Type {
 	case utils.TOKEN_PRIMARY,
@@ -546,15 +560,14 @@ func (p *Parser) isConstraintStart() bool {
 	return false
 }
 
-// Grammar Rule: ColumnConstraint = 'PRIMARY' 'KEY'
-//
-//	| 'UNIQUE'
-//	| 'NOT' 'NULL'
-//	| 'NULL'
-//	| 'DEFAULT' SignedLiteral
-//	| 'REFERENCES' Identifier '(' Identifier ')'
-//
 // parseColumnConstraint parses a single column constraint.
+//
+//	ColumnConstraint = 'PRIMARY' 'KEY'
+//						| 'UNIQUE'
+//						| 'NOT' 'NULL'
+//						| 'NULL'
+//						| 'DEFAULT' SignedLiteral
+//						| 'REFERENCES' Identifier '(' Identifier ')'
 func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 	start := p.currentStart()
 
@@ -621,12 +634,11 @@ func (p *Parser) parseColumnConstraint() (ast.Clause, error) {
 	}
 }
 
-// Grammar Rule: DataType = 'INT' | 'BIGINT' | 'BOOLEAN' | 'TEXT' | 'TIMESTAMP' | 'FLOAT' | 'DOUBLE'
-//
-//	| 'DECIMAL' [ '(' Integer [ ',' Integer ] ')' ]
-//	| 'VARCHAR' '(' Integer ')'
-//
 // parseDataType parses a SQL data type.
+//
+//	DataType = 'INT' | 'BIGINT' | 'BOOLEAN' | 'TEXT' | 'TIMESTAMP' | 'FLOAT' | 'DOUBLE'
+//				| 'DECIMAL' [ '(' Integer [ ',' Integer ] ')' ]
+//				| 'VARCHAR' '(' Integer ')'
 func (p *Parser) parseDataType() (*ast.DataType, error) {
 	start := p.currentStart()
 
@@ -714,9 +726,10 @@ func (p *Parser) parseDataType() (*ast.DataType, error) {
 	}
 }
 
-// Grammar Rule: SignedLiteral = [ '+' | '-' ] Literal
 // parseSignedLiteral parses an optional sign followed by a literal value.
 // Used for DEFAULT constraint values.
+//
+//	SignedLiteral = [ '+' | '-' ] Literal
 func (p *Parser) parseSignedLiteral() (*ast.SignedLiteral, error) {
 	start := p.currentStart()
 	negative := false
@@ -750,8 +763,9 @@ func (p *Parser) parseSignedLiteral() (*ast.SignedLiteral, error) {
 	}, nil
 }
 
-// Grammar Rule: SelectList = SelectColumn ( ',' SelectColumn )*
 // parseSelectList parses a comma-separated list of SelectColumns.
+//
+//	SelectList = SelectColumn ( ',' SelectColumn )*
 func (p *Parser) parseSelectList() ([]*ast.SelectColumn, error) {
 	col, err := p.parseSelectColumn()
 	if err != nil {
@@ -769,13 +783,12 @@ func (p *Parser) parseSelectList() ([]*ast.SelectColumn, error) {
 	return cols, nil
 }
 
-// Grammar Rule: SelectColumn = '*'
-//
-//	| Identifier '.' '*'
-//	| Identifier '.' Identifier '.' '*'
-//	| SelectExpression [ [ 'AS' ] Identifier ]
-//
 // parseSelectColumn parses one item from the SELECT column list.
+//
+//	SelectColumn = '*'
+//					| Identifier '.' '*'
+//					| Identifier '.' Identifier '.' '*'
+//					| SelectExpression [ [ 'AS' ] Identifier ]
 func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 	start := p.currentStart()
 
@@ -861,9 +874,10 @@ func (p *Parser) parseSelectColumn() (*ast.SelectColumn, error) {
 	}, nil
 }
 
-// Grammar Rule: SelectColumnFromPrimary = Identifier (TermTail | ExprTail) [ [ 'AS' ] Identifier ]
 // parseSelectColumnFromPrimary finishes a SelectColumn when the caller has
 // already consumed and reconstructed `primary` as the Factor-level expression.
+//
+//	SelectColumnFromPrimary = Identifier (TermTail | ExprTail) [ [ 'AS' ] Identifier ]
 func (p *Parser) parseSelectColumnFromPrimary(start diagnostic.Pos, primary *ast.Identifier) (*ast.SelectColumn, error) {
 	// Continue expression parsing from the already-consumed Factor.
 	expr, err := p.parseExpressionFromFactor(start, primary)
@@ -889,9 +903,10 @@ func (p *Parser) parseSelectColumnFromPrimary(start diagnostic.Pos, primary *ast
 	}, nil
 }
 
-// Grammar Rule: OptionalAlias = [ 'AS' ] Identifier
 // parseOptionalAlias consumes ['AS'] Identifier if present and returns the alias
 // string. Returns "" if no alias follows.
+//
+//	OptionalAlias = [ 'AS' ] Identifier
 func (p *Parser) parseOptionalAlias() (string, error) {
 	if p.match(utils.TOKEN_AS) {
 		return p.expectIdent()
