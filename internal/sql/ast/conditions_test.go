@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 var (
@@ -20,6 +20,8 @@ var (
 	_ ast.Condition = (*ast.ExprCondition)(nil)
 )
 
+// TestCondition_TypeSwitchCoverage verifies that every concrete Condition
+// type is handled in a type-switch, guarding against missing cases.
 func TestCondition_TypeSwitchCoverage(t *testing.T) {
 	conditions := []ast.Condition{
 		&ast.BinaryCondition{},
@@ -50,47 +52,270 @@ func TestCondition_TypeSwitchCoverage(t *testing.T) {
 	}
 }
 
+// TestCondition_Validation exercises the Validate method on all Condition
+// node types, covering valid inputs, nil operands, invalid operators,
+// recursive validation propagation, and negated predicate variants.
 func TestCondition_Validation(t *testing.T) {
 	tests := []struct {
 		name    string
 		node    ast.Node
 		wantErr error
 	}{
+		// BinaryCondition
 		{
-			name: "BinaryCondition valid",
+			name: "BinaryCondition valid AND",
 			node: &ast.BinaryCondition{
 				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
-				Op:    lexer.TOKEN_AND,
+				Op:    utils.TOKEN_AND,
 				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
 			},
 			wantErr: nil,
+		},
+		{
+			name: "BinaryCondition valid OR",
+			node: &ast.BinaryCondition{
+				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+				Op:    utils.TOKEN_OR,
+				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "BinaryCondition nil left",
+			node: &ast.BinaryCondition{
+				Op:    utils.TOKEN_AND,
+				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: ast.ErrNilCondition,
+		},
+		{
+			name: "BinaryCondition nil right",
+			node: &ast.BinaryCondition{
+				Left: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+				Op:   utils.TOKEN_AND,
+			},
+			wantErr: ast.ErrNilCondition,
 		},
 		{
 			name: "BinaryCondition invalid operator",
 			node: &ast.BinaryCondition{
 				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
-				Op:    lexer.TOKEN_PLUS,
+				Op:    utils.TOKEN_PLUS,
 				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "2"}},
 			},
 			wantErr: ast.ErrInvalidConditionOperator,
 		},
 		{
-			name: "ComparisonPredicate valid",
+			name: "BinaryCondition recursive left error",
+			node: &ast.BinaryCondition{
+				Left:  &ast.ExprCondition{}, // nil Expr
+				Op:    utils.TOKEN_AND,
+				Right: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "BinaryCondition recursive right error",
+			node: &ast.BinaryCondition{
+				Left:  &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+				Op:    utils.TOKEN_AND,
+				Right: &ast.ExprCondition{}, // nil Expr
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		// NotCondition
+		{
+			name: "NotCondition valid",
+			node: &ast.NotCondition{
+				Operand: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "NotCondition nil operand",
+			node:    &ast.NotCondition{},
+			wantErr: ast.ErrNilCondition,
+		},
+		{
+			name: "NotCondition recursive error",
+			node: &ast.NotCondition{
+				Operand: &ast.ExprCondition{}, // nil Expr
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		// ComparisonPredicate
+		{
+			name: "ComparisonPredicate valid EQ",
 			node: &ast.ComparisonPredicate{
-				Left:  &ast.IntegerLiteral{Value: "1"},
-				Op:    lexer.TOKEN_EQ,
+				Left: &ast.IntegerLiteral{Value: "1"}, Op: utils.TOKEN_EQ,
 				Right: &ast.IntegerLiteral{Value: "1"},
 			},
 			wantErr: nil,
 		},
 		{
+			name: "ComparisonPredicate nil left",
+			node: &ast.ComparisonPredicate{
+				Op: utils.TOKEN_EQ, Right: &ast.IntegerLiteral{Value: "1"},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "ComparisonPredicate nil right",
+			node: &ast.ComparisonPredicate{
+				Left: &ast.IntegerLiteral{Value: "1"}, Op: utils.TOKEN_EQ,
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
 			name: "ComparisonPredicate invalid operator",
 			node: &ast.ComparisonPredicate{
-				Left:  &ast.IntegerLiteral{Value: "1"},
-				Op:    lexer.TOKEN_AND,
+				Left: &ast.IntegerLiteral{Value: "1"}, Op: utils.TOKEN_AND,
 				Right: &ast.IntegerLiteral{Value: "1"},
 			},
 			wantErr: ast.ErrInvalidComparisonOperator,
+		},
+		{
+			name: "ComparisonPredicate recursive left error",
+			node: &ast.ComparisonPredicate{
+				Left: &ast.Identifier{Name: ""}, Op: utils.TOKEN_EQ,
+				Right: &ast.IntegerLiteral{Value: "1"},
+			},
+			wantErr: ast.ErrEmptyIdentifierName,
+		},
+		// LikePredicate
+		{
+			name: "LikePredicate valid",
+			node: &ast.LikePredicate{
+				Left:    &ast.Identifier{Name: "name"},
+				Pattern: &ast.StringLiteral{Value: "foo%"},
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "LikePredicate nil left",
+			node:    &ast.LikePredicate{Pattern: &ast.StringLiteral{Value: "foo%"}},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name:    "LikePredicate nil pattern",
+			node:    &ast.LikePredicate{Left: &ast.Identifier{Name: "n"}},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "LikePredicate recursive left error",
+			node: &ast.LikePredicate{
+				Left:    &ast.Identifier{Name: ""},
+				Pattern: &ast.StringLiteral{Value: "x"},
+			},
+			wantErr: ast.ErrEmptyIdentifierName,
+		},
+		// IsNullPredicate
+		{
+			name:    "IsNullPredicate valid",
+			node:    &ast.IsNullPredicate{Expr: &ast.Identifier{Name: "x"}},
+			wantErr: nil,
+		},
+		{
+			name:    "IsNullPredicate negated valid",
+			node:    &ast.IsNullPredicate{Expr: &ast.Identifier{Name: "x"}, Negated: true},
+			wantErr: nil,
+		},
+		{
+			name:    "IsNullPredicate nil expr",
+			node:    &ast.IsNullPredicate{},
+			wantErr: ast.ErrNilExpression,
+		},
+		// InPredicate
+		{
+			name: "InPredicate valid",
+			node: &ast.InPredicate{
+				Expr:   &ast.Identifier{Name: "id"},
+				Values: []ast.Expression{&ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "InPredicate nil expr",
+			node: &ast.InPredicate{
+				Values: []ast.Expression{&ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "InPredicate nil value element",
+			node: &ast.InPredicate{
+				Expr:   &ast.Identifier{Name: "id"},
+				Values: []ast.Expression{nil},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "InPredicate recursive expr error",
+			node: &ast.InPredicate{
+				Expr:   &ast.Identifier{Name: ""},
+				Values: []ast.Expression{&ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: ast.ErrEmptyIdentifierName,
+		},
+		// BetweenPredicate
+		{
+			name: "BetweenPredicate valid",
+			node: &ast.BetweenPredicate{
+				Expr: &ast.Identifier{Name: "x"},
+				Low:  &ast.IntegerLiteral{Value: "1"},
+				High: &ast.IntegerLiteral{Value: "10"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "BetweenPredicate nil expr",
+			node: &ast.BetweenPredicate{
+				Low: &ast.IntegerLiteral{Value: "1"}, High: &ast.IntegerLiteral{Value: "10"},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "BetweenPredicate nil low",
+			node: &ast.BetweenPredicate{
+				Expr: &ast.Identifier{Name: "x"}, High: &ast.IntegerLiteral{Value: "10"},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name: "BetweenPredicate nil high",
+			node: &ast.BetweenPredicate{
+				Expr: &ast.Identifier{Name: "x"}, Low: &ast.IntegerLiteral{Value: "1"},
+			},
+			wantErr: ast.ErrNilExpression,
+		},
+		// ParenCondition
+		{
+			name: "ParenCondition valid",
+			node: &ast.ParenCondition{
+				Inner: &ast.ExprCondition{Expr: &ast.IntegerLiteral{Value: "1"}},
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "ParenCondition nil inner",
+			node:    &ast.ParenCondition{},
+			wantErr: ast.ErrNilCondition,
+		},
+		// ExprCondition
+		{
+			name:    "ExprCondition valid",
+			node:    &ast.ExprCondition{Expr: &ast.Identifier{Name: "active"}},
+			wantErr: nil,
+		},
+		{
+			name:    "ExprCondition nil expr",
+			node:    &ast.ExprCondition{},
+			wantErr: ast.ErrNilExpression,
+		},
+		{
+			name:    "ExprCondition recursive error",
+			node:    &ast.ExprCondition{Expr: &ast.Identifier{Name: ""}},
+			wantErr: ast.ErrEmptyIdentifierName,
 		},
 	}
 

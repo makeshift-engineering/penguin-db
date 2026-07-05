@@ -6,10 +6,102 @@ import (
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
+)
+
+type Token = utils.Token
+type TokenType = utils.TokenType
+
+//nolint:revive // We prefer ALL_CAPS for token constants
+const (
+	TOKEN_EOF        = utils.TOKEN_EOF
+	TOKEN_ILLEGAL    = utils.TOKEN_ILLEGAL
+	TOKEN_IDENT      = utils.TOKEN_IDENT
+	TOKEN_INTEGER    = utils.TOKEN_INTEGER
+	TOKEN_FLOAT      = utils.TOKEN_FLOAT
+	TOKEN_STRING     = utils.TOKEN_STRING
+	TOKEN_CREATE     = utils.TOKEN_CREATE
+	TOKEN_DATABASE   = utils.TOKEN_DATABASE
+	TOKEN_USE        = utils.TOKEN_USE
+	TOKEN_DROP       = utils.TOKEN_DROP
+	TOKEN_IF         = utils.TOKEN_IF
+	TOKEN_EXISTS     = utils.TOKEN_EXISTS
+	TOKEN_TABLE      = utils.TOKEN_TABLE
+	TOKEN_ALTER      = utils.TOKEN_ALTER
+	TOKEN_ADD        = utils.TOKEN_ADD
+	TOKEN_COLUMN     = utils.TOKEN_COLUMN
+	TOKEN_MODIFY     = utils.TOKEN_MODIFY
+	TOKEN_RENAME     = utils.TOKEN_RENAME
+	TOKEN_TO         = utils.TOKEN_TO
+	TOKEN_SELECT     = utils.TOKEN_SELECT
+	TOKEN_DISTINCT   = utils.TOKEN_DISTINCT
+	TOKEN_ALL        = utils.TOKEN_ALL
+	TOKEN_FROM       = utils.TOKEN_FROM
+	TOKEN_WHERE      = utils.TOKEN_WHERE
+	TOKEN_AS         = utils.TOKEN_AS
+	TOKEN_INSERT     = utils.TOKEN_INSERT
+	TOKEN_INTO       = utils.TOKEN_INTO
+	TOKEN_VALUES     = utils.TOKEN_VALUES
+	TOKEN_UPDATE     = utils.TOKEN_UPDATE
+	TOKEN_SET        = utils.TOKEN_SET
+	TOKEN_DELETE     = utils.TOKEN_DELETE
+	TOKEN_JOIN       = utils.TOKEN_JOIN
+	TOKEN_INNER      = utils.TOKEN_INNER
+	TOKEN_LEFT       = utils.TOKEN_LEFT
+	TOKEN_RIGHT      = utils.TOKEN_RIGHT
+	TOKEN_FULL       = utils.TOKEN_FULL
+	TOKEN_OUTER      = utils.TOKEN_OUTER
+	TOKEN_CROSS      = utils.TOKEN_CROSS
+	TOKEN_ON         = utils.TOKEN_ON
+	TOKEN_GROUP      = utils.TOKEN_GROUP
+	TOKEN_BY         = utils.TOKEN_BY
+	TOKEN_HAVING     = utils.TOKEN_HAVING
+	TOKEN_ORDER      = utils.TOKEN_ORDER
+	TOKEN_ASC        = utils.TOKEN_ASC
+	TOKEN_DESC       = utils.TOKEN_DESC
+	TOKEN_LIMIT      = utils.TOKEN_LIMIT
+	TOKEN_OFFSET     = utils.TOKEN_OFFSET
+	TOKEN_PRIMARY    = utils.TOKEN_PRIMARY
+	TOKEN_KEY        = utils.TOKEN_KEY
+	TOKEN_NOT        = utils.TOKEN_NOT
+	TOKEN_NULL       = utils.TOKEN_NULL
+	TOKEN_DEFAULT    = utils.TOKEN_DEFAULT
+	TOKEN_UNIQUE     = utils.TOKEN_UNIQUE
+	TOKEN_REFERENCES = utils.TOKEN_REFERENCES
+	TOKEN_AND        = utils.TOKEN_AND
+	TOKEN_OR         = utils.TOKEN_OR
+	TOKEN_TRUE       = utils.TOKEN_TRUE
+	TOKEN_FALSE      = utils.TOKEN_FALSE
+	TOKEN_LIKE       = utils.TOKEN_LIKE
+	TOKEN_IS         = utils.TOKEN_IS
+	TOKEN_IN         = utils.TOKEN_IN
+	TOKEN_BETWEEN    = utils.TOKEN_BETWEEN
+	TOKEN_INT        = utils.TOKEN_INT
+	TOKEN_BIGINT     = utils.TOKEN_BIGINT
+	TOKEN_VARCHAR    = utils.TOKEN_VARCHAR
+	TOKEN_BOOLEAN    = utils.TOKEN_BOOLEAN
+	TOKEN_TEXT       = utils.TOKEN_TEXT
+	TOKEN_TIMESTAMP  = utils.TOKEN_TIMESTAMP
+	TOKEN_EQ         = utils.TOKEN_EQ
+	TOKEN_NEQ        = utils.TOKEN_NEQ
+	TOKEN_LT         = utils.TOKEN_LT
+	TOKEN_GT         = utils.TOKEN_GT
+	TOKEN_LTE        = utils.TOKEN_LTE
+	TOKEN_GTE        = utils.TOKEN_GTE
+	TOKEN_PLUS       = utils.TOKEN_PLUS
+	TOKEN_MINUS      = utils.TOKEN_MINUS
+	TOKEN_STAR       = utils.TOKEN_STAR
+	TOKEN_SLASH      = utils.TOKEN_SLASH
+	TOKEN_PERCENT    = utils.TOKEN_PERCENT
+	TOKEN_LPAREN     = utils.TOKEN_LPAREN
+	TOKEN_RPAREN     = utils.TOKEN_RPAREN
+	TOKEN_COMMA      = utils.TOKEN_COMMA
+	TOKEN_DOT        = utils.TOKEN_DOT
+	TOKEN_SEMICOLON  = utils.TOKEN_SEMICOLON
 )
 
 // tok is a compact constructor for expected Token values in table-driven tests.
-func tok(typ TokenType, lit string, line, col int) Token {
+func tok(typ utils.TokenType, lit string, line, col int) utils.Token {
 	endLine := line
 	endCol := col
 
@@ -55,7 +147,7 @@ func collectAll(t *testing.T, input string) []Token {
 	l := NewLexer("test", input)
 	var tokens []Token
 	for {
-		token := l.NextToken()
+		token := l.nextToken()
 		tokens = append(tokens, token)
 		if token.Type == TOKEN_EOF {
 			break
@@ -93,7 +185,7 @@ func requireError(t *testing.T, input string, sentinel error) {
 	t.Helper()
 	l := NewLexer("test", input)
 	for {
-		token := l.NextToken()
+		token := l.nextToken()
 		if token.Type == TOKEN_EOF {
 			break
 		}
@@ -132,7 +224,7 @@ func TestNextToken_OnlyWhitespace(t *testing.T) {
 func TestNextToken_RepeatedEOF(t *testing.T) {
 	l := NewLexer("test", "")
 	for i := 0; i < 5; i++ {
-		token := l.NextToken()
+		token := l.nextToken()
 		if l.Diagnostics().HasErrors() {
 			t.Fatalf("iteration %d: unexpected error: %v", i, l.Diagnostics().Error())
 		}
@@ -232,7 +324,7 @@ func TestNextToken_ComparisonOperators(t *testing.T) {
 // TestNextToken_LoneBang_IsIllegal tests next token lone bang is illegal.
 func TestNextToken_LoneBang_IsIllegal(t *testing.T) {
 	l := NewLexer("test", "!")
-	token := l.NextToken()
+	token := l.nextToken()
 	if !l.Diagnostics().HasErrors() {
 		t.Fatal("expected error for lone '!'")
 	}
@@ -364,7 +456,7 @@ func TestNextToken_Strings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			l := NewLexer("test", tc.input)
-			token := l.NextToken()
+			token := l.nextToken()
 			if l.Diagnostics().HasErrors() {
 				t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 			}
@@ -634,7 +726,7 @@ func TestNextToken_IllegalCharacters(t *testing.T) {
 	for _, ch := range illegals {
 		t.Run(ch, func(t *testing.T) {
 			l := NewLexer("test", ch)
-			token := l.NextToken()
+			token := l.nextToken()
 			if !l.Diagnostics().HasErrors() {
 				t.Fatal("expected error for illegal character")
 			}
@@ -1277,7 +1369,7 @@ func TestNextToken_MultiLineString(t *testing.T) {
 	// Strings can span newlines.
 	input := "'line1\nline2'"
 	l := NewLexer("test", input)
-	token := l.NextToken()
+	token := l.nextToken()
 	if l.Diagnostics().HasErrors() {
 		t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 	}
@@ -1389,7 +1481,7 @@ func TestNextToken_ErrorRecovery(t *testing.T) {
 	// After hitting an illegal character, the lexer should still be able to
 	// produce subsequent tokens.
 	l := NewLexer("test", "@ SELECT")
-	token := l.NextToken()
+	token := l.nextToken()
 	if token.Type != TOKEN_ILLEGAL {
 		t.Fatalf("expected ILLEGAL token, got %v", token)
 	}
@@ -1397,7 +1489,7 @@ func TestNextToken_ErrorRecovery(t *testing.T) {
 		t.Fatal("expected diagnostic error")
 	}
 	// The next call should produce SELECT.
-	token = l.NextToken()
+	token = l.nextToken()
 	if token.Type != TOKEN_SELECT {
 		t.Fatalf("expected SELECT after recovery, got %v", token.Type)
 	}
@@ -1449,7 +1541,7 @@ func TestNextToken_ScientificNotation(t *testing.T) {
 func TestNextToken_Unicode(t *testing.T) {
 	t.Run("unicode in string literal", func(t *testing.T) {
 		l := NewLexer("test", "'hello 🚀'")
-		token := l.NextToken()
+		token := l.nextToken()
 		if l.Diagnostics().HasErrors() {
 			t.Fatalf("unexpected error: %v", l.Diagnostics().Error())
 		}
@@ -1469,7 +1561,7 @@ func TestNextToken_Unicode(t *testing.T) {
 
 	t.Run("unicode character as illegal token", func(t *testing.T) {
 		l := NewLexer("test", "🚀")
-		token := l.NextToken()
+		token := l.nextToken()
 		if !l.Diagnostics().HasErrors() {
 			t.Fatal("expected error for unicode identifier character")
 		}
@@ -1499,5 +1591,243 @@ func TestLexer_EOFHelpers(t *testing.T) {
 	}
 	if got := l.advance(); got != 0 {
 		t.Errorf("advance() = %v, want 0 at EOF", got)
+	}
+}
+
+// TestTokenize_EmptyInput verifies that tokenizing an empty string produces
+// exactly one TOKEN_EOF and no diagnostics.
+func TestTokenize_EmptyInput(t *testing.T) {
+	l := NewLexer("test", "")
+	tokens := l.Tokenize()
+	if len(tokens) != 1 || tokens[0].Type != TOKEN_EOF {
+		t.Fatalf("expected [EOF], got %v", tokens)
+	}
+	if l.Diagnostics().HasErrors() {
+		t.Fatalf("unexpected errors: %v", l.Diagnostics().Error())
+	}
+}
+
+// TestTokenize_SimpleStatement verifies that Tokenize returns the correct
+// token sequence for a minimal SQL statement (keyword + literal + EOF).
+func TestTokenize_SimpleStatement(t *testing.T) {
+	l := NewLexer("test", "SELECT 1")
+	tokens := l.Tokenize()
+	if len(tokens) != 3 {
+		t.Fatalf("expected 3 tokens, got %d", len(tokens))
+	}
+	if tokens[0].Type != TOKEN_SELECT {
+		t.Errorf("[0] got %v, want SELECT", tokens[0].Type)
+	}
+	if tokens[1].Type != TOKEN_INTEGER || tokens[1].Literal != "1" {
+		t.Errorf("[1] got %v %q, want INTEGER '1'", tokens[1].Type, tokens[1].Literal)
+	}
+	if tokens[2].Type != TOKEN_EOF {
+		t.Errorf("[2] got %v, want EOF", tokens[2].Type)
+	}
+}
+
+// TestTokenize_AlwaysEndsWithEOF asserts that every call to Tokenize
+// terminates with TOKEN_EOF, regardless of input content.
+func TestTokenize_AlwaysEndsWithEOF(t *testing.T) {
+	for _, input := range []string{"", "   ", "SELECT *;", "-- comment", "/* block */"} {
+		l := NewLexer("test", input)
+		tokens := l.Tokenize()
+		if tokens[len(tokens)-1].Type != TOKEN_EOF {
+			t.Errorf("input %q: last token %v, want EOF", input, tokens[len(tokens)-1].Type)
+		}
+	}
+}
+
+// TestTokenize_MultipleStatements verifies that semicolon-separated
+// statements are tokenized into the expected number of tokens.
+func TestTokenize_MultipleStatements(t *testing.T) {
+	l := NewLexer("test", "SELECT 1; SELECT 2;")
+	tokens := l.Tokenize()
+	// SELECT 1 ; SELECT 2 ; EOF = 7
+	if len(tokens) != 7 {
+		t.Fatalf("expected 7 tokens, got %d", len(tokens))
+	}
+}
+
+// TestTokenize_WithErrors_StillCompletes verifies that the lexer
+// recovers from illegal characters and still produces valid tokens
+// interspersed with ILLEGAL tokens, terminating with EOF.
+func TestTokenize_WithErrors_StillCompletes(t *testing.T) {
+	l := NewLexer("test", "@ SELECT # 42")
+	tokens := l.Tokenize()
+	if tokens[len(tokens)-1].Type != TOKEN_EOF {
+		t.Fatal("expected EOF even with errors")
+	}
+	if !l.Diagnostics().HasErrors() {
+		t.Fatal("expected diagnostic errors")
+	}
+	var foundSelect, foundInt bool
+	for _, tok := range tokens {
+		if tok.Type == TOKEN_SELECT {
+			foundSelect = true
+		}
+		if tok.Type == TOKEN_INTEGER && tok.Literal == "42" {
+			foundInt = true
+		}
+	}
+	if !foundSelect || !foundInt {
+		t.Error("valid tokens missing among results")
+	}
+}
+
+// TestTokenize_UnterminatedString verifies that an unterminated string
+// literal records a CodeUnterminatedString diagnostic and still ends with EOF.
+func TestTokenize_UnterminatedString(t *testing.T) {
+	l := NewLexer("test", "'open")
+	tokens := l.Tokenize()
+	if tokens[len(tokens)-1].Type != TOKEN_EOF {
+		t.Fatal("expected EOF")
+	}
+	var found bool
+	for _, d := range l.Diagnostics() {
+		if errors.Is(d, CodeUnterminatedString) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected CodeUnterminatedString diagnostic")
+	}
+}
+
+// TestTokenize_UnterminatedComment verifies that an unterminated block
+// comment records a CodeUnterminatedComment diagnostic and still ends with EOF.
+func TestTokenize_UnterminatedComment(t *testing.T) {
+	l := NewLexer("test", "/* open")
+	tokens := l.Tokenize()
+	if tokens[len(tokens)-1].Type != TOKEN_EOF {
+		t.Fatal("expected EOF")
+	}
+	var found bool
+	for _, d := range l.Diagnostics() {
+		if errors.Is(d, CodeUnterminatedComment) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected CodeUnterminatedComment diagnostic")
+	}
+}
+
+// TestTokenize_MultipleErrors verifies that multiple illegal characters
+// each produce their own diagnostic entry.
+func TestTokenize_MultipleErrors(t *testing.T) {
+	l := NewLexer("test", "@ $ ^")
+	_ = l.Tokenize()
+	if len(l.Diagnostics()) != 3 {
+		t.Fatalf("expected 3 diagnostics, got %d", len(l.Diagnostics()))
+	}
+}
+
+// TestTokenize_MatchesNextTokenLoop verifies that the batch Tokenize
+// method produces an identical token sequence to a manual NextToken loop.
+func TestTokenize_MatchesNextTokenLoop(t *testing.T) {
+	input := "SELECT id, name FROM users WHERE age >= 18;"
+	l1 := NewLexer("test", input)
+	batch := l1.Tokenize()
+
+	l2 := NewLexer("test", input)
+	var stream []Token
+	for {
+		tok := l2.nextToken()
+		stream = append(stream, tok)
+		if tok.Type == TOKEN_EOF {
+			break
+		}
+	}
+	if len(batch) != len(stream) {
+		t.Fatalf("length mismatch: %d vs %d", len(batch), len(stream))
+	}
+	for i := range batch {
+		if batch[i] != stream[i] {
+			t.Errorf("[%d] mismatch: %v vs %v", i, batch[i], stream[i])
+		}
+	}
+}
+
+// TestTokenize_OnlyComments verifies that input consisting entirely of
+// comments produces only a single EOF token.
+func TestTokenize_OnlyComments(t *testing.T) {
+	l := NewLexer("test", "-- line\n/* block */")
+	tokens := l.Tokenize()
+	if len(tokens) != 1 || tokens[0].Type != TOKEN_EOF {
+		t.Fatalf("expected [EOF], got %v", tokens)
+	}
+}
+
+// TestTokenize_SpanOffsets verifies that byte offsets in token spans are
+// correctly tracked through Tokenize.
+func TestTokenize_SpanOffsets(t *testing.T) {
+	l := NewLexer("test", "SELECT *")
+	tokens := l.Tokenize()
+	if tokens[0].Span.Start.Offset != 0 {
+		t.Errorf("SELECT start offset: got %d, want 0", tokens[0].Span.Start.Offset)
+	}
+	if tokens[0].Span.End.Offset != 6 {
+		t.Errorf("SELECT end offset: got %d, want 6", tokens[0].Span.End.Offset)
+	}
+	if tokens[1].Span.Start.Offset != 7 {
+		t.Errorf("STAR start offset: got %d, want 7", tokens[1].Span.Start.Offset)
+	}
+}
+
+// TestDiagnostics_EmptyOnCleanInput verifies that Diagnostics returns
+// an empty, error-free list after tokenizing valid SQL.
+func TestDiagnostics_EmptyOnCleanInput(t *testing.T) {
+	l := NewLexer("test", "SELECT 1")
+	l.Tokenize()
+	if l.Diagnostics().HasErrors() || len(l.Diagnostics()) != 0 {
+		t.Fatal("expected zero diagnostics")
+	}
+}
+
+// TestDiagnostics_EmptyBeforeTokenization verifies that no diagnostics
+// are present before any tokenization has occurred.
+func TestDiagnostics_EmptyBeforeTokenization(t *testing.T) {
+	l := NewLexer("test", "@ bad")
+	if l.Diagnostics().HasErrors() {
+		t.Fatal("expected no diagnostics before tokenization")
+	}
+}
+
+// TestNewLexer_SourceNameInDiagnostic verifies that the source name
+// passed to NewLexer propagates into diagnostic Source metadata.
+func TestNewLexer_SourceNameInDiagnostic(t *testing.T) {
+	l := NewLexer("my_query.sql", "@")
+	l.Tokenize()
+	if !l.Diagnostics().HasErrors() {
+		t.Fatal("expected error")
+	}
+	d := l.Diagnostics()[0]
+	if d.Source == nil || d.Source.Name != "my_query.sql" {
+		t.Errorf("source name: got %v, want 'my_query.sql'", d.Source)
+	}
+}
+
+// TestPeekNext_SingleChar verifies that peekNext returns 0 when only
+// one character remains in the input.
+func TestPeekNext_SingleChar(t *testing.T) {
+	l := NewLexer("test", "a")
+	if got := l.peekNext(); got != 0 {
+		t.Errorf("peekNext() = %v, want 0 for single-char input", got)
+	}
+}
+
+// TestAdvance_ReturnsCorrectRunes verifies that advance returns each
+// rune in sequence and then returns 0 once the input is exhausted.
+func TestAdvance_ReturnsCorrectRunes(t *testing.T) {
+	l := NewLexer("test", "ab")
+	if got := l.advance(); got != 'a' {
+		t.Errorf("got %c, want 'a'", got)
+	}
+	if got := l.advance(); got != 'b' {
+		t.Errorf("got %c, want 'b'", got)
+	}
+	if got := l.advance(); got != 0 {
+		t.Errorf("got %c, want 0 at EOF", got)
 	}
 }
