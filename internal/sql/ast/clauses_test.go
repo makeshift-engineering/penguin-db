@@ -141,8 +141,8 @@ func TestClause_Validation(t *testing.T) {
 			wantErr: ast.ErrNilClause,
 		},
 		{
-			name: "ColumnDef recursive type error",
-			node: &ast.ColumnDef{Name: "id", Type: &ast.DataType{Kind: ast.TypeVarchar}},
+			name:    "ColumnDef recursive type error",
+			node:    &ast.ColumnDef{Name: "id", Type: &ast.DataType{Kind: ast.TypeVarchar}},
 			wantErr: ast.ErrVarcharLengthRequired,
 		},
 		// SignedLiteral
@@ -458,4 +458,3 @@ func TestClause_Validation(t *testing.T) {
 		})
 	}
 }
-

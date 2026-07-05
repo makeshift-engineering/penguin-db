@@ -28,7 +28,6 @@ func clb(s diagnostic.Span) ast.ClauseBase {
 // nb builds a NodeBase with the given span for use in table-driven tests.
 func nb(s diagnostic.Span) ast.NodeBase { return ast.NodeBase{NodeSpan: s} }
 
-
 // TestSpan_ReturnsStoredSpan verifies that the Span() method on every concrete
 // AST node correctly returns the diagnostic.Span stored in its embedded base.
 func TestSpan_ReturnsStoredSpan(t *testing.T) {

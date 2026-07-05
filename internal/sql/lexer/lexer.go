@@ -299,7 +299,7 @@ func (l *Lexer) scanNumber() utils.Token {
 }
 
 // scanString consumes a single-quoted SQL string literal, handling
-// escaped quotes ('') as a single quote character. Records an
+// escaped quotes (”) as a single quote character. Records an
 // unterminated-string diagnostic if EOF is reached before the closing quote.
 func (l *Lexer) scanString() utils.Token {
 	start := l.pos.snapshot()
