@@ -141,6 +141,13 @@ type dbEngine struct {
 	sstRefs   map[*sstable.Reader]*sstableRef
 	sstRefsMu sync.Mutex
 
+	// manifestMu serializes writes to the manifest file to prevent concurrent out-of-order writes.
+	manifestMu sync.Mutex
+
+	// writeMu serializes foreground writes (Put/Delete/WriteBatch) to ensure WAL append order
+	// matches memtable apply order, preventing out-of-order writes.
+	writeMu sync.Mutex
+
 	// nextSegmentID tracks the next unique ID for WAL/SSTable files.
 	nextSegmentID int
 
@@ -417,6 +424,7 @@ func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 	newWAL, err := createWALWriter(engine.walDir, engine.activeWALSegmentID, engine.opts.WALOptions)
 	if err != nil {
 		engine.bgErr = err
+		engine.flushCond.Broadcast()
 		return err
 	}
 	engine.wal = newWAL
@@ -425,9 +433,15 @@ func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 		NextSegmentID: engine.nextSegmentID,
 		Levels:        engine.manifestLevels(),
 	}
-	if err := writeManifest(engine.dir, manifest); err != nil {
-		engine.bgErr = err
-		return err
+	engine.mu.Unlock()
+
+	writeErr := engine.writeManifestDurable(manifest)
+
+	engine.mu.Lock()
+	if writeErr != nil {
+		engine.bgErr = writeErr
+		engine.flushCond.Broadcast()
+		return writeErr
 	}
 
 	// Signal the background flush worker.
@@ -454,6 +468,9 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 		return fmt.Errorf("batch size %d exceeds MaxMemTableSize %d", batchSize, engine.opts.MaxMemTableSize)
 	}
 
+	engine.writeMu.Lock()
+	defer engine.writeMu.Unlock()
+
 	engine.mu.Lock()
 
 	for {
@@ -479,54 +496,56 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 			}
 			continue
 		}
-
-		// Build the WAL records for this batch.
-		walRecords := make([]*wal.Record, 0, len(operations))
-		for _, operation := range operations {
-			walOpcode := wal.OpcodePut
-			if operation.Type == OpDelete {
-				walOpcode = wal.OpcodeDelete
-			}
-			walRecords = append(walRecords, &wal.Record{
-				Opcode: walOpcode,
-				Key:    operation.Key,
-				Value:  operation.Value,
-			})
-		}
-
-		activeWAL := engine.wal
-		engine.mu.Unlock()
-
-		if err := activeWAL.AppendBatch(walRecords); err != nil {
-			engine.mu.Lock()
-			engine.bgErr = err
-			engine.mu.Unlock()
-			return fmt.Errorf("failed to append batch to WAL: %w", err)
-		}
-
-		engine.mu.Lock()
-
-		// Guard against a racing Close() or background error while lock was dropped.
-		if engine.bgErr != nil {
-			engine.mu.Unlock()
-			return engine.bgErr
-		}
-		if engine.isClosing {
-			engine.mu.Unlock()
-			return fmt.Errorf("engine is closing")
-		}
-
-		for _, operation := range operations {
-			if operation.Type == OpPut {
-				_ = engine.memtable.Put(operation.Key, operation.Value)
-			} else {
-				_ = engine.memtable.Delete(operation.Key)
-			}
-		}
-
-		engine.mu.Unlock()
-		return nil
+		break
 	}
+
+	// Build the WAL records for this batch.
+	walRecords := make([]*wal.Record, 0, len(operations))
+	for _, operation := range operations {
+		walOpcode := wal.OpcodePut
+		if operation.Type == OpDelete {
+			walOpcode = wal.OpcodeDelete
+		}
+		walRecords = append(walRecords, &wal.Record{
+			Opcode: walOpcode,
+			Key:    operation.Key,
+			Value:  operation.Value,
+		})
+	}
+
+	activeWAL := engine.wal
+	engine.mu.Unlock()
+
+	if err := activeWAL.AppendBatch(walRecords); err != nil {
+		engine.mu.Lock()
+		engine.bgErr = err
+		engine.flushCond.Broadcast()
+		engine.mu.Unlock()
+		return fmt.Errorf("failed to append batch to WAL: %w", err)
+	}
+
+	engine.mu.Lock()
+
+	// Guard against a racing Close() or background error while lock was dropped.
+	if engine.bgErr != nil {
+		engine.mu.Unlock()
+		return engine.bgErr
+	}
+	if engine.isClosing {
+		engine.mu.Unlock()
+		return fmt.Errorf("engine is closing")
+	}
+
+	for _, operation := range operations {
+		if operation.Type == OpPut {
+			_ = engine.memtable.Put(operation.Key, operation.Value)
+		} else {
+			_ = engine.memtable.Delete(operation.Key)
+		}
+	}
+
+	engine.mu.Unlock()
+	return nil
 }
 
 // Get retrieves a key-value record from memory or SSTable files.
@@ -882,8 +901,14 @@ func (engine *dbEngine) flushWorker() {
 			NextSegmentID: engine.nextSegmentID,
 			Levels:        engine.manifestLevels(),
 		}
-		if err := writeManifest(engine.dir, manifest); err != nil {
-			engine.bgErr = err
+		engine.mu.Unlock()
+
+		writeErr := engine.writeManifestDurable(manifest)
+
+		engine.mu.Lock()
+		if writeErr != nil {
+			engine.bgErr = writeErr
+			engine.flushCond.Broadcast()
 			engine.mu.Unlock()
 			return
 		}
@@ -1016,36 +1041,50 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		newL1Readers = append(newL1Readers, sstableReader)
 	}
 
-	oldL0 := engine.levels[0]
-	oldL1 := engine.levels[1]
-
-	engine.levels[0] = nil
+	// Apply levels update in memory before releasing the lock.
+	// Filter out the compacted files from Level 0 (preserving any concurrent flushes).
+	var newL0 []*sstable.Reader
+	for _, r := range engine.levels[0] {
+		isObsolete := false
+		for _, obs := range obsoleteReaders {
+			if r == obs {
+				isObsolete = true
+				break
+			}
+		}
+		if !isObsolete {
+			newL0 = append(newL0, r)
+		}
+	}
+	engine.levels[0] = newL0
 	engine.levels[1] = newL1Readers
+
+	// Register the new L1 readers.
+	engine.sstRefsMu.Lock()
+	for _, sstableReader := range newL1Readers {
+		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
+	}
+	engine.sstRefsMu.Unlock()
 
 	manifest := &Manifest{
 		NextSegmentID: engine.nextSegmentID,
 		Levels:        engine.manifestLevels(),
 	}
-	if err := writeManifest(engine.dir, manifest); err != nil {
-		engine.levels[0] = oldL0
-		engine.levels[1] = oldL1
+	engine.mu.Unlock()
 
-		for _, r := range newL1Readers {
-			_ = r.Close()
-			_ = os.Remove(r.FilePath())
-		}
+	writeErr := engine.writeManifestDurable(manifest)
 
-		engine.bgErr = fmt.Errorf("compaction failed to write manifest: %w", err)
+	engine.mu.Lock()
+	if writeErr != nil {
+		engine.bgErr = fmt.Errorf("compaction failed to write manifest: %w", writeErr)
 		engine.isCompacting = false
+		engine.flushCond.Broadcast()
 		engine.mu.Unlock()
-		return err
+		return writeErr
 	}
 
+	// Mark old readers as obsolete and remove them if unreferenced.
 	engine.sstRefsMu.Lock()
-	for _, sstableReader := range newL1Readers {
-		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
-	}
-
 	for _, obsR := range obsoleteReaders {
 		if ref, ok := engine.sstRefs[obsR]; ok {
 			ref.obsolete = true
@@ -1082,6 +1121,13 @@ func (engine *dbEngine) unpinSSTable(sstableReader *sstable.Reader) {
 			delete(engine.sstRefs, sstableReader)
 		}
 	}
+}
+
+// writeManifestDurable writes the manifest to disk atomically, serialized by manifestMu.
+func (engine *dbEngine) writeManifestDurable(m *Manifest) error {
+	engine.manifestMu.Lock()
+	defer engine.manifestMu.Unlock()
+	return writeManifest(engine.dir, m)
 }
 
 // manifestLevels builds the file basename mapping required by the atomic manifest writer.

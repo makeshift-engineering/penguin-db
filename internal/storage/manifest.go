@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // Manifest represents the persistent database state metadata.
@@ -73,5 +74,19 @@ func writeManifest(dir string, m *Manifest) error {
 	}
 
 	path := filepath.Join(dir, "manifest.json")
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	return d.Sync()
 }

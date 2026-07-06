@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -625,7 +626,77 @@ func TestEngine_ConcurrentWrites(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // allow any background flushes to finish
 }
 
-// ─── Exclusive lock ───────────────────────────────────────────────────────────
+// TestEngine_ConcurrentWritesOrdering asserts that concurrent writes to the same key
+// have their WAL append order and memtable apply order aligned. Specifically, the value
+// recovered after close/reopen must match the value of whichever write completed last.
+func TestEngine_ConcurrentWritesOrdering(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.MaxMemTableSize = 200 // Trigger frequent flushes/rotations
+	engine := mustNewEngine(t, dir, opts)
+
+	key := []byte("shared-key")
+	workers := 10
+	done := make(chan struct{})
+
+	var mu sync.Mutex
+	var completionOrder []string
+
+	for w := range workers {
+		go func(workerID int) {
+			defer func() { done <- struct{}{} }()
+			val := []byte(fmt.Sprintf("val-%d", workerID))
+			err := engine.Put(key, val)
+			if err != nil {
+				t.Errorf("Put failed: %v", err)
+				return
+			}
+			mu.Lock()
+			completionOrder = append(completionOrder, string(val))
+			mu.Unlock()
+		}(w)
+	}
+
+	for range workers {
+		<-done
+	}
+
+	if len(completionOrder) == 0 {
+		t.Fatal("expected at least one write to complete")
+	}
+
+	lastWrittenVal := completionOrder[len(completionOrder)-1]
+
+	// Read before close, it must match the last completed write value
+	val, err := engine.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(val) != lastWrittenVal {
+		t.Errorf("expected live value to be %q, got %q", lastWrittenVal, string(val))
+	}
+
+	// Close engine
+	if err := engine.Close(); err != nil {
+		t.Fatalf("failed to close engine: %v", err)
+	}
+
+	// Reopen engine
+	engine2, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("failed to reopen engine: %v", err)
+	}
+	defer engine2.Close()
+
+	// Read after reopen, it must match the last completed write value
+	val2, err := engine2.Get(key)
+	if err != nil {
+		t.Fatalf("Get after recovery: %v", err)
+	}
+	if string(val2) != lastWrittenVal {
+		t.Errorf("expected recovered value to be %q, got %q", lastWrittenVal, string(val2))
+	}
+}
 
 func TestEngine_ExclusiveDirectoryLock(t *testing.T) {
 	dir := t.TempDir()
@@ -640,8 +711,6 @@ func TestEngine_ExclusiveDirectoryLock(t *testing.T) {
 		t.Logf("second engine correctly rejected: %v", err2)
 	}
 }
-
-// ─── Close semantics ──────────────────────────────────────────────────────────
 
 func TestEngine_DoubleClose(t *testing.T) {
 	dir := t.TempDir()
@@ -681,8 +750,6 @@ func TestEngine_CloseWithDirtyMemTable(t *testing.T) {
 		t.Errorf("dirty1 after close/reopen: got %q, err=%v", v, err)
 	}
 }
-
-// ─── Recovery ─────────────────────────────────────────────────────────────────
 
 // TestEngine_RecoveryMemTableFlush forces the startup recovery flush path by
 // reopening the engine with a MaxMemTableSize smaller than the replayed WAL.
@@ -743,8 +810,6 @@ func TestEngine_RecoveryResumeFromHighestWAL(t *testing.T) {
 	}
 }
 
-// ─── cleanupWALFiles ─────────────────────────────────────────────────────────
-
 // TestEngine_CleanupWALFiles verifies that WAL segments up to a given ID are
 // deleted when cleanupWALFiles is called, exercising that helper directly.
 func TestEngine_CleanupWALFiles(t *testing.T) {
@@ -780,8 +845,6 @@ func TestEngine_CleanupWALFiles_NonexistentDir(t *testing.T) {
 	cleanupWALFiles("/nonexistent/path/that/does/not/exist", 99) // must not panic
 }
 
-// ─── writeMemTableToSSTable ───────────────────────────────────────────────────
-
 // TestEngine_WriteMemTableToSSTable_Success exercises the happy path directly.
 func TestEngine_WriteMemTableToSSTable_Success(t *testing.T) {
 	dir := t.TempDir()
@@ -814,8 +877,6 @@ func TestEngine_WriteMemTableToSSTable_InvalidPath(t *testing.T) {
 	}
 }
 
-// ─── openManifestLevels / closeOpenedLevels ───────────────────────────────────
-
 // TestEngine_OpenManifestLevels_InvalidFile checks that openManifestLevels
 // returns an error when a manifest entry points to a non-existent file and that
 // closeOpenedLevels is exercised via the cleanup path.
@@ -830,8 +891,6 @@ func TestEngine_OpenManifestLevels_InvalidFile(t *testing.T) {
 		t.Error("expected error opening non-existent SSTable, got nil")
 	}
 }
-
-// ─── memAdapter & sstAdapter coverage ────────────────────────────────────────
 
 // TestEngine_MemAdapterClose verifies the no-op Close on memAdapter is reached.
 func TestEngine_MemAdapterClose(t *testing.T) {
@@ -881,8 +940,6 @@ func TestEngine_SstAdapterMethods(t *testing.T) {
 	adapter.Close() // must not panic
 }
 
-// ─── unpinSSTable obsolete-deletion path ─────────────────────────────────────
-
 // TestEngine_UnpinSSTable_ObsoleteDeletion verifies the deferred-deletion code
 // path: when an SSTable is marked obsolete with refs>0, the file should only be
 // deleted once the last ref is released via unpinSSTable.
@@ -915,8 +972,6 @@ func TestEngine_UnpinSSTable_ObsoleteDeletion(t *testing.T) {
 	}
 }
 
-// ─── WriteBatch while closing ─────────────────────────────────────────────────
-
 // TestEngine_WriteBatchAfterClose verifies that writes after Close return an error.
 func TestEngine_WriteBatchAfterClose(t *testing.T) {
 	dir := t.TempDir()
@@ -934,8 +989,6 @@ func TestEngine_WriteBatchAfterClose(t *testing.T) {
 		t.Error("expected error writing after Close, got nil")
 	}
 }
-
-// ─── rotateActiveMemTableAndWAL ───────────────────────────────────────────────
 
 // TestEngine_RotateMemtable confirms that a memtable rotation succeeds, data
 // is preserved, and the engine correctly writes subsequent keys to the new WAL.
@@ -1038,8 +1091,6 @@ func TestEngine_GetImmMemtable_Tombstone(t *testing.T) {
 	}
 }
 
-// ─── Scan: L1 range exclusion ─────────────────────────────────────────────────
-
 // TestEngine_ScanL1RangeExclusion verifies that L1 SSTables are skipped when
 // the scan prefix falls entirely below (MinKey branch) or entirely above
 // (MaxKey branch) the file's key range, exercising both overlap=false branches.
@@ -1078,8 +1129,6 @@ func TestEngine_ScanL1RangeExclusion(t *testing.T) {
 	}
 }
 
-// ─── Manifest: error paths ────────────────────────────────────────────────────
-
 // TestEngine_LoadManifest_CorruptJSON covers the json.Unmarshal error path in
 // loadManifest when the manifest file contains malformed JSON.
 func TestEngine_LoadManifest_CorruptJSON(t *testing.T) {
@@ -1117,8 +1166,6 @@ func TestEngine_WriteManifest_InvalidDir(t *testing.T) {
 	}
 }
 
-// ─── openManifestLevels: partial failure (closeOpenedLevels inner body) ───────
-
 // TestEngine_OpenManifestLevels_PartialFailure causes openManifestLevels to
 // successfully open one SSTable before encountering a non-existent second file.
 // The resulting cleanup call exercises the inner body of closeOpenedLevels.
@@ -1145,8 +1192,6 @@ func TestEngine_OpenManifestLevels_PartialFailure(t *testing.T) {
 		t.Error("expected error from openManifestLevels with partial failure, got nil")
 	}
 }
-
-// ─── recoverActiveState: IF branch via direct WAL write ──────────────────────
 
 // TestEngine_RecoveryFlushPath writes WAL records directly (without opening an
 // engine) and then opens a new engine with a tiny MaxMemTableSize so that the
@@ -1195,8 +1240,6 @@ func TestEngine_RecoveryFlushPath(t *testing.T) {
 	}
 	_ = val
 }
-
-// ─── unpinSSTable: deferred-deletion path ────────────────────────────────────
 
 // TestEngine_UnpinSSTable_DeletesObsoleteFile verifies the deferred-deletion
 // branch in unpinSSTable: after compaction marks L0 readers as obsolete while
