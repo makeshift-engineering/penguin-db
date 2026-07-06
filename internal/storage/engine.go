@@ -96,8 +96,8 @@ type Iterator interface {
 
 // Metrics provides hooks for tracing internal storage engine events.
 type Metrics interface {
-	RecordFlush(durationMs int64, bytesWritten int64)
-	RecordCompaction(durationMs int64, bytesRead int64, bytesWritten int64)
+	RecordFlush(durationMs, bytesWritten int64)
+	RecordCompaction(durationMs, bytesRead, bytesWritten int64)
 	RecordWriteStall(durationMs int64)
 	RecordReadAmplification(filesProbed int)
 }
@@ -105,8 +105,8 @@ type Metrics interface {
 // nopMetrics is a no-op implementation of Metrics.
 type nopMetrics struct{}
 
-func (n nopMetrics) RecordFlush(durationMs int64, bytesWritten int64)                   {}
-func (n nopMetrics) RecordCompaction(durationMs int64, bytesRead int64, bytesWritten int64) {}
+func (n nopMetrics) RecordFlush(durationMs, bytesWritten int64)                 {}
+func (n nopMetrics) RecordCompaction(durationMs, bytesRead, bytesWritten int64) {}
 func (n nopMetrics) RecordWriteStall(durationMs int64)                          {}
 func (n nopMetrics) RecordReadAmplification(filesProbed int)                    {}
 
@@ -151,10 +151,11 @@ type sstableRef struct {
 // dbEngine is the concrete implementation of the Engine interface.
 //
 // Lock Hierarchy:
-//   To prevent deadlock, locks must ALWAYS be acquired in this order:
-//   1. engine.writeMu (serializes concurrent WriteBatch pipeline entries)
-//   2. engine.mu (protects overall engine state and memory queues)
-//   3. engine.sstRefsMu (lightweight ref-counting mutex for pinning sstable files)
+//
+//	To prevent deadlock, locks must ALWAYS be acquired in this order:
+//	1. engine.writeMu (serializes concurrent WriteBatch pipeline entries)
+//	2. engine.mu (protects overall engine state and memory queues)
+//	3. engine.sstRefsMu (lightweight ref-counting mutex for pinning sstable files)
 type dbEngine struct {
 	// dir is the base database directory.
 	dir string
@@ -175,7 +176,7 @@ type dbEngine struct {
 	activeWALSegmentID int
 	// memtable is the active in-memory skip list.
 	memtable *memtable.SkipList
-	
+
 	// immMemtables is a queue of read-only frozen memtables currently flushing to disk.
 	immMemtables []*memtable.SkipList
 	// immWALSegmentIDs stores the WAL segment IDs corresponding to the memtables in the queue.
@@ -501,10 +502,11 @@ func validateOperations(operations []Op) (int64, error) {
 // Must be called with lock held.
 //
 // Manual Lock/Unlock Invariants:
-//   To avoid holding a heavy engine write lock during blocking disk I/O, engine.mu is released
-//   and re-acquired around WAL.Close() and writeManifestDurable(). Since engine.writeMu remains
-//   held for the duration of the calling WriteBatch execution, concurrent writes cannot enter
-//   the pipeline, ensuring matching WAL/memtable serialization.
+//
+//	To avoid holding a heavy engine write lock during blocking disk I/O, engine.mu is released
+//	and re-acquired around WAL.Close() and writeManifestDurable(). Since engine.writeMu remains
+//	held for the duration of the calling WriteBatch execution, concurrent writes cannot enter
+//	the pipeline, ensuring matching WAL/memtable serialization.
 func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 	// Freeze the active memtable and append it to the queue.
 	engine.immMemtables = append(engine.immMemtables, engine.memtable)

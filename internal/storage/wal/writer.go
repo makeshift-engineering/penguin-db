@@ -334,19 +334,27 @@ func (writer *LogWriter) batchWorker() {
 				}
 			case <-writer.closedChan:
 				// closedChan was closed, drain remaining non-blockingly and process them
-				draining := true
-				for draining {
-					select {
-					case t, ok := <-writer.ingestionChannel:
-						if ok {
-							commitBatch, writeBuffer, leftoverTicket = writer.gatherBatch(t, commitBatch, writeBuffer)
-							writer.writeAndSyncBatch(commitBatch, writeBuffer)
-						} else {
-							draining = false
+				for {
+					var t *commitTicket
+					if leftoverTicket != nil {
+						t = leftoverTicket
+						leftoverTicket = nil
+					} else {
+						select {
+						case ticket, ok := <-writer.ingestionChannel:
+							if ok {
+								t = ticket
+							}
+						default:
 						}
-					default:
-						draining = false
 					}
+
+					if t == nil {
+						break
+					}
+
+					commitBatch, writeBuffer, leftoverTicket = writer.gatherBatch(t, commitBatch, writeBuffer)
+					writer.writeAndSyncBatch(commitBatch, writeBuffer)
 				}
 				ok = false
 			}

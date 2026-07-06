@@ -584,5 +584,3 @@ func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
 		t.Error("bad record in malformed file was replayed, but should have been skipped")
 	}
 }
-
-

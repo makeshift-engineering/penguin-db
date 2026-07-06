@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/compactor"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
@@ -2126,7 +2125,7 @@ func TestEngine_ManifestBackupFallback(t *testing.T) {
 func TestEngine_SnapshotIsolation(t *testing.T) {
 	dir := t.TempDir()
 	opts := DefaultOptions()
-	
+
 	engine, err := NewEngine(dir, opts)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)

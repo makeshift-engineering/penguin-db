@@ -45,7 +45,7 @@ func Replay(directory string, minSegmentID int, recordConsumer RecordConsumer) (
 	}
 
 	slog.Debug("found WAL segments for replay", "count", len(walFiles))
-	
+
 	// Sort WAL segments numerically based on segment ID
 	sort.Slice(walFiles, func(i, j int) bool {
 		var idI, idJ int
