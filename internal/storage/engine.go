@@ -5,16 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/compactor"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/wal"
+)
+
+// Level constants for explicit layout semantics.
+const (
+	levelZero = 0
+	levelOne  = 1
+	numLevels = 2
 )
 
 // ErrKeyNotFound is returned when the key is not found in the storage engine.
@@ -40,6 +49,14 @@ type Op struct {
 	Value []byte
 }
 
+// Snapshot provides a read-only point-in-time view of the database.
+type Snapshot interface {
+	// Get retrieves a value for a given key from the snapshot.
+	Get(key []byte) ([]byte, error)
+	// Close releases the pinned readers of the snapshot.
+	Close()
+}
+
 // Engine defines the top-level interface for the storage engine.
 type Engine interface {
 	// Put writes a single key-value pair to the database.
@@ -56,6 +73,9 @@ type Engine interface {
 
 	// WriteBatch writes multiple operations atomically to the database.
 	WriteBatch(operations []Op) error
+
+	// Snapshot returns a point-in-time Snapshot of the database.
+	Snapshot() (Snapshot, error)
 
 	// Close flushes memory tables and closes all open files and background workers.
 	Close() error
@@ -74,6 +94,22 @@ type Iterator interface {
 	Close()
 }
 
+// Metrics provides hooks for tracing internal storage engine events.
+type Metrics interface {
+	RecordFlush(durationMs int64, bytesWritten int64)
+	RecordCompaction(durationMs int64, bytesRead int64, bytesWritten int64)
+	RecordWriteStall(durationMs int64)
+	RecordReadAmplification(filesProbed int)
+}
+
+// nopMetrics is a no-op implementation of Metrics.
+type nopMetrics struct{}
+
+func (n nopMetrics) RecordFlush(durationMs int64, bytesWritten int64)                   {}
+func (n nopMetrics) RecordCompaction(durationMs int64, bytesRead int64, bytesWritten int64) {}
+func (n nopMetrics) RecordWriteStall(durationMs int64)                          {}
+func (n nopMetrics) RecordReadAmplification(filesProbed int)                    {}
+
 // Options configures runtime parameters for the storage engine.
 type Options struct {
 	// MaxMemTableSize is the maximum size in bytes of the active MemTable before freezing and flushing.
@@ -84,6 +120,10 @@ type Options struct {
 	CompactionThreshold int
 	// WALOptions provides functional options for the WAL LogWriter.
 	WALOptions wal.Options
+	// Metrics is an optional hook for tracking engine performance.
+	Metrics Metrics
+	// MaxImmMemtables is the maximum allowed immutable memtables in the queue before write stall triggers.
+	MaxImmMemtables int
 }
 
 // DefaultOptions returns the standard parameters.
@@ -93,6 +133,8 @@ func DefaultOptions() Options {
 		MemTableMaxLevel:    12,
 		CompactionThreshold: 4,
 		WALOptions:          wal.DefaultOptions(),
+		Metrics:             nopMetrics{},
+		MaxImmMemtables:     2,
 	}
 }
 
@@ -107,6 +149,12 @@ type sstableRef struct {
 }
 
 // dbEngine is the concrete implementation of the Engine interface.
+//
+// Lock Hierarchy:
+//   To prevent deadlock, locks must ALWAYS be acquired in this order:
+//   1. engine.writeMu (serializes concurrent WriteBatch pipeline entries)
+//   2. engine.mu (protects overall engine state and memory queues)
+//   3. engine.sstRefsMu (lightweight ref-counting mutex for pinning sstable files)
 type dbEngine struct {
 	// dir is the base database directory.
 	dir string
@@ -127,10 +175,11 @@ type dbEngine struct {
 	activeWALSegmentID int
 	// memtable is the active in-memory skip list.
 	memtable *memtable.SkipList
-	// immMemtable is the read-only frozen memtable currently flushing to disk.
-	immMemtable *memtable.SkipList
-	// immWALSegmentID is the WAL segment ID corresponding to the immMemtable.
-	immWALSegmentID int
+	
+	// immMemtables is a queue of read-only frozen memtables currently flushing to disk.
+	immMemtables []*memtable.SkipList
+	// immWALSegmentIDs stores the WAL segment IDs corresponding to the memtables in the queue.
+	immWALSegmentIDs []int
 
 	// levels maps Level ID to the sorted slice of active SSTable readers.
 	levels map[int][]*sstable.Reader
@@ -174,8 +223,10 @@ type dbEngine struct {
 	isCompacting bool
 	// isClosing tracks if Close was invoked.
 	isClosing bool
-	// iterWg coordinates graceful shutdown by waiting for active user iterators.
+	// iterWg coordinates graceful shutdown by waiting for active user iterators and Gets.
 	iterWg sync.WaitGroup
+	// writesInFlight tracks concurrent active WriteBatch executions.
+	writesInFlight sync.WaitGroup
 }
 
 // NewEngine opens or creates a new storage engine instance in the specified directory.
@@ -198,9 +249,20 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 		}
 	}()
 
+	// Clean up any stale temp manifests
+	tmpManifestPath := filepath.Join(dir, "manifest.tmp")
+	if fi, err := os.Stat(tmpManifestPath); err == nil && !fi.IsDir() {
+		_ = os.Remove(tmpManifestPath)
+	}
+
 	manifest, err := loadManifest(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load manifest: %w", err)
+	}
+
+	// Clean up any orphaned SSTable files not referenced in the manifest
+	if err := cleanupOrphanedSSTables(dir, manifest); err != nil {
+		return nil, fmt.Errorf("failed to cleanup orphaned SSTables: %w", err)
 	}
 
 	sstRefs := make(map[*sstable.Reader]*sstableRef)
@@ -211,10 +273,17 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 
 	// Replay WAL segments to reconstruct in-memory state after a crash.
 	recoveryMem := memtable.NewSkipList(math.MaxInt64, opts.MemTableMaxLevel)
-	highestWALSegmentID, err := wal.Replay(walDir, recoveryMem)
+	highestWALSegmentID, err := wal.Replay(walDir, manifest.FlushedSegmentID, recoveryMem)
 	if err != nil {
 		closeOpenedLevels(levels)
 		return nil, fmt.Errorf("failed to replay WAL: %w", err)
+	}
+
+	if opts.Metrics == nil {
+		opts.Metrics = nopMetrics{}
+	}
+	if opts.MaxImmMemtables <= 0 {
+		opts.MaxImmMemtables = 2
 	}
 
 	engineInstance := &dbEngine{
@@ -252,8 +321,8 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 // openManifestLevels opens all SSTables listed in the manifest and registers them in the ref map.
 func openManifestLevels(dir string, manifestLevels map[int][]string, sstRefs map[*sstable.Reader]*sstableRef) (map[int][]*sstable.Reader, error) {
 	levels := make(map[int][]*sstable.Reader)
-	levels[0] = nil
-	levels[1] = nil
+	levels[levelZero] = nil
+	levels[levelOne] = nil
 
 	for level, filenames := range manifestLevels {
 		readers := make([]*sstable.Reader, 0, len(filenames))
@@ -282,6 +351,35 @@ func closeOpenedLevels(levels map[int][]*sstable.Reader) {
 	}
 }
 
+// cleanupOrphanedSSTables removes SSTable files from disk that are not referenced in the manifest.
+func cleanupOrphanedSSTables(dir string, manifest *Manifest) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	activeSSTs := make(map[string]struct{})
+	for _, levelSSTs := range manifest.Levels {
+		for _, sst := range levelSSTs {
+			activeSSTs[sst] = struct{}{}
+		}
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) == ".sst" {
+			if _, active := activeSSTs[name]; !active {
+				path := filepath.Join(dir, name)
+				_ = os.Remove(path)
+			}
+		}
+	}
+	return nil
+}
+
 // recoverActiveState initializes the active WAL and MemTable from the replayed/recovered state.
 func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manifest *Manifest, highestWALSegmentID int) error {
 	var err error
@@ -295,8 +393,8 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 			return fmt.Errorf("failed to flush recovery memtable: %w", err)
 		}
 
-		engine.levels[0] = append([]*sstable.Reader{sstableReader}, engine.levels[0]...)
-		manifest.Levels[0] = append([]string{sstableFilename}, manifest.Levels[0]...)
+		engine.levels[levelZero] = append([]*sstable.Reader{sstableReader}, engine.levels[levelZero]...)
+		manifest.Levels[levelZero] = append([]string{sstableFilename}, manifest.Levels[levelZero]...)
 		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
 
 		engine.nextSegmentID++
@@ -304,6 +402,7 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 		engine.nextSegmentID++
 
 		manifest.NextSegmentID = engine.nextSegmentID
+		manifest.FlushedSegmentID = highestWALSegmentID
 		if err := writeManifest(engine.dir, manifest); err != nil {
 			_ = sstableReader.Close()
 			_ = os.Remove(sstablePath)
@@ -328,7 +427,9 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 		if engine.activeWALSegmentID >= engine.nextSegmentID {
 			engine.nextSegmentID = engine.activeWALSegmentID + 1
 			manifest.NextSegmentID = engine.nextSegmentID
-			_ = writeManifest(engine.dir, manifest)
+			if err := writeManifest(engine.dir, manifest); err != nil {
+				return fmt.Errorf("failed to resume active WAL writer: failed to save manifest: %w", err)
+			}
 		}
 	}
 	return nil
@@ -398,10 +499,16 @@ func validateOperations(operations []Op) (int64, error) {
 
 // rotateActiveMemTableAndWAL rotates full active components and kicks off a flush.
 // Must be called with lock held.
+//
+// Manual Lock/Unlock Invariants:
+//   To avoid holding a heavy engine write lock during blocking disk I/O, engine.mu is released
+//   and re-acquired around WAL.Close() and writeManifestDurable(). Since engine.writeMu remains
+//   held for the duration of the calling WriteBatch execution, concurrent writes cannot enter
+//   the pipeline, ensuring matching WAL/memtable serialization.
 func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
-	// Freeze the active memtable and move it to the immutable slot.
-	engine.immMemtable = engine.memtable
-	engine.immWALSegmentID = engine.activeWALSegmentID
+	// Freeze the active memtable and append it to the queue.
+	engine.immMemtables = append(engine.immMemtables, engine.memtable)
+	engine.immWALSegmentIDs = append(engine.immWALSegmentIDs, engine.activeWALSegmentID)
 
 	// Close the active WAL segment.
 	activeWAL := engine.wal
@@ -411,6 +518,9 @@ func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 	if err := activeWAL.Close(); err != nil {
 		engine.mu.Lock()
 		engine.bgErr = err
+		// Restore activeWAL so it is not permanently nil and can be closed on shutdown
+		engine.wal = activeWAL
+		engine.flushCond.Broadcast()
 		return err
 	}
 
@@ -459,14 +569,22 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 		return nil
 	}
 
-	batchSize, err := validateOperations(operations)
+	batchRawSize, err := validateOperations(operations)
 	if err != nil {
 		return err
+	}
+
+	batchSize := batchRawSize
+	if engine.opts.MaxMemTableSize > 1024 {
+		batchSize += int64(len(operations)) * 64
 	}
 
 	if batchSize > engine.opts.MaxMemTableSize {
 		return fmt.Errorf("batch size %d exceeds MaxMemTableSize %d", batchSize, engine.opts.MaxMemTableSize)
 	}
+
+	engine.writesInFlight.Add(1)
+	defer engine.writesInFlight.Done()
 
 	engine.writeMu.Lock()
 	defer engine.writeMu.Unlock()
@@ -485,8 +603,10 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 
 		// If the batch would overflow the active memtable, freeze it and rotate.
 		if engine.memtable.Size()+batchSize > engine.opts.MaxMemTableSize {
-			if engine.immMemtable != nil {
+			if len(engine.immMemtables) >= engine.opts.MaxImmMemtables {
+				stallStart := time.Now()
 				engine.flushCond.Wait()
+				engine.opts.Metrics.RecordWriteStall(time.Since(stallStart).Milliseconds())
 				continue
 			}
 
@@ -514,6 +634,10 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	}
 
 	activeWAL := engine.wal
+	if activeWAL == nil {
+		engine.mu.Unlock()
+		return fmt.Errorf("active WAL is nil")
+	}
 	engine.mu.Unlock()
 
 	if err := activeWAL.AppendBatch(walRecords); err != nil {
@@ -526,21 +650,24 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 
 	engine.mu.Lock()
 
-	// Guard against a racing Close() or background error while lock was dropped.
+	// Guard against a background error while lock was dropped.
 	if engine.bgErr != nil {
 		engine.mu.Unlock()
 		return engine.bgErr
 	}
-	if engine.isClosing {
-		engine.mu.Unlock()
-		return fmt.Errorf("engine is closing")
-	}
 
 	for _, operation := range operations {
+		var opErr error
 		if operation.Type == OpPut {
-			_ = engine.memtable.Put(operation.Key, operation.Value)
+			opErr = engine.memtable.Put(operation.Key, operation.Value)
 		} else {
-			_ = engine.memtable.Delete(operation.Key)
+			opErr = engine.memtable.Delete(operation.Key)
+		}
+		if opErr != nil {
+			engine.bgErr = fmt.Errorf("failed to apply operation to memtable: %w", opErr)
+			engine.flushCond.Broadcast()
+			engine.mu.Unlock()
+			return engine.bgErr
 		}
 	}
 
@@ -564,6 +691,9 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("engine is closing")
 	}
 
+	engine.iterWg.Add(1)
+	defer engine.iterWg.Done()
+
 	// Search active memtable.
 	value, found, deleted, err := engine.memtable.GetWithTombstone(key)
 	if err != nil {
@@ -578,9 +708,10 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		return value, nil
 	}
 
-	// Search immutable memtable.
-	if engine.immMemtable != nil {
-		value, found, deleted, err := engine.immMemtable.GetWithTombstone(key)
+	// Search queue of immutable memtables (newest to oldest).
+	for i := len(engine.immMemtables) - 1; i >= 0; i-- {
+		imm := engine.immMemtables[i]
+		value, found, deleted, err := imm.GetWithTombstone(key)
 		if err != nil {
 			engine.mu.RUnlock()
 			return nil, err
@@ -594,11 +725,11 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		}
 	}
 
-	level0 := make([]*sstable.Reader, 0, len(engine.levels[0]))
-	level0 = append(level0, engine.levels[0]...)
+	level0 := make([]*sstable.Reader, 0, len(engine.levels[levelZero]))
+	level0 = append(level0, engine.levels[levelZero]...)
 
-	level1 := make([]*sstable.Reader, 0, len(engine.levels[1]))
-	level1 = append(level1, engine.levels[1]...)
+	level1 := make([]*sstable.Reader, 0, len(engine.levels[levelOne]))
+	level1 = append(level1, engine.levels[levelOne]...)
 
 	// Pin all snapshotted readers using the lightweight sstRefsMu while holding RLock.
 	engine.sstRefsMu.Lock()
@@ -612,7 +743,9 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 
 	engine.mu.RUnlock()
 
+	probed := 0
 	defer func() {
+		engine.opts.Metrics.RecordReadAmplification(probed)
 		engine.sstRefsMu.Lock()
 		for _, sstableReader := range level0 {
 			engine.unpinSSTable(sstableReader)
@@ -625,6 +758,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 
 	// Search Level 0 SSTables (overlapping ranges, search newest to oldest).
 	for _, sstableReader := range level0 {
+		probed++
 		if sstableReader.BloomMayContain(key) {
 			value, found, deleted, err := sstableReader.Get(key)
 			if err != nil {
@@ -647,6 +781,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 		if index < len(level1) {
 			sstableReader := level1[index]
 			if bytes.Compare(sstableReader.MinKey(), key) <= 0 {
+				probed++
 				if sstableReader.BloomMayContain(key) {
 					value, found, deleted, err := sstableReader.Get(key)
 					if err != nil {
@@ -674,11 +809,11 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 		return &closedIterator{}
 	}
 
-	level0 := make([]*sstable.Reader, 0, len(engine.levels[0]))
-	level0 = append(level0, engine.levels[0]...)
+	level0 := make([]*sstable.Reader, 0, len(engine.levels[levelZero]))
+	level0 = append(level0, engine.levels[levelZero]...)
 
-	level1 := make([]*sstable.Reader, 0, len(engine.levels[1]))
-	level1 = append(level1, engine.levels[1]...)
+	level1 := make([]*sstable.Reader, 0, len(engine.levels[levelOne]))
+	level1 = append(level1, engine.levels[levelOne]...)
 
 	// Pin all snapshotted readers using the lightweight sstRefsMu.
 	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
@@ -695,9 +830,9 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 
 	// Get active and immutable memtables
 	memtableIter := engine.memtable.NewIteratorAt(prefix)
-	var immMemtableIter *memtable.Iterator
-	if engine.immMemtable != nil {
-		immMemtableIter = engine.immMemtable.NewIteratorAt(prefix)
+	immMemtableIters := make([]*memtable.Iterator, 0, len(engine.immMemtables))
+	for _, imm := range engine.immMemtables {
+		immMemtableIters = append(immMemtableIters, imm.NewIteratorAt(prefix))
 	}
 
 	engine.iterWg.Add(1)
@@ -708,9 +843,9 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	// Active memtable iterator.
 	iterators = append(iterators, newMemAdapter(memtableIter))
 
-	// Immutable memtable iterator.
-	if immMemtableIter != nil {
-		iterators = append(iterators, newMemAdapter(immMemtableIter))
+	// Immutable memtable iterators.
+	for _, immIter := range immMemtableIters {
+		iterators = append(iterators, newMemAdapter(immIter))
 	}
 
 	// Level 0 SSTable iterators (all files, as L0 ranges overlap).
@@ -785,18 +920,21 @@ func (engine *dbEngine) Close() error {
 	engine.isClosing = true
 	engine.mu.Unlock()
 
-	// Wait for all active user iterators to release their pinned readers.
+	// Wait for all in-flight WriteBatch calls to finish.
+	engine.writesInFlight.Wait()
+
+	// Wait for all active user iterators and Gets to release their pinned readers.
 	engine.iterWg.Wait()
 
 	// Trigger a final flush of the active memtable if it holds any data.
 	engine.mu.Lock()
 	if engine.memtable.Size() > 0 && engine.bgErr == nil {
-		for engine.immMemtable != nil {
+		for len(engine.immMemtables) >= engine.opts.MaxImmMemtables {
 			engine.flushCond.Wait()
 		}
 
-		engine.immMemtable = engine.memtable
-		engine.immWALSegmentID = engine.activeWALSegmentID
+		engine.immMemtables = append(engine.immMemtables, engine.memtable)
+		engine.immWALSegmentIDs = append(engine.immWALSegmentIDs, engine.activeWALSegmentID)
 
 		if engine.wal != nil {
 			if err := engine.wal.Close(); err != nil && engine.bgErr == nil {
@@ -853,7 +991,7 @@ func (engine *dbEngine) flushWorker() {
 		case <-engine.flushChan:
 		case <-engine.flushCloseChan:
 			engine.mu.Lock()
-			if engine.immMemtable == nil {
+			if len(engine.immMemtables) == 0 {
 				engine.mu.Unlock()
 				return
 			}
@@ -861,7 +999,7 @@ func (engine *dbEngine) flushWorker() {
 		}
 
 		engine.mu.Lock()
-		if engine.immMemtable == nil {
+		if len(engine.immMemtables) == 0 {
 			if engine.isClosing {
 				engine.mu.Unlock()
 				return
@@ -869,37 +1007,41 @@ func (engine *dbEngine) flushWorker() {
 			engine.mu.Unlock()
 			continue
 		}
-		immutable := engine.immMemtable
-		segmentID := engine.immWALSegmentID
+		immutable := engine.immMemtables[0]
+		segmentID := engine.immWALSegmentIDs[0]
 		engine.mu.Unlock()
 
 		sstableFilename := fmt.Sprintf("%06d.sst", segmentID)
 		sstablePath := filepath.Join(engine.dir, sstableFilename)
 
+		startTime := time.Now()
 		sstableReader, flushErr := writeMemTableToSSTable(sstablePath, immutable)
 
 		engine.mu.Lock()
 		if flushErr != nil {
 			_ = os.Remove(sstablePath)
 			engine.bgErr = flushErr
-			engine.immMemtable = nil
+			engine.immMemtables = engine.immMemtables[1:]
+			engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
 			engine.flushCond.Broadcast()
 			engine.mu.Unlock()
 			return
 		}
 
 		// Prepend the new file to Level 0 (newest first).
-		engine.levels[0] = append([]*sstable.Reader{sstableReader}, engine.levels[0]...)
+		engine.levels[levelZero] = append([]*sstable.Reader{sstableReader}, engine.levels[levelZero]...)
 		engine.sstRefsMu.Lock()
 		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
 		engine.sstRefsMu.Unlock()
 
-		engine.immMemtable = nil
+		engine.immMemtables = engine.immMemtables[1:]
+		engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
 		engine.flushCond.Broadcast()
 
 		manifest := &Manifest{
-			NextSegmentID: engine.nextSegmentID,
-			Levels:        engine.manifestLevels(),
+			NextSegmentID:    engine.nextSegmentID,
+			Levels:           engine.manifestLevels(),
+			FlushedSegmentID: segmentID,
 		}
 		engine.mu.Unlock()
 
@@ -914,9 +1056,18 @@ func (engine *dbEngine) flushWorker() {
 		}
 
 		// Remove the corresponding WAL segment.
-		_ = os.Remove(filepath.Join(engine.walDir, fmt.Sprintf("%06d.wal", segmentID)))
+		walPath := filepath.Join(engine.walDir, fmt.Sprintf("%06d.wal", segmentID))
+		if err := os.Remove(walPath); err != nil {
+			slog.Debug("failed to remove flushed WAL file (might be open on Windows)", "segment_id", segmentID, "error", err)
+		}
 
-		triggerCompaction := len(engine.levels[0]) >= engine.opts.CompactionThreshold
+		var bytesWritten int64
+		if fi, err := os.Stat(sstablePath); err == nil {
+			bytesWritten = fi.Size()
+		}
+		engine.opts.Metrics.RecordFlush(time.Since(startTime).Milliseconds(), bytesWritten)
+
+		triggerCompaction := len(engine.levels[levelZero]) >= engine.opts.CompactionThreshold
 		engine.mu.Unlock()
 
 		if triggerCompaction {
@@ -927,7 +1078,7 @@ func (engine *dbEngine) flushWorker() {
 		}
 
 		engine.mu.Lock()
-		isClosingNow := engine.isClosing && engine.immMemtable == nil
+		isClosingNow := engine.isClosing && len(engine.immMemtables) == 0
 		engine.mu.Unlock()
 		if isClosingNow {
 			return
@@ -944,7 +1095,7 @@ func (engine *dbEngine) compactionWorker() {
 		case <-engine.compactChan:
 		case <-engine.compactCloseChan:
 			engine.mu.Lock()
-			shouldCompact := !engine.isCompacting && len(engine.levels[0]) >= engine.opts.CompactionThreshold
+			shouldCompact := !engine.isCompacting && len(engine.levels[levelZero]) >= engine.opts.CompactionThreshold
 			engine.mu.Unlock()
 			if !shouldCompact {
 				return
@@ -956,7 +1107,7 @@ func (engine *dbEngine) compactionWorker() {
 			engine.mu.Unlock()
 			continue
 		}
-		if len(engine.levels[0]) < engine.opts.CompactionThreshold {
+		if len(engine.levels[levelZero]) < engine.opts.CompactionThreshold {
 			if engine.isClosing {
 				engine.mu.Unlock()
 				return
@@ -983,19 +1134,19 @@ func (engine *dbEngine) compactionWorker() {
 // collectCompactionInputs gathers the files and readers that will be merged.
 // Must be called with lock held.
 func (engine *dbEngine) collectCompactionInputs() (inputFiles []string, fileIDs []int, obsoleteReaders []*sstable.Reader) {
-	capacity := len(engine.levels[0]) + len(engine.levels[1])
+	capacity := len(engine.levels[levelZero]) + len(engine.levels[levelOne])
 	inputFiles = make([]string, 0, capacity)
 	fileIDs = make([]int, 0, capacity)
 	obsoleteReaders = make([]*sstable.Reader, 0, capacity)
 
-	for _, sstableReader := range engine.levels[0] {
+	for _, sstableReader := range engine.levels[levelZero] {
 		inputFiles = append(inputFiles, sstableReader.FilePath())
 		var segmentID int
 		_, _ = fmt.Sscanf(filepath.Base(sstableReader.FilePath()), "%d.sst", &segmentID)
 		fileIDs = append(fileIDs, segmentID)
 		obsoleteReaders = append(obsoleteReaders, sstableReader)
 	}
-	for _, sstableReader := range engine.levels[1] {
+	for _, sstableReader := range engine.levels[levelOne] {
 		inputFiles = append(inputFiles, sstableReader.FilePath())
 		var segmentID int
 		_, _ = fmt.Sscanf(filepath.Base(sstableReader.FilePath()), "%d.sst", &segmentID)
@@ -1012,9 +1163,17 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		FileIDs:         fileIDs,
 		OutputDirectory: engine.dir,
 		NextSegmentID:   compactionSegID,
-		IsBottomLevel:   true,
+		IsBottomLevel:   levelOne == numLevels-1,
 	}
 
+	var bytesRead int64
+	for _, path := range inputFiles {
+		if fi, err := os.Stat(path); err == nil {
+			bytesRead += fi.Size()
+		}
+	}
+
+	startTime := time.Now()
 	res, err := compactor.Run(task)
 
 	engine.mu.Lock()
@@ -1044,7 +1203,7 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	// Apply levels update in memory before releasing the lock.
 	// Filter out the compacted files from Level 0 (preserving any concurrent flushes).
 	var newL0 []*sstable.Reader
-	for _, r := range engine.levels[0] {
+	for _, r := range engine.levels[levelZero] {
 		isObsolete := false
 		for _, obs := range obsoleteReaders {
 			if r == obs {
@@ -1056,8 +1215,8 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 			newL0 = append(newL0, r)
 		}
 	}
-	engine.levels[0] = newL0
-	engine.levels[1] = newL1Readers
+	engine.levels[levelZero] = newL0
+	engine.levels[levelOne] = newL1Readers
 
 	// Register the new L1 readers.
 	engine.sstRefsMu.Lock()
@@ -1066,9 +1225,15 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	}
 	engine.sstRefsMu.Unlock()
 
+	// Update nextSegmentID to prevent name collisions
+	if res.NextSegmentID > engine.nextSegmentID {
+		engine.nextSegmentID = res.NextSegmentID
+	}
+
 	manifest := &Manifest{
-		NextSegmentID: engine.nextSegmentID,
-		Levels:        engine.manifestLevels(),
+		NextSegmentID:    engine.nextSegmentID,
+		Levels:           engine.manifestLevels(),
+		FlushedSegmentID: task.NextSegmentID, // Update to the last compacted segment ID
 	}
 	engine.mu.Unlock()
 
@@ -1097,8 +1262,18 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	}
 	engine.sstRefsMu.Unlock()
 
+	engine.opts.Metrics.RecordCompaction(time.Since(startTime).Milliseconds(), bytesRead, int64(res.BytesWritten))
+
 	engine.isCompacting = false
+	triggerCompaction := len(engine.levels[levelZero]) >= engine.opts.CompactionThreshold
 	engine.mu.Unlock()
+
+	if triggerCompaction {
+		select {
+		case engine.compactChan <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -1311,6 +1486,148 @@ func (iterator *mergingIterator) findNext() {
 			return
 		}
 	}
+}
+
+// dbSnapshot implements the Snapshot interface.
+type dbSnapshot struct {
+	engine *dbEngine
+	levels map[int][]*sstable.Reader
+	pinned []*sstable.Reader
+	imm    []*memtable.SkipList
+}
+
+func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
+	if len(key) == 0 {
+		return nil, memtable.ErrEmptyKey
+	}
+
+	// Search queue of immutable memtables (newest to oldest)
+	for i := len(s.imm) - 1; i >= 0; i-- {
+		value, found, deleted, err := s.imm[i].GetWithTombstone(key)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if deleted {
+				return nil, ErrKeyNotFound
+			}
+			return value, nil
+		}
+	}
+
+	level0 := s.levels[levelZero]
+	level1 := s.levels[levelOne]
+
+	// Search Level 0 SSTables
+	for _, sstableReader := range level0 {
+		if sstableReader.BloomMayContain(key) {
+			value, found, deleted, err := sstableReader.Get(key)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				if deleted {
+					return nil, ErrKeyNotFound
+				}
+				return value, nil
+			}
+		}
+	}
+
+	// Search Level 1 SSTables
+	if len(level1) > 0 {
+		index := sort.Search(len(level1), func(i int) bool {
+			return bytes.Compare(level1[i].MaxKey(), key) >= 0
+		})
+		if index < len(level1) {
+			sstableReader := level1[index]
+			if bytes.Compare(sstableReader.MinKey(), key) <= 0 {
+				if sstableReader.BloomMayContain(key) {
+					value, found, deleted, err := sstableReader.Get(key)
+					if err != nil {
+						return nil, err
+					}
+					if found {
+						if deleted {
+							return nil, ErrKeyNotFound
+						}
+						return value, nil
+					}
+				}
+			}
+		}
+	}
+
+	return nil, ErrKeyNotFound
+}
+
+func (s *dbSnapshot) Close() {
+	s.engine.sstRefsMu.Lock()
+	for _, sstableReader := range s.pinned {
+		s.engine.unpinSSTable(sstableReader)
+	}
+	s.engine.sstRefsMu.Unlock()
+	s.engine.iterWg.Done()
+}
+
+// Snapshot returns a point-in-time Snapshot of the database.
+func (engine *dbEngine) Snapshot() (Snapshot, error) {
+	engine.writeMu.Lock()
+	defer engine.writeMu.Unlock()
+
+	engine.mu.Lock()
+	if engine.bgErr != nil {
+		engine.mu.Unlock()
+		return nil, engine.bgErr
+	}
+	if engine.isClosing {
+		engine.mu.Unlock()
+		return nil, fmt.Errorf("engine is closing")
+	}
+
+	// Rotate active memtable if it contains any data to freeze its state for snapshot isolation
+	if engine.memtable.Size() > 0 {
+		if err := engine.rotateActiveMemTableAndWAL(); err != nil {
+			engine.mu.Unlock()
+			return nil, err
+		}
+	}
+
+	level0 := make([]*sstable.Reader, 0, len(engine.levels[levelZero]))
+	level0 = append(level0, engine.levels[levelZero]...)
+
+	level1 := make([]*sstable.Reader, 0, len(engine.levels[levelOne]))
+	level1 = append(level1, engine.levels[levelOne]...)
+
+	// Pin all readers
+	engine.sstRefsMu.Lock()
+	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
+	for _, r := range level0 {
+		engine.pinSSTable(r)
+		pinned = append(pinned, r)
+	}
+	for _, r := range level1 {
+		engine.pinSSTable(r)
+		pinned = append(pinned, r)
+	}
+	engine.sstRefsMu.Unlock()
+
+	imm := make([]*memtable.SkipList, len(engine.immMemtables))
+	copy(imm, engine.immMemtables)
+
+	engine.iterWg.Add(1)
+	engine.mu.Unlock()
+
+	levels := make(map[int][]*sstable.Reader)
+	levels[levelZero] = level0
+	levels[levelOne] = level1
+
+	return &dbSnapshot{
+		engine: engine,
+		levels: levels,
+		pinned: pinned,
+		imm:    imm,
+	}, nil
 }
 
 // createWALWriter applies WALOptions configuration functionally to initialize a LogWriter.

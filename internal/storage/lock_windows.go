@@ -10,10 +10,16 @@ import (
 
 type windowsLock struct {
 	handle syscall.Handle
+	path   string
 }
 
 func (l *windowsLock) Close() error {
-	return syscall.CloseHandle(l.handle)
+	closeErr := syscall.CloseHandle(l.handle)
+	pathPtr, err := syscall.UTF16PtrFromString(l.path)
+	if err == nil {
+		_ = syscall.DeleteFile(pathPtr)
+	}
+	return closeErr
 }
 
 func lockDirectory(dir string) (interface{ Close() error }, error) {
@@ -36,5 +42,5 @@ func lockDirectory(dir string) (interface{ Close() error }, error) {
 		return nil, fmt.Errorf("failed to acquire exclusive LOCK on directory %s (already in use?): %w", dir, err)
 	}
 
-	return &windowsLock{handle: handle}, nil
+	return &windowsLock{handle: handle, path: lockPath}, nil
 }

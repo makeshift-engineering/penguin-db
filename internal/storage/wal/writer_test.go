@@ -117,7 +117,7 @@ func TestAppend_MultipleRecords_AllWritten(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if _, ok := mem.puts["k2"]; !ok {
@@ -149,7 +149,7 @@ func TestAppend_RecordRoundtrip_ViaReplay(t *testing.T) {
 	w.Close()
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["penguindb"]) != "rocks" {
@@ -473,7 +473,7 @@ func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	for i, k := range keys {
@@ -539,7 +539,7 @@ func TestClose_SyncsDataToDisk(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["durable"]) != "yes" {
@@ -810,7 +810,7 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 
 	// Verify that all successfully appended concurrent records are recoverable.
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 
@@ -860,7 +860,7 @@ func TestBatchWorker_ExitsCleanly_WhenChannelClosed(t *testing.T) {
 
 	// Confirm the data is durable.
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["alive"]) != "yes" {
@@ -1046,7 +1046,7 @@ func TestAppendBatch(t *testing.T) {
 
 	// Verify durability with Replay
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["bk1"]) != "bv1" {

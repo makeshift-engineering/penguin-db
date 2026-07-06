@@ -88,7 +88,7 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 		}
 	}()
 
-	newFilesCreated, keysWritten, err := performMerge(task, minHeap, config)
+	newFilesCreated, keysWritten, nextSegID, err := performMerge(task, minHeap, config)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +108,7 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 		ObsoleteFiles:   task.InputFiles,
 		BytesWritten:    totalBytesWritten,
 		KeysWritten:     keysWritten,
+		NextSegmentID:   nextSegID,
 	}, nil
 }
 
@@ -214,7 +215,7 @@ func (s *compactionState) finalizeWriter() error {
 // entry from the heap, deduplicates identical keys, elides tombstone entries if
 // applicable, and adds the resulting entries to the output SSTable writer.
 // It rolls over and creates multiple SSTable files when size limits are exceeded.
-func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []string, keysWritten uint32, err error) {
+func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []string, keysWritten uint32, nextSegID int, err error) {
 	state := &compactionState{
 		task:          task,
 		config:        config,
@@ -226,6 +227,7 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 		if err != nil {
 			if state.currentWriter != nil {
 				_ = state.currentWriter.Close()
+				state.currentWriter = nil
 			}
 			if state.currentFilePath != "" {
 				_ = os.Remove(state.currentFilePath)
@@ -249,7 +251,7 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 		// which was pushed last and thus resides on top).
 		if lastKey != nil && bytes.Equal(lastKey, node.Key) {
 			if err := fixOrPop(minHeap, node); err != nil {
-				return nil, 0, err
+				return nil, 0, 0, err
 			}
 			continue
 		}
@@ -258,7 +260,7 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 		if task.IsBottomLevel && node.Opcode == sstable.OpcodeDelete {
 			lastKey = append(lastKey[:0], node.Key...)
 			if err := fixOrPop(minHeap, node); err != nil {
-				return nil, 0, err
+				return nil, 0, 0, err
 			}
 			continue
 		}
@@ -266,13 +268,13 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 		// Lazily open the output writer if it is not already initialized.
 		if state.currentWriter == nil {
 			if err := state.openWriter(); err != nil {
-				return nil, 0, fmt.Errorf("failed to create compaction writer: %w", err)
+				return nil, 0, 0, fmt.Errorf("failed to create compaction writer: %w", err)
 			}
 		}
 
 		// Write entry to current SSTable writer.
 		if err := state.currentWriter.Add(node.Key, node.Value, node.Opcode); err != nil {
-			return nil, 0, fmt.Errorf("failed to write to output sstable: %w", err)
+			return nil, 0, 0, fmt.Errorf("failed to write to output sstable: %w", err)
 		}
 
 		keysWritten++
@@ -281,22 +283,22 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 		// Check if the current writer has exceeded the target size threshold.
 		if state.currentWriter.CurrentSize() >= config.MaxSSTableSize {
 			if err := state.finalizeWriter(); err != nil {
-				return nil, 0, fmt.Errorf("failed to roll compaction writer: %w", err)
+				return nil, 0, 0, fmt.Errorf("failed to roll compaction writer: %w", err)
 			}
 		}
 
 		if err := fixOrPop(minHeap, node); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 	}
 
 	// Finalize the last active SSTable.
 	if err := state.finalizeWriter(); err != nil {
-		return nil, 0, fmt.Errorf("failed to finalize compacted sstable: %w", err)
+		return nil, 0, 0, fmt.Errorf("failed to finalize compacted sstable: %w", err)
 	}
 	writerClosed = true
 
-	return state.newFilesCreated, keysWritten, nil
+	return state.newFilesCreated, keysWritten, state.nextSegmentID, nil
 }
 
 // fixOrPop advances the iterator of the root merge node in the heap.

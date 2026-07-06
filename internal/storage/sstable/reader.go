@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync/atomic"
 )
 
 // Reader reads entries from an immutable SSTable file. On Open, the footer,
@@ -20,7 +21,7 @@ type Reader struct {
 	entryCount  uint32
 	fileSize    int64
 	indexOffset uint64
-	closed      bool
+	closed      int32
 }
 
 // Open opens an SSTable file for reading. It reads the footer, validates the
@@ -169,7 +170,7 @@ func parseIndex(data []byte, expectedCount uint32, indexOffset uint64) ([]indexE
 // BloomMayContain returns true if the key might exist in this SSTable
 // according to the Bloom Filter. A false return guarantees the key is absent.
 func (r *Reader) BloomMayContain(key []byte) bool {
-	if r.closed {
+	if atomic.LoadInt32(&r.closed) != 0 {
 		return false
 	}
 	return r.bloomFilter.MayContain(key)
@@ -185,7 +186,7 @@ func (r *Reader) BloomMayContain(key []byte) bool {
 //   - (nil,   false, false, nil) : key not present in this SSTable
 //   - (nil,   false, false, err) : an I/O or corruption error occurred
 func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) {
-	if r.closed {
+	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, false, false, ErrReaderClosed
 	}
 
@@ -225,13 +226,14 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 		return nil, false, false, fmt.Errorf("%w: entry sizes exceed data block boundary", ErrCorrupted)
 	}
 
-	// Read the key from disk and verify it matches.
-	entryKey := make([]byte, keyLen)
-	if keyLen > 0 {
-		if _, err := r.file.ReadAt(entryKey, dataOffset+int64(entryHeaderSize)); err != nil {
-			return nil, false, false, fmt.Errorf("reading data entry key: %w", err)
+	// Read the key and value from disk in a single combined ReadAt.
+	entryData := make([]byte, int(keyLen)+int(valLen))
+	if len(entryData) > 0 {
+		if _, err := r.file.ReadAt(entryData, dataOffset+int64(entryHeaderSize)); err != nil {
+			return nil, false, false, fmt.Errorf("reading data entry key/value: %w", err)
 		}
 	}
+	entryKey := entryData[:keyLen]
 
 	if !bytes.Equal(entryKey, key) {
 		// Index said this offset has our key but the on-disk key differs.
@@ -244,17 +246,7 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 		return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, opcode, dataOffset)
 	}
 
-	// Read the value.
-	if uint64(valLen) > r.indexOffset-uint64(dataOffset)-uint64(entryHeaderSize)-uint64(keyLen) {
-		return nil, false, false, fmt.Errorf("%w: value length %d exceeds available data block space", ErrCorrupted, valLen)
-	}
-	val := make([]byte, valLen)
-	if valLen > 0 {
-		if _, err := r.file.ReadAt(val, dataOffset+int64(entryHeaderSize)+int64(keyLen)); err != nil {
-			return nil, false, false, fmt.Errorf("reading data entry value: %w", err)
-		}
-	}
-
+	val := entryData[keyLen:]
 	return val, true, false, nil
 }
 
@@ -265,10 +257,9 @@ func (r *Reader) EntryCount() uint32 {
 
 // Close closes the underlying file handle. After Close, all read operations will return ErrReaderClosed.
 func (r *Reader) Close() error {
-	if r.closed {
+	if !atomic.CompareAndSwapInt32(&r.closed, 0, 1) {
 		return nil
 	}
-	r.closed = true
 	return r.file.Close()
 }
 
@@ -285,7 +276,9 @@ func (r *Reader) MinKey() []byte {
 	if len(r.index) == 0 {
 		return nil
 	}
-	return r.index[0].key
+	k := make([]byte, len(r.index[0].key))
+	copy(k, r.index[0].key)
+	return k
 }
 
 // MaxKey returns the largest key in this SSTable.
@@ -293,5 +286,7 @@ func (r *Reader) MaxKey() []byte {
 	if len(r.index) == 0 {
 		return nil
 	}
-	return r.index[len(r.index)-1].key
+	k := make([]byte, len(r.index[len(r.index)-1].key))
+	copy(k, r.index[len(r.index)-1].key)
+	return k
 }

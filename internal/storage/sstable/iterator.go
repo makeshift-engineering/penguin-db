@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"sync/atomic"
 )
 
 // Default and maximum constraint limits for iterator buffers and key/value allocations.
@@ -266,7 +267,7 @@ func (iterator *Iterator) Close() error {
 // NewIteratorAt creates a new Iterator positioned at the first key greater than or equal to startKey.
 // It uses binary search on the reader's index to locate the starting file offset.
 func (reader *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*Iterator, error) {
-	if reader.closed {
+	if atomic.LoadInt32(&reader.closed) != 0 {
 		return nil, ErrReaderClosed
 	}
 

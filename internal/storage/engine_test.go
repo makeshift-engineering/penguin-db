@@ -1040,8 +1040,8 @@ func TestEngine_GetImmMemtable_Value(t *testing.T) {
 	// Manually freeze the active memtable into the immutable slot so that the
 	// flush worker hasn't cleared it by the time Get runs.
 	de.mu.Lock()
-	de.immMemtable = de.memtable
-	de.immWALSegmentID = de.activeWALSegmentID
+	de.immMemtables = append(de.immMemtables, de.memtable)
+	de.immWALSegmentIDs = append(de.immWALSegmentIDs, de.activeWALSegmentID)
 	de.memtable = memtable.NewSkipList(de.opts.MaxMemTableSize, de.opts.MemTableMaxLevel)
 	de.mu.Unlock()
 
@@ -1076,8 +1076,8 @@ func TestEngine_GetImmMemtable_Tombstone(t *testing.T) {
 
 	// Freeze active memtable (which contains the tombstone) into the immutable slot.
 	de.mu.Lock()
-	de.immMemtable = de.memtable
-	de.immWALSegmentID = de.activeWALSegmentID
+	de.immMemtables = append(de.immMemtables, de.memtable)
+	de.immWALSegmentIDs = append(de.immWALSegmentIDs, de.activeWALSegmentID)
 	de.memtable = memtable.NewSkipList(de.opts.MaxMemTableSize, de.opts.MemTableMaxLevel)
 	de.mu.Unlock()
 
@@ -1778,13 +1778,14 @@ func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
 	de.mu.Lock()
 	de.bgErr = nil
 	_ = de.memtable.Put([]byte("prefill"), make([]byte, 3*1024*1024))
-	de.immMemtable = memtable.NewSkipList(1000, 12)
+	de.immMemtables = append(de.immMemtables, memtable.NewSkipList(1000, 12))
+	de.immMemtables = append(de.immMemtables, memtable.NewSkipList(1000, 12))
 	de.mu.Unlock()
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		de.mu.Lock()
-		de.immMemtable = nil
+		de.immMemtables = nil
 		de.flushCond.Broadcast()
 		de.mu.Unlock()
 	}()
@@ -2085,4 +2086,125 @@ func TestEngine_FlushWorker_ManifestFailure(t *testing.T) {
 	}
 
 	_ = engine.Close()
+}
+
+// TestEngine_ManifestBackupFallback verifies that NewEngine successfully boots
+// from manifest.backup.json when manifest.json is corrupted.
+func TestEngine_ManifestBackupFallback(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+
+	// 1. Create engine and write a few keys to populate manifest
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	_ = engine.Put([]byte("key1"), []byte("value1"))
+	_ = engine.Close()
+
+	// Verify backup manifest was created
+	backupPath := filepath.Join(dir, "manifest.backup.json")
+	if _, err := os.Stat(backupPath); err != nil {
+		t.Fatalf("expected backup manifest file to exist: %v", err)
+	}
+
+	// 2. Corrupt manifest.json with junk bytes
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, []byte("{invalid json}"), 0644); err != nil {
+		t.Fatalf("failed to corrupt manifest: %v", err)
+	}
+
+	// 3. NewEngine should load from backup and boot successfully
+	engine, err = NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("expected NewEngine to load backup and succeed: %v", err)
+	}
+	_ = engine.Close()
+}
+
+// TestEngine_SnapshotIsolation verifies Snapshot isolation semantics.
+func TestEngine_SnapshotIsolation(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	_ = engine.Put([]byte("key1"), []byte("initial"))
+
+	// Create snapshot
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	defer snap.Close()
+
+	// Modify key after snapshot
+	_ = engine.Put([]byte("key1"), []byte("modified"))
+	_ = engine.Put([]byte("key2"), []byte("new-key"))
+
+	// Query snapshot
+	val1, err := snap.Get([]byte("key1"))
+	if err != nil || !bytes.Equal(val1, []byte("initial")) {
+		t.Errorf("expected initial value from snapshot, got %q, err=%v", val1, err)
+	}
+
+	_, err = snap.Get([]byte("key2"))
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("expected ErrKeyNotFound for key2 from snapshot, got %v", err)
+	}
+
+	// Query live engine
+	val1Live, err := engine.Get([]byte("key1"))
+	if err != nil || !bytes.Equal(val1Live, []byte("modified")) {
+		t.Errorf("expected modified value from live engine, got %q, err=%v", val1Live, err)
+	}
+}
+
+// TestEngine_ClosedDoorConcurrency verifies that Close() blocks and waits
+// for active WriteBatch calls to finish without returning error or crashing.
+func TestEngine_ClosedDoorConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Start a goroutine that performs a slow WriteBatch
+	go func() {
+		defer wg.Done()
+		// Write a batch to ensure channel append, memtable write, etc.
+		_ = engine.WriteBatch([]Op{
+			{Type: OpPut, Key: []byte("concurrentKey"), Value: []byte("concurrentValue")},
+		})
+	}()
+
+	// Sleep slightly to let the write enter the pipeline, then close
+	time.Sleep(10 * time.Millisecond)
+
+	if err := engine.Close(); err != nil {
+		t.Errorf("expected Close to succeed concurrently, got %v", err)
+	}
+
+	wg.Wait()
+
+	// Reopen to verify concurrentKey was durably committed
+	engine, err = NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("reopen NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	val, err := engine.Get([]byte("concurrentKey"))
+	if err != nil || !bytes.Equal(val, []byte("concurrentValue")) {
+		t.Errorf("expected concurrentValue from replayed WAL, got %q, err=%v", val, err)
+	}
 }

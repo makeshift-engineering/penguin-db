@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -24,10 +25,10 @@ const (
 	// group-commit batch before writing to disk.
 	MaxBatchSizeBytes int64 = 4 * 1024 * 1024
 
-	// ingestChannelCapacity is the number of in-flight uncommitted tickets that
+	// IngestChannelCapacity is the number of in-flight uncommitted tickets that
 	// can queue in the ingestion channel before callers block. Sized to absorb
 	// burst writes at typical database workloads (~10k concurrent operations).
-	ingestChannelCapacity = 10_000
+	IngestChannelCapacity = 10_000
 )
 
 // commitTicket represents an ingestion task containing serialized record data
@@ -48,6 +49,7 @@ type LogWriter struct {
 	options          Options
 
 	ingestionChannel chan *commitTicket
+	closedChan       chan struct{}
 	stateMutex       sync.RWMutex
 	isClosed         bool
 	terminalErr      error
@@ -76,7 +78,7 @@ func DefaultOptions() Options {
 	return Options{
 		SegmentSizeBytes:      MaxSegmentSizeBytes,
 		BatchSizeBytes:        MaxBatchSizeBytes,
-		IngestChannelCapacity: ingestChannelCapacity,
+		IngestChannelCapacity: IngestChannelCapacity,
 	}
 }
 
@@ -132,6 +134,7 @@ func NewLogWriter(directory string, nextSegmentID int, opts ...Option) (*LogWrit
 		currentSegmentID: nextSegmentID,
 		options:          options,
 		ingestionChannel: make(chan *commitTicket, options.IngestChannelCapacity),
+		closedChan:       make(chan struct{}),
 	}
 
 	if err := writer.rotateActiveFile(); err != nil {
@@ -172,6 +175,15 @@ func (writer *LogWriter) rotateActiveFile() error {
 
 	writer.activeFile = file
 	writer.currentSizeBytes = info.Size()
+
+	if runtime.GOOS != "windows" {
+		d, err := os.Open(writer.directory)
+		if err == nil {
+			_ = d.Sync()
+			_ = d.Close()
+		}
+	}
+
 	return nil
 }
 
@@ -223,11 +235,15 @@ func (writer *LogWriter) AppendBatch(records []*Record) error {
 		writer.stateMutex.RUnlock()
 		return writer.terminalErr
 	}
-
-	writer.ingestionChannel <- ticket
+	closedChan := writer.closedChan
 	writer.stateMutex.RUnlock()
 
-	return <-ticket.resultChan
+	select {
+	case writer.ingestionChannel <- ticket:
+		return <-ticket.resultChan
+	case <-closedChan:
+		return ErrWriterClosed
+	}
 }
 
 // Append writes a single Record into the Write-Ahead Log. It blocks until the
@@ -260,12 +276,15 @@ func (writer *LogWriter) Append(record *Record) error {
 		writer.stateMutex.RUnlock()
 		return writer.terminalErr
 	}
-
-	slog.Debug("caller: enqueuing record into ingestion channel", "frame_size", len(frame))
-	writer.ingestionChannel <- ticket
+	closedChan := writer.closedChan
 	writer.stateMutex.RUnlock()
 
-	return <-ticket.resultChan
+	select {
+	case writer.ingestionChannel <- ticket:
+		return <-ticket.resultChan
+	case <-closedChan:
+		return ErrWriterClosed
+	}
 }
 
 // batchWorker runs in a background goroutine, receiving commit tickets from the
@@ -285,8 +304,19 @@ func (writer *LogWriter) batchWorker() {
 			if leftoverTicket != nil {
 				leftoverTicket.resultChan <- tErr
 			}
-			for ticket := range writer.ingestionChannel {
-				ticket.resultChan <- tErr
+			// Drain any pending tickets without blocking
+			draining := true
+			for draining {
+				select {
+				case ticket, ok := <-writer.ingestionChannel:
+					if !ok {
+						draining = false
+					} else {
+						ticket.resultChan <- tErr
+					}
+				default:
+					draining = false
+				}
 			}
 			break
 		}
@@ -297,7 +327,29 @@ func (writer *LogWriter) batchWorker() {
 			leftoverTicket = nil
 		} else {
 			var ok bool
-			ticket, ok = <-writer.ingestionChannel
+			select {
+			case ticket, ok = <-writer.ingestionChannel:
+				if !ok {
+					break
+				}
+			case <-writer.closedChan:
+				// closedChan was closed, drain remaining non-blockingly and process them
+				draining := true
+				for draining {
+					select {
+					case t, ok := <-writer.ingestionChannel:
+						if ok {
+							commitBatch, writeBuffer, leftoverTicket = writer.gatherBatch(t, commitBatch, writeBuffer)
+							writer.writeAndSyncBatch(commitBatch, writeBuffer)
+						} else {
+							draining = false
+						}
+					default:
+						draining = false
+					}
+				}
+				ok = false
+			}
 			if !ok {
 				break
 			}
@@ -320,7 +372,7 @@ func (writer *LogWriter) Close() error {
 	writer.closeOnce.Do(func() {
 		writer.stateMutex.Lock()
 		writer.isClosed = true
-		close(writer.ingestionChannel)
+		close(writer.closedChan)
 		writer.stateMutex.Unlock()
 
 		writer.workerWaitGroup.Wait()
@@ -386,21 +438,20 @@ func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commi
 	outBatch = append(outBatch, firstTicket)
 	outBuffer = append(outBuffer, firstTicket.frameData...)
 
-	pendingWrites := len(writer.ingestionChannel)
-	for range pendingWrites {
-		ticket, ok := <-writer.ingestionChannel
-		if !ok {
-			break
+	for {
+		select {
+		case ticket, ok := <-writer.ingestionChannel:
+			if !ok {
+				return outBatch, outBuffer, nil
+			}
+			if int64(len(outBuffer)+len(ticket.frameData)) > writer.options.BatchSizeBytes {
+				leftover = ticket
+				return outBatch, outBuffer, leftover
+			}
+			outBatch = append(outBatch, ticket)
+			outBuffer = append(outBuffer, ticket.frameData...)
+		default:
+			return outBatch, outBuffer, nil
 		}
-
-		if int64(len(outBuffer)+len(ticket.frameData)) > writer.options.BatchSizeBytes {
-			leftover = ticket
-			break
-		}
-
-		outBatch = append(outBatch, ticket)
-		outBuffer = append(outBuffer, ticket.frameData...)
 	}
-
-	return outBatch, outBuffer, leftover
 }
