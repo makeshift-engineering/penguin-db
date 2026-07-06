@@ -2,8 +2,6 @@ package utils
 
 import (
 	"testing"
-
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
 )
 
 // TestLookaheadIterator_BasicNextAndPeek tests lookahead iterator basic next and peek.
@@ -316,40 +314,53 @@ func TestLookaheadIterator_WithStrings(t *testing.T) {
 	}
 }
 
-// TestLookaheadIterator_WithLexer tests lookahead iterator with lexer.
+// TestLookaheadIterator_WithLexer tests lookahead iterator with mock token stream.
 func TestLookaheadIterator_WithLexer(t *testing.T) {
-	l := lexer.NewLexer("test", "SELECT * FROM t;")
-	iter := NewLookaheadIterator(func() lexer.Token {
-		return l.NextToken()
+	tokens := []Token{
+		{Type: TOKEN_SELECT, Literal: "SELECT"},
+		{Type: TOKEN_STAR, Literal: "*"},
+		{Type: TOKEN_FROM, Literal: "FROM"},
+		{Type: TOKEN_IDENT, Literal: "t"},
+		{Type: TOKEN_SEMICOLON, Literal: ";"},
+		{Type: TOKEN_EOF, Literal: ""},
+	}
+	i := 0
+	iter := NewLookaheadIterator(func() Token {
+		if i >= len(tokens) {
+			return Token{Type: TOKEN_EOF}
+		}
+		tok := tokens[i]
+		i++
+		return tok
 	})
 
 	// Peek should give SELECT.
 	peeked := iter.Peek()
-	if peeked.Type != lexer.TOKEN_SELECT {
+	if peeked.Type != TOKEN_SELECT {
 		t.Fatalf("Peek() type = %v, want SELECT", peeked.Type)
 	}
 
 	// Next should consume the same SELECT.
 	got := iter.Next()
-	if got.Type != lexer.TOKEN_SELECT {
+	if got.Type != TOKEN_SELECT {
 		t.Fatalf("Next() type = %v, want SELECT", got.Type)
 	}
 
 	// Next → STAR.
 	got = iter.Next()
-	if got.Type != lexer.TOKEN_STAR {
+	if got.Type != TOKEN_STAR {
 		t.Fatalf("Next() type = %v, want STAR", got.Type)
 	}
 
 	// Peek → FROM.
 	peeked = iter.Peek()
-	if peeked.Type != lexer.TOKEN_FROM {
+	if peeked.Type != TOKEN_FROM {
 		t.Fatalf("Peek() type = %v, want FROM", peeked.Type)
 	}
 
 	// ExpectNextValue should match FROM.
-	eq := func(a, b lexer.Token) bool { return a.Type == b.Type }
-	result, ok := iter.ExpectNextValue(lexer.Token{Type: lexer.TOKEN_FROM}, eq)
+	eq := func(a, b Token) bool { return a.Type == b.Type }
+	result, ok := iter.ExpectNextValue(Token{Type: TOKEN_FROM}, eq)
 	if !ok {
 		t.Fatal("expected FROM to match, got ok=false")
 	}
@@ -358,8 +369,8 @@ func TestLookaheadIterator_WithLexer(t *testing.T) {
 	}
 
 	// ExpectNextMatches for an identifier.
-	result, ok = iter.ExpectNextMatches(func(tok lexer.Token) bool {
-		return tok.Type == lexer.TOKEN_IDENT
+	result, ok = iter.ExpectNextMatches(func(tok Token) bool {
+		return tok.Type == TOKEN_IDENT
 	})
 	if !ok {
 		t.Fatal("expected IDENT match, got ok=false")
@@ -370,13 +381,13 @@ func TestLookaheadIterator_WithLexer(t *testing.T) {
 
 	// SEMICOLON.
 	got = iter.Next()
-	if got.Type != lexer.TOKEN_SEMICOLON {
+	if got.Type != TOKEN_SEMICOLON {
 		t.Fatalf("Next() type = %v, want SEMICOLON", got.Type)
 	}
 
 	// EOF.
 	got = iter.Next()
-	if got.Type != lexer.TOKEN_EOF {
+	if got.Type != TOKEN_EOF {
 		t.Fatalf("Next() type = %v, want EOF", got.Type)
 	}
 
@@ -385,24 +396,33 @@ func TestLookaheadIterator_WithLexer(t *testing.T) {
 	}
 }
 
-// TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer tests lookahead iterator expect next value no match does not advance lexer.
+// TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer tests lookahead iterator expect next value no match does not advance.
 func TestLookaheadIterator_ExpectNextValue_NoMatchDoesNotAdvanceLexer(t *testing.T) {
-	l := lexer.NewLexer("test", "SELECT FROM")
-	iter := NewLookaheadIterator(func() lexer.Token {
-		return l.NextToken()
+	tokens := []Token{
+		{Type: TOKEN_SELECT, Literal: "SELECT"},
+		{Type: TOKEN_FROM, Literal: "FROM"},
+	}
+	i := 0
+	iter := NewLookaheadIterator(func() Token {
+		if i >= len(tokens) {
+			return Token{Type: TOKEN_EOF}
+		}
+		tok := tokens[i]
+		i++
+		return tok
 	})
 
-	eq := func(a, b lexer.Token) bool { return a.Type == b.Type }
+	eq := func(a, b Token) bool { return a.Type == b.Type }
 
 	// Try to match FROM, but next is SELECT — should fail.
-	_, ok := iter.ExpectNextValue(lexer.Token{Type: lexer.TOKEN_FROM}, eq)
+	_, ok := iter.ExpectNextValue(Token{Type: TOKEN_FROM}, eq)
 	if ok {
 		t.Fatal("expected ok=false, got ok=true")
 	}
 
 	// SELECT should still be the next token.
 	got := iter.Next()
-	if got.Type != lexer.TOKEN_SELECT {
+	if got.Type != TOKEN_SELECT {
 		t.Fatalf("Next() after failed expect = %v, want SELECT", got.Type)
 	}
 }

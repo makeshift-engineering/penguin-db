@@ -10,14 +10,20 @@ const (
 	TypeBoolean                       // BOOLEAN
 	TypeText                          // TEXT
 	TypeTimestamp                     // TIMESTAMP
+	TypeFloat                         // FLOAT
+	TypeDouble                        // DOUBLE
+	TypeDecimal                       // DECIMAL
 )
 
 // DataType represents a column's SQL data type. VarcharLen is non-nil
-// only when Kind is [TypeVarchar].
+// only when Kind is [TypeVarchar]. DecimalPrec and DecimalScale are non-nil
+// only when Kind is [TypeDecimal].
 type DataType struct {
 	ClauseBase
-	Kind       DataTypeKind
-	VarcharLen *int
+	Kind         DataTypeKind
+	VarcharLen   *int
+	DecimalPrec  *int
+	DecimalScale *int
 }
 
 func (d *DataType) Validate() error {
@@ -30,7 +36,24 @@ func (d *DataType) Validate() error {
 		}
 	} else if d.VarcharLen != nil {
 		return ErrLengthNotSupported
+	}
 
+	if d.Kind == TypeDecimal {
+		if d.DecimalPrec != nil {
+			if *d.DecimalPrec <= 0 {
+				return ErrDecimalPrecisionInvalid
+			}
+		}
+		if d.DecimalScale != nil {
+			if d.DecimalPrec == nil {
+				return ErrDecimalScaleInvalid
+			}
+			if *d.DecimalScale < 0 || *d.DecimalScale > *d.DecimalPrec {
+				return ErrDecimalScaleInvalid
+			}
+		}
+	} else if d.DecimalPrec != nil || d.DecimalScale != nil {
+		return ErrDecimalParamsNotSupported
 	}
 	return nil
 }
@@ -236,8 +259,9 @@ func (s *SelectColumn) Validate() error {
 }
 
 // TableRef represents a table reference in a FROM clause. Either
-// Primary+Joins is used (a named table with optional joins) or Paren is
-// used (a parenthesized sub-reference). These are mutually exclusive.
+// Primary+Joins is used (a named table with optional joins) or Paren+Joins
+// is used (a parenthesized sub-reference with optional trailing joins).
+// Primary and Paren are mutually exclusive.
 type TableRef struct {
 	ClauseBase
 	Primary *TablePrimary
@@ -250,13 +274,14 @@ func (t *TableRef) Validate() error {
 		return ErrInvalidTableRef
 	}
 	if t.Paren != nil {
-		if len(t.Joins) > 0 {
-			return ErrTableRefParenJoins
+		if err := t.Paren.Validate(); err != nil {
+			return err
 		}
-		return t.Paren.Validate()
 	}
-	if err := t.Primary.Validate(); err != nil {
-		return err
+	if t.Primary != nil {
+		if err := t.Primary.Validate(); err != nil {
+			return err
+		}
 	}
 	for _, join := range t.Joins {
 		if join == nil {

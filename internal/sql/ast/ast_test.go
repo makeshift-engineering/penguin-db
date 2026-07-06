@@ -6,20 +6,30 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/lexer"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 var _ ast.Node = (*ast.Program)(nil)
 
-// helpers to build base structs with a span
+// eb builds an ExprBase with the given span for use in table-driven tests.
 func eb(s diagnostic.Span) ast.ExprBase { return ast.ExprBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+
+// cb builds a CondBase with the given span for use in table-driven tests.
 func cb(s diagnostic.Span) ast.CondBase { return ast.CondBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+
+// sb builds a StmtBase with the given span for use in table-driven tests.
 func sb(s diagnostic.Span) ast.StmtBase { return ast.StmtBase{NodeBase: ast.NodeBase{NodeSpan: s}} }
+
+// clb builds a ClauseBase with the given span for use in table-driven tests.
 func clb(s diagnostic.Span) ast.ClauseBase {
 	return ast.ClauseBase{NodeBase: ast.NodeBase{NodeSpan: s}}
 }
+
+// nb builds a NodeBase with the given span for use in table-driven tests.
 func nb(s diagnostic.Span) ast.NodeBase { return ast.NodeBase{NodeSpan: s} }
 
+// TestSpan_ReturnsStoredSpan verifies that the Span() method on every concrete
+// AST node correctly returns the diagnostic.Span stored in its embedded base.
 func TestSpan_ReturnsStoredSpan(t *testing.T) {
 	span := diagnostic.Span{
 		Start: diagnostic.Pos{Line: 1, Col: 1, Offset: 0},
@@ -36,14 +46,14 @@ func TestSpan_ReturnsStoredSpan(t *testing.T) {
 		{"BooleanLiteral", &ast.BooleanLiteral{ExprBase: eb(span), Value: "TRUE"}},
 		{"NullLiteral", &ast.NullLiteral{ExprBase: eb(span)}},
 		{"Identifier", &ast.Identifier{ExprBase: eb(span), Name: "id"}},
-		{"BinaryExpr", &ast.BinaryExpr{ExprBase: eb(span), Op: lexer.TOKEN_PLUS}},
-		{"UnaryExpr", &ast.UnaryExpr{ExprBase: eb(span), Op: lexer.TOKEN_MINUS}},
+		{"BinaryExpr", &ast.BinaryExpr{ExprBase: eb(span), Op: utils.TOKEN_PLUS}},
+		{"UnaryExpr", &ast.UnaryExpr{ExprBase: eb(span), Op: utils.TOKEN_MINUS}},
 		{"ParenExpr", &ast.ParenExpr{ExprBase: eb(span)}},
 		{"FunctionCall", &ast.FunctionCall{ExprBase: eb(span), Name: "COUNT"}},
 
-		{"BinaryCondition", &ast.BinaryCondition{CondBase: cb(span), Op: lexer.TOKEN_AND}},
+		{"BinaryCondition", &ast.BinaryCondition{CondBase: cb(span), Op: utils.TOKEN_AND}},
 		{"NotCondition", &ast.NotCondition{CondBase: cb(span)}},
-		{"ComparisonPredicate", &ast.ComparisonPredicate{CondBase: cb(span), Op: lexer.TOKEN_EQ}},
+		{"ComparisonPredicate", &ast.ComparisonPredicate{CondBase: cb(span), Op: utils.TOKEN_EQ}},
 		{"LikePredicate", &ast.LikePredicate{CondBase: cb(span)}},
 		{"IsNullPredicate", &ast.IsNullPredicate{CondBase: cb(span)}},
 		{"InPredicate", &ast.InPredicate{CondBase: cb(span)}},
@@ -98,6 +108,9 @@ func TestSpan_ReturnsStoredSpan(t *testing.T) {
 	}
 }
 
+// TestValidation exercises the Program-level Validate method, covering
+// valid programs, nil statements, empty statement lists, and recursive
+// validation propagation.
 func TestValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -119,6 +132,22 @@ func TestValidation(t *testing.T) {
 				Statements: []ast.Statement{nil},
 			},
 			wantErr: ast.ErrNilStatement,
+		},
+		{
+			name: "Program empty statements",
+			node: &ast.Program{
+				Statements: []ast.Statement{},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "Program recursive statement error",
+			node: &ast.Program{
+				Statements: []ast.Statement{
+					&ast.CreateDatabaseStmt{Name: ""},
+				},
+			},
+			wantErr: ast.ErrEmptyDatabaseName,
 		},
 	}
 

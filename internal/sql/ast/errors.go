@@ -57,6 +57,15 @@ var (
 	// ErrLengthNotSupported is returned when column length is specified on a non-VARCHAR type.
 	ErrLengthNotSupported = errors.New("length only supported for VARCHAR")
 
+	// ErrDecimalPrecisionInvalid is returned when DECIMAL precision is less than or equal to zero.
+	ErrDecimalPrecisionInvalid = errors.New("DECIMAL precision must be greater than zero")
+
+	// ErrDecimalScaleInvalid is returned when DECIMAL scale is negative or greater than precision.
+	ErrDecimalScaleInvalid = errors.New("DECIMAL scale must be greater than or equal to zero and less than or equal to precision")
+
+	// ErrDecimalParamsNotSupported is returned when decimal parameters are specified on a non-DECIMAL type.
+	ErrDecimalParamsNotSupported = errors.New("precision and scale only supported for DECIMAL")
+
 	// ErrNilColumnType is returned when a column definition has a nil data type.
 	ErrNilColumnType = errors.New("column type cannot be nil")
 
