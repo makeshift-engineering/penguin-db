@@ -350,6 +350,7 @@ func EncodeDecimal(v string) ([]byte, error) {
 
 	var intPart, fracPart string
 	dotIdx := -1
+	hasDigit := false
 	for i := 0; i < len(v); i++ {
 		if v[i] == '.' {
 			if dotIdx != -1 {
@@ -358,7 +359,13 @@ func EncodeDecimal(v string) ([]byte, error) {
 			dotIdx = i
 		} else if v[i] < '0' || v[i] > '9' {
 			return nil, ErrInvalidDecimal // invalid char
+		} else {
+			hasDigit = true
 		}
+	}
+
+	if !hasDigit {
+		return nil, ErrInvalidDecimal
 	}
 
 	if dotIdx == -1 {

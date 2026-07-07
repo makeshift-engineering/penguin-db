@@ -839,6 +839,9 @@ func TestEncodeDecimal_Errors(t *testing.T) {
 	}{
 		{"empty", "", ErrInvalidDecimal},
 		{"only_sign", "-", ErrInvalidDecimal},
+		{"dot_only", ".", ErrInvalidDecimal},
+		{"dot_only_negative", "-.", ErrInvalidDecimal},
+		{"dot_only_positive", "+.", ErrInvalidDecimal},
 		{"multiple_dots", "1.2.3", ErrInvalidDecimal},
 		{"invalid_chars", "12a.45", ErrInvalidDecimal},
 		{"too_large_int", tooLargeInt, ErrDecimalTooLarge},
