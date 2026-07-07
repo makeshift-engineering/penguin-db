@@ -54,6 +54,9 @@ func EncodeFloat32(v float32) (b []byte, err error) {
 	if math.IsNaN(float64(v)) {
 		return nil, ErrNaNNotAllowed
 	}
+	if v == 0 {
+		v = 0.0 // Normalize -0.0 to 0.0
+	}
 	u := math.Float32bits(v)
 	if (u & 0x80000000) != 0 {
 		u ^= 0xFFFFFFFF
@@ -87,6 +90,9 @@ func DecodeFloat32(b []byte) (v float32) {
 func EncodeFloat64(v float64) (b []byte, err error) {
 	if math.IsNaN(v) {
 		return nil, ErrNaNNotAllowed
+	}
+	if v == 0 {
+		v = 0.0 // Normalize -0.0 to 0.0
 	}
 	u := math.Float64bits(v)
 	if (u & 0x8000000000000000) != 0 {

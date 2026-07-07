@@ -168,12 +168,18 @@ func TestEncodeFloat32_SortOrder(t *testing.T) {
 		-math.MaxFloat32,
 		-1.0,
 		-math.SmallestNonzeroFloat32,
-		float32(math.Copysign(0, -1)), // -0
 		0.0,
 		math.SmallestNonzeroFloat32,
 		1.0,
 		math.MaxFloat32,
 		float32(math.Inf(1)),
+	}
+
+	// Verify -0.0 and 0.0 encode to the exact same bytes.
+	encNegZero, _ := EncodeFloat32(float32(math.Copysign(0, -1)))
+	encZero, _ := EncodeFloat32(0.0)
+	if !bytes.Equal(encNegZero, encZero) {
+		t.Errorf("expected -0.0 and 0.0 to encode identically")
 	}
 	for i := 0; i < len(ordered)-1; i++ {
 		a, _ := EncodeFloat32(ordered[i])
@@ -250,12 +256,18 @@ func TestEncodeFloat64_SortOrder(t *testing.T) {
 		-math.MaxFloat64,
 		-1.0,
 		-math.SmallestNonzeroFloat64,
-		math.Copysign(0, -1), // -0
 		0.0,
 		math.SmallestNonzeroFloat64,
 		1.0,
 		math.MaxFloat64,
 		math.Inf(1),
+	}
+
+	// Verify -0.0 and 0.0 encode to the exact same bytes.
+	encNegZero, _ := EncodeFloat64(math.Copysign(0, -1))
+	encZero, _ := EncodeFloat64(0.0)
+	if !bytes.Equal(encNegZero, encZero) {
+		t.Errorf("expected -0.0 and 0.0 to encode identically")
 	}
 	for i := 0; i < len(ordered)-1; i++ {
 		a, _ := EncodeFloat64(ordered[i])

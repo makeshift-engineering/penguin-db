@@ -69,7 +69,6 @@ func TestEncodeDecodeFloat64(t *testing.T) {
 		-math.MaxFloat64,
 		-1.0,
 		-math.SmallestNonzeroFloat64,
-		math.Copysign(0, -1),
 		0.0,
 		math.SmallestNonzeroFloat64,
 		1.0,
@@ -224,6 +223,50 @@ func TestEncodeDecodeRowKey(t *testing.T) {
 
 	if dDB != db || dTable != table || !bytes.Equal(dPK, pk) {
 		t.Fatalf("DecodeParts mismatch: got %s, %s, %v, want %s, %s, %v", dDB, dTable, dPK, db, table, pk)
+	}
+}
+
+// TestErrNameEmpty validates that all key-encoding functions that accept
+// database or table names correctly reject empty names with ErrNameEmpty.
+func TestErrNameEmpty(t *testing.T) {
+	// EncodeScanPrefix — empty db name
+	if _, err := EncodeScanPrefix("", "t"); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeScanPrefix(emptyDB): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeScanPrefix — empty table name
+	if _, err := EncodeScanPrefix("db", ""); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeScanPrefix(emptyTable): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeRowKey propagates
+	if _, err := EncodeRowKey("", "t", []byte{0x01}); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeRowKey(emptyDB): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeCatalogDBKey
+	if _, err := EncodeCatalogDBKey(""); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeCatalogDBKey(emptyDB): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeCatalogTableKey — empty db
+	if _, err := EncodeCatalogTableKey("", "t"); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeCatalogTableKey(emptyDB): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeCatalogTableKey — empty table
+	if _, err := EncodeCatalogTableKey("db", ""); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeCatalogTableKey(emptyTable): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeCatalogSeqKey — empty db
+	if _, err := EncodeCatalogSeqKey("", "t"); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeCatalogSeqKey(emptyDB): expected ErrNameEmpty, got %v", err)
+	}
+
+	// EncodeCatalogSeqKey — empty table
+	if _, err := EncodeCatalogSeqKey("db", ""); !errors.Is(err, ErrNameEmpty) {
+		t.Errorf("EncodeCatalogSeqKey(emptyTable): expected ErrNameEmpty, got %v", err)
 	}
 }
 

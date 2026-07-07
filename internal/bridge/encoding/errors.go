@@ -24,6 +24,9 @@ var (
 	// length that can be represented in a 2-byte big-endian length prefix (65535 bytes).
 	ErrNameTooLong = errors.New("encoding: name exceeds maximum length of 65535 bytes")
 
+	// ErrNameEmpty is returned when a database or table name has zero length.
+	ErrNameEmpty = errors.New("encoding: name cannot be empty")
+
 	// ErrInvalidPK is returned when the number of types provided for decoding a primary key
 	// does not match the encoded data, or if an unsupported data type is encountered.
 	ErrInvalidPK = errors.New("encoding: invalid primary key type mismatch")
