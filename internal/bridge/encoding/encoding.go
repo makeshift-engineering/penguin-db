@@ -25,10 +25,10 @@ const maxNameLen = math.MaxUint16
 //
 // Row Key Layout:
 //
-//	+-----------+-------------+----------+------+--------------+-------------+------+---------+
-//	| Namespace | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes | 0x00 | PK      |
-//	| (1 byte)  | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   | sep  | (varies)|
-//	+-----------+-------------+----------+------+--------------+-------------+------+---------+
+//	+-----------+-------------+----------+--------------+-------------+---------+
+//	| Namespace | DB Length   | DB Bytes | Table Length | Table Bytes | PK      |
+//	| (1 byte)  | (2 bytes BE)| (n bytes)| (2 bytes BE) | (m bytes)   | (varies)|
+//	+-----------+-------------+----------+--------------+-------------+---------+
 func EncodeRowKey(db, table string, pk []byte) (key []byte, err error) {
 	prefix, err := EncodeScanPrefix(db, table)
 	if err != nil {
@@ -46,10 +46,10 @@ func EncodeRowKey(db, table string, pk []byte) (key []byte, err error) {
 //
 // Scan Prefix Layout:
 //
-//	+-----------+-------------+----------+------+--------------+-------------+------+
-//	| Namespace | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes | 0x00 |
-//	| (1 byte)  | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   | sep  |
-//	+-----------+-------------+----------+------+--------------+-------------+------+
+//	+-----------+-------------+----------+--------------+-------------+
+//	| Namespace | DB Length   | DB Bytes | Table Length | Table Bytes |
+//	| (1 byte)  | (2 bytes BE)| (n bytes)| (2 bytes BE) | (m bytes)   |
+//	+-----------+-------------+----------+--------------+-------------+
 func EncodeScanPrefix(db, table string) (buf []byte, err error) {
 	if len(db) > maxNameLen {
 		return nil, ErrNameTooLong
@@ -64,19 +64,17 @@ func EncodeScanPrefix(db, table string) (buf []byte, err error) {
 	dbBytes := []byte(db)
 	tableBytes := []byte(table)
 
-	// 7 bytes = 1 (namespace) + 2 (db len) + 1 (sep) + 2 (table len) + 1 (sep)
-	buf = make([]byte, 0, 7+len(dbBytes)+len(tableBytes))
+	// 5 bytes = 1 (namespace) + 2 (db len) + 2 (table len)
+	buf = make([]byte, 0, 5+len(dbBytes)+len(tableBytes))
 	buf = append(buf, NamespaceUser)
 
 	var lengthBuf [2]byte
 	binary.BigEndian.PutUint16(lengthBuf[:], uint16(len(dbBytes)))
 	buf = append(buf, lengthBuf[:]...)
 	buf = append(buf, dbBytes...)
-	buf = append(buf, 0x00)
 	binary.BigEndian.PutUint16(lengthBuf[:], uint16(len(tableBytes)))
 	buf = append(buf, lengthBuf[:]...)
 	buf = append(buf, tableBytes...)
-	buf = append(buf, 0x00)
 
 	return buf, nil
 }
@@ -86,9 +84,8 @@ func EncodeScanPrefix(db, table string) (buf []byte, err error) {
 // [EncodeRowKey], parsing the length prefixes to safely extract the
 // variable-length name segments.
 //
-// Returns [ErrMalformedKey] if the namespace prefix is wrong or a required
-// 0x00 separator byte is missing. Returns [ErrKeyTooShort] if the key is
-// truncated before all fields can be read.
+// Returns [ErrMalformedKey] if the namespace prefix is wrong. Returns
+// [ErrKeyTooShort] if the key is truncated before all fields can be read.
 func DecodeParts(key []byte) (db, table string, pk []byte, err error) {
 	if len(key) == 0 {
 		return "", "", nil, ErrKeyTooShort
@@ -110,14 +107,6 @@ func DecodeParts(key []byte) (db, table string, pk []byte, err error) {
 	db = string(key[offset : offset+dbLen])
 	offset += dbLen
 
-	if offset >= len(key) {
-		return "", "", nil, ErrKeyTooShort
-	}
-	if key[offset] != 0x00 {
-		return "", "", nil, ErrMalformedKey
-	}
-	offset++
-
 	if offset+2 > len(key) {
 		return "", "", nil, ErrKeyTooShort
 	}
@@ -128,14 +117,6 @@ func DecodeParts(key []byte) (db, table string, pk []byte, err error) {
 	}
 	table = string(key[offset : offset+tableLen])
 	offset += tableLen
-
-	if offset >= len(key) {
-		return "", "", nil, ErrKeyTooShort
-	}
-	if key[offset] != 0x00 {
-		return "", "", nil, ErrMalformedKey
-	}
-	offset++
 
 	pk = key[offset:]
 	return db, table, pk, nil
@@ -170,10 +151,10 @@ func EncodeCatalogDBKey(db string) (buf []byte, err error) {
 //
 // Catalog Table Key Layout:
 //
-//	+-----------+---------+-------------+----------+------+--------------+-------------+
-//	| Namespace | Tag     | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes |
-//	| (0x00)    | "tbl\0" | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   |
-//	+-----------+---------+-------------+----------+------+--------------+-------------+
+//	+-----------+---------+-------------+----------+--------------+-------------+
+//	| Namespace | Tag     | DB Length   | DB Bytes | Table Length | Table Bytes |
+//	| (0x00)    | "tbl\0" | (2 bytes BE)| (n bytes)| (2 bytes BE) | (m bytes)   |
+//	+-----------+---------+-------------+----------+--------------+-------------+
 func EncodeCatalogTableKey(db, table string) (key []byte, err error) {
 	return encodeCatalogCompoundKey("tbl\x00", db, table)
 }
@@ -183,16 +164,16 @@ func EncodeCatalogTableKey(db, table string) (key []byte, err error) {
 //
 // Catalog Seq Key Layout:
 //
-//	+-----------+---------+-------------+----------+------+--------------+-------------+
-//	| Namespace | Tag     | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes |
-//	| (0x00)    | "seq\0" | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   |
-//	+-----------+---------+-------------+----------+------+--------------+-------------+
+//	+-----------+---------+-------------+----------+--------------+-------------+
+//	| Namespace | Tag     | DB Length   | DB Bytes | Table Length | Table Bytes |
+//	| (0x00)    | "seq\0" | (2 bytes BE)| (n bytes)| (2 bytes BE) | (m bytes)   |
+//	+-----------+---------+-------------+----------+--------------+-------------+
 func EncodeCatalogSeqKey(db, table string) (key []byte, err error) {
 	return encodeCatalogCompoundKey("seq\x00", db, table)
 }
 
 // encodeCatalogCompoundKey builds a system catalog key composed of a namespace
-// byte, a tag prefix, and two length-prefixed name segments separated by 0x00.
+// byte, a tag prefix, and two length-prefixed name segments.
 // This is the shared implementation behind EncodeCatalogTableKey and
 // EncodeCatalogSeqKey.
 func encodeCatalogCompoundKey(tag, db, table string) (buf []byte, err error) {
@@ -205,14 +186,13 @@ func encodeCatalogCompoundKey(tag, db, table string) (buf []byte, err error) {
 	if strings.IndexByte(db, 0) >= 0 || strings.IndexByte(table, 0) >= 0 {
 		return nil, ErrNulInString
 	}
-	buf = make([]byte, 0, 1+len(tag)+2+len(db)+1+2+len(table))
+	buf = make([]byte, 0, 1+len(tag)+2+len(db)+2+len(table))
 	buf = append(buf, NamespaceSystem)
 	buf = append(buf, []byte(tag)...)
 	var lengthBuf [2]byte
 	binary.BigEndian.PutUint16(lengthBuf[:], uint16(len(db)))
 	buf = append(buf, lengthBuf[:]...)
 	buf = append(buf, []byte(db)...)
-	buf = append(buf, 0x00)
 	binary.BigEndian.PutUint16(lengthBuf[:], uint16(len(table)))
 	buf = append(buf, lengthBuf[:]...)
 	buf = append(buf, []byte(table)...)

@@ -326,8 +326,7 @@ func TestErrNulInString(t *testing.T) {
 
 // TestDecodeParts_MalformedKey validates that DecodeParts correctly rejects
 // structurally invalid keys by returning the appropriate sentinel error:
-//   - ErrMalformedKey for wrong namespace prefix, missing db separator, and
-//     missing table separator.
+//   - ErrMalformedKey for wrong namespace prefix.
 //   - ErrKeyTooShort for empty keys and keys truncated after the namespace byte.
 func TestDecodeParts_MalformedKey(t *testing.T) {
 	// Wrong namespace prefix
@@ -337,19 +336,6 @@ func TestDecodeParts_MalformedKey(t *testing.T) {
 		t.Errorf("wrong namespace: expected ErrMalformedKey, got %v", err)
 	}
 
-	// Missing separator after DB segment — put a non-zero byte where 0x00 should be
-	missingSep := []byte{NamespaceUser, 0x00, 0x02, 'd', 'b', 0xFF, 0x00, 0x01, 't', 0x00}
-	_, _, _, err = DecodeParts(missingSep)
-	if !errors.Is(err, ErrMalformedKey) {
-		t.Errorf("missing db separator: expected ErrMalformedKey, got %v", err)
-	}
-
-	// Missing separator after Table segment
-	missingTableSep := []byte{NamespaceUser, 0x00, 0x02, 'd', 'b', 0x00, 0x00, 0x01, 't', 0xFF}
-	_, _, _, err = DecodeParts(missingTableSep)
-	if !errors.Is(err, ErrMalformedKey) {
-		t.Errorf("missing table separator: expected ErrMalformedKey, got %v", err)
-	}
 
 	// Empty key
 	_, _, _, err = DecodeParts([]byte{})
