@@ -352,14 +352,15 @@ func EncodeDecimal(v string) ([]byte, error) {
 	dotIdx := -1
 	hasDigit := false
 	for i := 0; i < len(v); i++ {
-		if v[i] == '.' {
+		switch {
+		case v[i] == '.':
 			if dotIdx != -1 {
 				return nil, ErrInvalidDecimal // multiple dots
 			}
 			dotIdx = i
-		} else if v[i] < '0' || v[i] > '9' {
+		case v[i] < '0' || v[i] > '9':
 			return nil, ErrInvalidDecimal // invalid char
-		} else {
+		default:
 			hasDigit = true
 		}
 	}
