@@ -75,3 +75,49 @@ type ForeignKeyRef struct {
 	ReferencedTable  string `json:"referenced_table"`
 	ReferencedColumn string `json:"referenced_column"`
 }
+
+// Clone returns a deep copy of the DatabaseMeta.
+func (m *DatabaseMeta) Clone() *DatabaseMeta {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	return &clone
+}
+
+// Clone returns a deep copy of the TableMeta.
+func (m *TableMeta) Clone() *TableMeta {
+	if m == nil {
+		return nil
+	}
+	clone := *m
+	if m.Columns != nil {
+		clone.Columns = make([]ColumnMeta, len(m.Columns))
+		for i := range m.Columns {
+			clone.Columns[i] = m.Columns[i].Clone()
+		}
+	}
+	if m.PrimaryKey != nil {
+		clone.PrimaryKey = make([]string, len(m.PrimaryKey))
+		copy(clone.PrimaryKey, m.PrimaryKey)
+	}
+	return &clone
+}
+
+// Clone returns a deep copy of the ColumnMeta.
+func (m *ColumnMeta) Clone() ColumnMeta {
+	clone := *m
+	if m.VarcharLen != nil {
+		val := *m.VarcharLen
+		clone.VarcharLen = &val
+	}
+	if m.DefaultValue != nil {
+		val := *m.DefaultValue
+		clone.DefaultValue = &val
+	}
+	if m.ForeignKey != nil {
+		val := *m.ForeignKey
+		clone.ForeignKey = &val
+	}
+	return clone
+}

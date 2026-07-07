@@ -129,7 +129,7 @@ func (catalog *Catalog) GetDatabase(db string) (*DatabaseMeta, error) {
 	if !ok {
 		return nil, ErrDatabaseNotFound
 	}
-	return meta, nil
+	return meta.Clone(), nil
 }
 
 // GetTable returns the metadata for a table in the given database.
@@ -146,7 +146,7 @@ func (catalog *Catalog) GetTable(db, table string) (*TableMeta, error) {
 	if !ok {
 		return nil, ErrTableNotFound
 	}
-	return meta, nil
+	return meta.Clone(), nil
 }
 
 // ListTables returns all tables in the given database. Returns
@@ -162,7 +162,7 @@ func (catalog *Catalog) ListTables(db string) ([]*TableMeta, error) {
 	dbTables := catalog.tables[db]
 	result := make([]*TableMeta, 0, len(dbTables))
 	for _, meta := range dbTables {
-		result = append(result, meta)
+		result = append(result, meta.Clone())
 	}
 	return result, nil
 }
@@ -187,7 +187,8 @@ func (catalog *Catalog) ResolveColumn(db, table, col string) (*ColumnMeta, error
 	if found == nil {
 		return nil, ErrColumnNotFound
 	}
-	return found, nil
+	cloned := found.Clone()
+	return &cloned, nil
 }
 
 // PKColumnTypes returns the ordered list of data type kinds for the
@@ -229,7 +230,7 @@ func (catalog *Catalog) ListDatabases() []*DatabaseMeta {
 
 	result := make([]*DatabaseMeta, 0, len(catalog.databases))
 	for _, meta := range catalog.databases {
-		result = append(result, meta)
+		result = append(result, meta.Clone())
 	}
 	return result
 }
