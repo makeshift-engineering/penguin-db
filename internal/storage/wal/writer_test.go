@@ -1207,7 +1207,13 @@ func TestClose_DrainsInFlightBatches_Concurrent(t *testing.T) {
 		t.Fatalf("Replay: %v", err)
 	}
 
-	// Verify that every batch that returned nil error was successfully recovered.
+	// Anchor record must always be present.
+	if _, ok := mem.puts["anchor-key"]; !ok {
+		t.Error("synchronous anchor record was not recovered by Replay")
+	}
+
+	// Verify that every batch that returned nil error was successfully recovered,
+	// and non-nil errors are only expected shutdown errors.
 	for i, e := range errs {
 		if e == nil {
 			key1 := fmt.Sprintf("batch-drain-%04d-1", i)
@@ -1218,6 +1224,8 @@ func TestClose_DrainsInFlightBatches_Concurrent(t *testing.T) {
 			if _, ok := mem.puts[key2]; !ok {
 				t.Errorf("batch key %s returned success but was lost", key2)
 			}
+		} else if !errors.Is(e, ErrWriterClosed) && !strings.Contains(e.Error(), "terminal WAL I/O error") {
+			t.Errorf("AppendBatch[%d] returned unexpected error: %v (expected nil, ErrWriterClosed, or terminal WAL I/O error)", i, e)
 		}
 	}
 }

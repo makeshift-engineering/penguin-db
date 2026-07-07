@@ -212,6 +212,9 @@ func (writer *LogWriter) AppendBatch(records []*Record) error {
 	// returned before any I/O is attempted.
 	var combinedFrameBuffer []byte
 	for i, record := range records {
+		if record == nil {
+			return fmt.Errorf("record at index %d: nil record", i)
+		}
 		if len(record.Key) == 0 {
 			return fmt.Errorf("record at index %d: %w", i, ErrEmptyKey)
 		}
@@ -232,6 +235,8 @@ func (writer *LogWriter) AppendBatch(records []*Record) error {
 		resultChan: make(chan error, 1),
 	}
 
+	// Hold RLock through the enqueue to prevent Close() from signaling
+	// shutdown before this ticket is visible to the worker.
 	writer.stateMutex.RLock()
 	if writer.isClosed {
 		writer.stateMutex.RUnlock()
@@ -241,14 +246,21 @@ func (writer *LogWriter) AppendBatch(records []*Record) error {
 		writer.stateMutex.RUnlock()
 		return writer.terminalErr
 	}
-	closedChan := writer.closedChan
-	writer.stateMutex.RUnlock()
 
 	select {
 	case writer.ingestionChannel <- ticket:
+		writer.stateMutex.RUnlock()
 		return <-ticket.resultChan
-	case <-closedChan:
-		return ErrWriterClosed
+	default:
+		// Channel is full; release lock and block with closedChan fallback.
+		closedChan := writer.closedChan
+		writer.stateMutex.RUnlock()
+		select {
+		case writer.ingestionChannel <- ticket:
+			return <-ticket.resultChan
+		case <-closedChan:
+			return ErrWriterClosed
+		}
 	}
 }
 
@@ -273,6 +285,8 @@ func (writer *LogWriter) Append(record *Record) error {
 		resultChan: make(chan error, 1),
 	}
 
+	// Hold RLock through the enqueue to prevent Close() from signaling
+	// shutdown before this ticket is visible to the worker.
 	writer.stateMutex.RLock()
 	if writer.isClosed {
 		writer.stateMutex.RUnlock()
@@ -282,14 +296,21 @@ func (writer *LogWriter) Append(record *Record) error {
 		writer.stateMutex.RUnlock()
 		return writer.terminalErr
 	}
-	closedChan := writer.closedChan
-	writer.stateMutex.RUnlock()
 
 	select {
 	case writer.ingestionChannel <- ticket:
+		writer.stateMutex.RUnlock()
 		return <-ticket.resultChan
-	case <-closedChan:
-		return ErrWriterClosed
+	default:
+		// Channel is full; release lock and block with closedChan fallback.
+		closedChan := writer.closedChan
+		writer.stateMutex.RUnlock()
+		select {
+		case writer.ingestionChannel <- ticket:
+			return <-ticket.resultChan
+		case <-closedChan:
+			return ErrWriterClosed
+		}
 	}
 }
 

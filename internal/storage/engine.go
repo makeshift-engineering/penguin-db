@@ -164,6 +164,9 @@ type dbEngine struct {
 
 	// nextSegmentID tracks the next unique ID for WAL/SSTable files.
 	nextSegmentID int
+	// flushedSegmentID is the highest WAL segment that has been durably flushed to an SSTable.
+	// It is used as the WAL replay watermark; only updated by flushWorker.
+	flushedSegmentID int
 
 	// flushChan triggers background memtable flushes.
 	flushChan chan struct{}
@@ -259,6 +262,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 		levels:           levels,
 		sstRefs:          sstRefs,
 		nextSegmentID:    manifest.NextSegmentID,
+		flushedSegmentID: manifest.FlushedSegmentID,
 		flushChan:        make(chan struct{}, 1),
 		flushCloseChan:   make(chan struct{}),
 		compactChan:      make(chan struct{}, 1),
@@ -373,6 +377,7 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 
 		manifest.NextSegmentID = engine.nextSegmentID
 		manifest.FlushedSegmentID = highestWALSegmentID
+		engine.flushedSegmentID = highestWALSegmentID
 		if err := writeManifest(engine.dir, manifest); err != nil {
 			_ = sstableReader.Close()
 			_ = os.Remove(sstablePath)
@@ -746,10 +751,13 @@ func (engine *dbEngine) Scan(prefix []byte) (Iterator, error) {
 	level1 := make([]*sstable.Reader, 0, len(engine.levels[levelOne]))
 	level1 = append(level1, engine.levels[levelOne]...)
 
-	// Get active and immutable memtables
+	// Build memtable list newest-to-oldest so the merge iterator's first-match
+	// tie-break correctly resolves duplicate keys to the most recent write.
 	memtables := make([]*memtable.SkipList, 0, 1+len(engine.immMemtables))
 	memtables = append(memtables, engine.memtable)
-	memtables = append(memtables, engine.immMemtables...)
+	for i := len(engine.immMemtables) - 1; i >= 0; i-- {
+		memtables = append(memtables, engine.immMemtables[i])
+	}
 	engine.mu.RUnlock()
 
 	return engine.scanInternal(prefix, level0, level1, memtables), nil
@@ -823,6 +831,12 @@ func (engine *dbEngine) Close() error {
 			_ = sstableReader.Close()
 		}
 	}
+
+	engine.sstRefsMu.Lock()
+	for sstableReader := range engine.sstRefs {
+		_ = sstableReader.Close()
+	}
+	engine.sstRefsMu.Unlock()
 
 	return engine.bgErr
 }
@@ -980,6 +994,8 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 	pinned := engine.pinReaders(level0, level1)
 
 	// Get iterators for all memtables — memtable.Iterator directly satisfies internalIterator.
+	// Callers must pass memtables in newest-to-oldest order so the merge
+	// iterator's first-match tie-break correctly resolves duplicate keys.
 	var iterators []internalIterator
 	for _, m := range memtables {
 		iterators = append(iterators, m.NewIteratorAt(prefix))

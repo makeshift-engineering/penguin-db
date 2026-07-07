@@ -820,4 +820,3 @@ func TestSkipList_Extensions(t *testing.T) {
 		t.Error("expected invalid iterator for startKey after all keys")
 	}
 }
-

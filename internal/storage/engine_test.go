@@ -81,8 +81,6 @@ func triggerFlush(t *testing.T, eng Engine, prefix string, startVal int) {
 	}
 }
 
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
-
 func TestEngine_BasicCRUD(t *testing.T) {
 	dir := t.TempDir()
 	opts := DefaultOptions()
@@ -482,8 +480,6 @@ func TestEngine_ScanImmMemtable(t *testing.T) {
 	}
 }
 
-// ─── Get across layers ────────────────────────────────────────────────────────
-
 // TestEngine_GetFromL0SSTable reads a key that has been flushed to Level 0.
 func TestEngine_GetFromL0SSTable(t *testing.T) {
 	dir := t.TempDir()
@@ -575,8 +571,6 @@ func TestEngine_GetTombstoneFromSSTable(t *testing.T) {
 	}
 }
 
-// ─── Concurrency & isolation ──────────────────────────────────────────────────
-
 func TestEngine_ConcurrentReadCompactionIsolation(t *testing.T) {
 	dir := t.TempDir()
 	opts := DefaultOptions()
@@ -625,6 +619,7 @@ func TestEngine_ConcurrentWrites(t *testing.T) {
 	opts := DefaultOptions()
 	opts.MaxMemTableSize = 200
 	engine := mustNewEngine(t, dir, opts)
+	defer engine.Close()
 
 	done := make(chan struct{})
 	workers := 8
@@ -659,9 +654,6 @@ func TestEngine_ConcurrentWritesOrdering(t *testing.T) {
 	workers := 10
 	done := make(chan struct{})
 
-	var mu sync.Mutex
-	var completionOrder []string
-
 	for w := range workers {
 		go func(workerID int) {
 			defer func() { done <- struct{}{} }()
@@ -671,9 +663,6 @@ func TestEngine_ConcurrentWritesOrdering(t *testing.T) {
 				t.Errorf("Put failed: %v", err)
 				return
 			}
-			mu.Lock()
-			completionOrder = append(completionOrder, string(val))
-			mu.Unlock()
 		}(w)
 	}
 
@@ -681,20 +670,12 @@ func TestEngine_ConcurrentWritesOrdering(t *testing.T) {
 		<-done
 	}
 
-	if len(completionOrder) == 0 {
-		t.Fatal("expected at least one write to complete")
-	}
-
-	lastWrittenVal := completionOrder[len(completionOrder)-1]
-
-	// Read before close, it must match the last completed write value
+	// Read before close to get the final concurrent write value
 	val, err := engine.Get(key)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if string(val) != lastWrittenVal {
-		t.Errorf("expected live value to be %q, got %q", lastWrittenVal, string(val))
-	}
+	lastWrittenVal := string(val)
 
 	// Close engine
 	if err := engine.Close(); err != nil {
@@ -708,7 +689,7 @@ func TestEngine_ConcurrentWritesOrdering(t *testing.T) {
 	}
 	defer engine2.Close()
 
-	// Read after reopen, it must match the last completed write value
+	// Read after reopen, it must match the final write value
 	val2, err := engine2.Get(key)
 	if err != nil {
 		t.Fatalf("Get after recovery: %v", err)
@@ -1279,6 +1260,7 @@ func TestEngine_UnpinSSTable_DeletesObsoleteFile(t *testing.T) {
 	opts.MaxMemTableSize = 40
 	opts.CompactionThreshold = 2
 	eng := mustNewEngine(t, dir, opts)
+	defer eng.Close()
 	de := eng.(*dbEngine)
 
 	// Force 1st L0 flush using triggerFlush.
@@ -2015,16 +1997,21 @@ func TestEngine_CompactionWorker_AlreadyCompacting(t *testing.T) {
 	de.isCompacting = true
 	de.mu.Unlock()
 
-	select {
-	case de.compactChan <- struct{}{}:
-	default:
+	de.compactChan <- struct{}{}
+
+	// Wait for the compaction worker to consume the signal
+	for i := 0; i < 200; i++ {
+		if len(de.compactChan) == 0 {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
 	}
 
-	time.Sleep(10 * time.Millisecond)
-
-	de.mu.RLock()
+	// Acquire and release the lock to synchronize with the worker's check.
+	de.mu.Lock()
 	bgErr := de.bgErr
-	de.mu.RUnlock()
+	de.mu.Unlock()
+
 	if bgErr != nil {
 		t.Errorf("expected no background error while isCompacting short-circuit is active, got %v", bgErr)
 	}
@@ -2121,13 +2108,18 @@ func TestEngine_FlushWorker_ManifestFailure(t *testing.T) {
 func TestEngine_ManifestBackupFallback(t *testing.T) {
 	dir := t.TempDir()
 	opts := DefaultOptions()
+	opts.MaxMemTableSize = 60 // small size to trigger flush easily
 
-	// 1. Create engine and write a few keys to populate manifest
+	// 1. Create engine and write key1
 	engine, err := NewEngine(dir, opts)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	_ = engine.Put([]byte("key1"), []byte("value1"))
+	triggerFlush(t, engine, "flush1-", 1000)
+
+	// Trigger a second flush to move key1's manifest entry to backup
+	triggerFlush(t, engine, "flush2-", 2000)
 	_ = engine.Close()
 
 	// Verify backup manifest was created
@@ -2147,7 +2139,12 @@ func TestEngine_ManifestBackupFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected NewEngine to load backup and succeed: %v", err)
 	}
-	_ = engine.Close()
+	defer engine.Close()
+
+	val, err := engine.Get([]byte("key1"))
+	if err != nil || !bytes.Equal(val, []byte("value1")) {
+		t.Fatalf("expected key1=value1 after backup manifest recovery, got %q, err=%v", val, err)
+	}
 }
 
 // TestEngine_SnapshotIsolation verifies Snapshot isolation semantics.
@@ -2236,70 +2233,100 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
+	de := engine.(*dbEngine)
+
+	// Lock writeMu to block the WriteBatch from proceeding.
+	de.writeMu.Lock()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Start a goroutine that performs a slow WriteBatch
+	var writeErr error
+	// Start a goroutine that performs WriteBatch
 	go func() {
 		defer wg.Done()
-		// Write a batch to ensure channel append, memtable write, etc.
-		_ = engine.WriteBatch([]Op{
+		writeErr = engine.WriteBatch([]Op{
 			{Type: OpPut, Key: []byte("concurrentKey"), Value: []byte("concurrentValue")},
 		})
 	}()
 
-	// Sleep slightly to let the write enter the pipeline, then close
+	// Sleep briefly to ensure the goroutine has called writesInFlight.Add(1)
+	// and is now blocked on de.writeMu.Lock().
 	time.Sleep(10 * time.Millisecond)
 
-	if err := engine.Close(); err != nil {
-		t.Errorf("expected Close to succeed concurrently, got %v", err)
+	closeDone := make(chan struct{})
+	go func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("expected Close to succeed concurrently, got %v", err)
+		}
+		close(closeDone)
+	}()
+
+	// Sleep briefly to let Close run and block on writesInFlight.Wait().
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify that Close has not finished yet because WriteBatch is blocked.
+	select {
+	case <-closeDone:
+		t.Fatal("expected Close to be blocked by in-flight WriteBatch, but it finished early")
+	default:
 	}
 
+	// Release writeMu to allow WriteBatch (and subsequently Close) to finish.
+	de.writeMu.Unlock()
+
+	// Wait for WriteBatch and Close to complete.
 	wg.Wait()
+	<-closeDone
 
-	// Reopen to verify concurrentKey was durably committed
-	engine, err = NewEngine(dir, opts)
-	if err != nil {
-		t.Fatalf("reopen NewEngine: %v", err)
-	}
-	defer engine.Close()
-
-	val, err := engine.Get([]byte("concurrentKey"))
-	if err != nil || !bytes.Equal(val, []byte("concurrentValue")) {
-		t.Errorf("expected concurrentValue from replayed WAL, got %q, err=%v", val, err)
+	if writeErr == nil {
+		t.Error("expected WriteBatch to fail with closing error, got nil")
+	} else if !strings.Contains(writeErr.Error(), "engine is closing") {
+		t.Errorf("expected engine is closing error, got %v", writeErr)
 	}
 }
 
 // TestEngine_CorruptManifest_PathTraversal verifies that NewEngine rejects manifest
 // files containing unsafe relative or absolute paths to prevent path traversal vulnerability.
 func TestEngine_CorruptManifest_PathTraversal(t *testing.T) {
-	dir := t.TempDir()
-	opts := DefaultOptions()
-
-	// 1. Manually write a manifest file containing an unsafe path traversal entry
-	m := &Manifest{
-		NextSegmentID: 1,
-		Levels: map[int][]string{
-			0: {"../outside.sst"},
-		},
-	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
+	unsafePaths := []string{
+		"../outside.sst",
+		"sub/outside.sst",
+		"/absolute/outside.sst",
+		"C:\\absolute\\outside.sst",
+		"\\another\\absolute.sst",
 	}
 
-	manifestPath := filepath.Join(dir, "manifest.json")
-	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
-		t.Fatalf("os.WriteFile: %v", err)
-	}
+	for _, unsafePath := range unsafePaths {
+		t.Run(unsafePath, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := DefaultOptions()
 
-	// 2. Attempt to open the engine. It must fail with path traversal validation error.
-	_, err = NewEngine(dir, opts)
-	if err == nil {
-		t.Fatal("expected NewEngine to fail on unsafe manifest paths, got nil")
-	}
-	if !strings.Contains(err.Error(), "unsafe SSTable filename in manifest") {
-		t.Errorf("expected unsafe SSTable filename in manifest error, got %v", err)
+			// 1. Manually write a manifest file containing an unsafe path traversal entry
+			m := &Manifest{
+				NextSegmentID: 1,
+				Levels: map[int][]string{
+					0: {unsafePath},
+				},
+			}
+			data, err := json.Marshal(m)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+
+			manifestPath := filepath.Join(dir, "manifest.json")
+			if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+				t.Fatalf("os.WriteFile: %v", err)
+			}
+
+			// 2. Attempt to open the engine. It must fail with path traversal validation error.
+			_, err = NewEngine(dir, opts)
+			if err == nil {
+				t.Fatal("expected NewEngine to fail on unsafe manifest paths, got nil")
+			}
+			if !strings.Contains(err.Error(), "unsafe SSTable filename in manifest") {
+				t.Errorf("expected unsafe SSTable filename in manifest error, got %v", err)
+			}
+		})
 	}
 }

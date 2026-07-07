@@ -34,14 +34,19 @@ func loadManifest(dir string) (*Manifest, error) {
 		if os.IsNotExist(err) {
 			// Fallback: try loading manifest from backup if main is missing but backup exists
 			backupPath := filepath.Join(dir, "manifest.backup.json")
-			if backupData, backupErr := os.ReadFile(backupPath); backupErr == nil {
+			backupData, backupErr := os.ReadFile(backupPath)
+			if backupErr == nil {
 				var m Manifest
-				if json.Unmarshal(backupData, &m) == nil {
-					if m.Levels == nil {
-						m.Levels = make(map[int][]string)
-					}
-					return &m, nil
+				if unmarshalErr := json.Unmarshal(backupData, &m); unmarshalErr != nil {
+					return nil, fmt.Errorf("main manifest missing and backup manifest corrupt: %w", unmarshalErr)
 				}
+				if m.Levels == nil {
+					m.Levels = make(map[int][]string)
+				}
+				return &m, nil
+			}
+			if !os.IsNotExist(backupErr) {
+				return nil, fmt.Errorf("main manifest missing and backup manifest unavailable: %w", backupErr)
 			}
 			return newManifest(), nil
 		}

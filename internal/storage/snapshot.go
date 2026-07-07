@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
@@ -23,12 +24,21 @@ type dbSnapshot struct {
 	levels map[int][]*sstable.Reader
 	pinned []*sstable.Reader
 	imm    []*memtable.SkipList
+	mu     sync.Mutex
+	closed bool
 }
 
 func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
 	if len(key) == 0 {
 		return nil, memtable.ErrEmptyKey
 	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("snapshot is closed")
+	}
+	s.mu.Unlock()
 
 	// Search queue of immutable memtables (newest to oldest)
 	for i := len(s.imm) - 1; i >= 0; i-- {
@@ -47,7 +57,6 @@ func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
 	level0 := s.levels[levelZero]
 	level1 := s.levels[levelOne]
 
-	// Use shared SSTable search helper.
 	value, found, deleted, _, err := searchLevels(level0, level1, key)
 	if err != nil {
 		return nil, err
@@ -63,6 +72,13 @@ func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
 }
 
 func (s *dbSnapshot) Scan(prefix []byte) (Iterator, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("snapshot is closed")
+	}
+	s.mu.Unlock()
+
 	s.engine.mu.RLock()
 	if s.engine.isClosing {
 		s.engine.mu.RUnlock()
@@ -76,6 +92,14 @@ func (s *dbSnapshot) Scan(prefix []byte) (Iterator, error) {
 }
 
 func (s *dbSnapshot) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	s.mu.Unlock()
+
 	s.engine.unpinReaders(s.pinned)
 	s.engine.iterWg.Done()
 }
@@ -112,8 +136,12 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 	// Pin all readers
 	pinned := engine.pinReaders(level0, level1)
 
+	// Copy immutable memtables in newest-to-oldest order so the merge
+	// iterator's first-match tie-break correctly resolves duplicate keys.
 	imm := make([]*memtable.SkipList, len(engine.immMemtables))
-	copy(imm, engine.immMemtables)
+	for i, j := 0, len(engine.immMemtables)-1; j >= 0; i, j = i+1, j-1 {
+		imm[i] = engine.immMemtables[j]
+	}
 
 	engine.iterWg.Add(1)
 	engine.mu.Unlock()

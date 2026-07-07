@@ -65,12 +65,13 @@ func (engine *dbEngine) flushWorker() {
 
 		engine.immMemtables = engine.immMemtables[1:]
 		engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
+		engine.flushedSegmentID = segmentID
 		engine.flushCond.Broadcast()
 
 		manifest := &Manifest{
 			NextSegmentID:    engine.nextSegmentID,
 			Levels:           engine.manifestLevels(),
-			FlushedSegmentID: segmentID,
+			FlushedSegmentID: engine.flushedSegmentID,
 		}
 		engine.mu.Unlock()
 
@@ -229,7 +230,7 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		newL1Readers = append(newL1Readers, sstableReader)
 	}
 
-	// Apply levels update in memory before releasing the lock.
+	// Build prospective level slices without mutating engine.levels yet.
 	// Filter out the compacted files from Level 0 (preserving any concurrent flushes).
 	var newL0 []*sstable.Reader
 	for _, r := range engine.levels[levelZero] {
@@ -244,6 +245,51 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 			newL0 = append(newL0, r)
 		}
 	}
+
+	// Update nextSegmentID to prevent name collisions
+	if res.NextSegmentID > engine.nextSegmentID {
+		engine.nextSegmentID = res.NextSegmentID
+	}
+
+	// Build the prospective manifest from the new level slices (without swapping live state).
+	prospectiveLevels := make(map[int][]string)
+	l0Names := make([]string, 0, len(newL0))
+	for _, r := range newL0 {
+		l0Names = append(l0Names, filepath.Base(r.FilePath()))
+	}
+	prospectiveLevels[levelZero] = l0Names
+	l1Names := make([]string, 0, len(newL1Readers))
+	for _, r := range newL1Readers {
+		l1Names = append(l1Names, filepath.Base(r.FilePath()))
+	}
+	prospectiveLevels[levelOne] = l1Names
+
+	manifest := &Manifest{
+		NextSegmentID:    engine.nextSegmentID,
+		Levels:           prospectiveLevels,
+		FlushedSegmentID: engine.flushedSegmentID,
+	}
+	engine.mu.Unlock()
+
+	writeErr := engine.writeManifestDurable(manifest)
+
+	engine.mu.Lock()
+	if writeErr != nil {
+		// Manifest write failed; do NOT swap levels so in-memory state
+		// stays consistent with what is persisted on disk. Clean up
+		// the new L1 readers that were never registered.
+		for _, r := range newL1Readers {
+			_ = r.Close()
+			_ = os.Remove(r.FilePath())
+		}
+		engine.bgErr = fmt.Errorf("compaction failed to write manifest: %w", writeErr)
+		engine.isCompacting = false
+		engine.flushCond.Broadcast()
+		engine.mu.Unlock()
+		return writeErr
+	}
+
+	// Manifest is durable — now commit the level swap atomically.
 	engine.levels[levelZero] = newL0
 	engine.levels[levelOne] = newL1Readers
 
@@ -253,29 +299,6 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
 	}
 	engine.sstRefsMu.Unlock()
-
-	// Update nextSegmentID to prevent name collisions
-	if res.NextSegmentID > engine.nextSegmentID {
-		engine.nextSegmentID = res.NextSegmentID
-	}
-
-	manifest := &Manifest{
-		NextSegmentID:    engine.nextSegmentID,
-		Levels:           engine.manifestLevels(),
-		FlushedSegmentID: task.NextSegmentID, // Update to the last compacted segment ID
-	}
-	engine.mu.Unlock()
-
-	writeErr := engine.writeManifestDurable(manifest)
-
-	engine.mu.Lock()
-	if writeErr != nil {
-		engine.bgErr = fmt.Errorf("compaction failed to write manifest: %w", writeErr)
-		engine.isCompacting = false
-		engine.flushCond.Broadcast()
-		engine.mu.Unlock()
-		return writeErr
-	}
 
 	// Mark old readers as obsolete and remove them if unreferenced.
 	engine.sstRefsMu.Lock()
