@@ -210,4 +210,3 @@ func TestApplyRenameTable_PointerIsolation(t *testing.T) {
 	// Check if the original table's Name field is mutated (which currently happens, but we track/log it)
 	t.Logf("Original Table Name after ApplyRenameTable: %s", original.Name)
 }
-

@@ -909,4 +909,3 @@ func TestStringTypes_OversizedError(t *testing.T) {
 		// boundary if we mocked len. Let's just test Varchar and Decimal.
 	})
 }
-

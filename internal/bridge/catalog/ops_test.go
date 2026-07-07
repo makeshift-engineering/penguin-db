@@ -416,4 +416,3 @@ func TestBuildRenameTableOps_ShallowCopy(t *testing.T) {
 		t.Errorf("expected metaCopy.Name to remain unchanged, but got %q", metaCopy.Name)
 	}
 }
-

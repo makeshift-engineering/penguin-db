@@ -566,4 +566,3 @@ func TestCatalog_ListDatabases_Identity(t *testing.T) {
 	isShared := (dbs[0] == db)
 	t.Logf("Catalog ListDatabases pointer sharing status: %v", isShared)
 }
-
