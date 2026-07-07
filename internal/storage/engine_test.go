@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -2233,5 +2234,38 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 	val, err := engine.Get([]byte("concurrentKey"))
 	if err != nil || !bytes.Equal(val, []byte("concurrentValue")) {
 		t.Errorf("expected concurrentValue from replayed WAL, got %q, err=%v", val, err)
+	}
+}
+
+// TestEngine_CorruptManifest_PathTraversal verifies that NewEngine rejects manifest
+// files containing unsafe relative or absolute paths to prevent path traversal vulnerability.
+func TestEngine_CorruptManifest_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+
+	// 1. Manually write a manifest file containing an unsafe path traversal entry
+	m := &Manifest{
+		NextSegmentID: 1,
+		Levels: map[int][]string{
+			0: {"../outside.sst"},
+		},
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	// 2. Attempt to open the engine. It must fail with path traversal validation error.
+	_, err = NewEngine(dir, opts)
+	if err == nil {
+		t.Fatal("expected NewEngine to fail on unsafe manifest paths, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsafe SSTable filename in manifest") {
+		t.Errorf("expected unsafe SSTable filename in manifest error, got %v", err)
 	}
 }

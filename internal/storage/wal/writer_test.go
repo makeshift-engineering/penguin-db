@@ -1129,3 +1129,95 @@ func TestLogWriter_RotationFailure(t *testing.T) {
 		t.Errorf("expected failed to open new WAL segment error, got %v", err)
 	}
 }
+
+// TestClose_DrainsInFlightBatches_Concurrent ensures that records already in
+// AppendBatch calls racing with Close are either committed and recovered, or
+// return ErrWriterClosed / terminal WAL I/O error, but are never silent loss.
+func TestClose_DrainsInFlightBatches_Concurrent(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	anchor := &Record{Opcode: OpcodePut, Key: []byte("anchor-key"), Value: []byte("v")}
+	if err := w.Append(anchor); err != nil {
+		t.Fatalf("synchronous Append (anchor): %v", err)
+	}
+
+	const numBatches = 50
+	var wg sync.WaitGroup
+	errs := make([]error, numBatches)
+	firstSuccess := make(chan struct{})
+	var once sync.Once
+
+	for i := 0; i < numBatches; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			records := []*Record{
+				{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("batch-drain-%04d-1", idx)), Value: []byte("v1")},
+				{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("batch-drain-%04d-2", idx)), Value: []byte("v2")},
+			}
+			err := w.AppendBatch(records)
+			errs[idx] = err
+			if err == nil {
+				once.Do(func() {
+					close(firstSuccess)
+				})
+			}
+		}(i)
+	}
+
+	// Wait for at least one batch to succeed to ensure ingestion is active.
+	select {
+	case <-firstSuccess:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent AppendBatches failed to make any progress before Close")
+	}
+
+	closeErrChan := make(chan error, 1)
+	go func() {
+		closeErrChan <- w.Close()
+	}()
+
+	allAppendsDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allAppendsDone)
+	}()
+
+	select {
+	case <-allAppendsDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("AppendBatch goroutines hung for more than 5 seconds")
+	}
+
+	select {
+	case closeErr := <-closeErrChan:
+		if closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung for more than 5 seconds")
+	}
+
+	mem := newMockRecordConsumer()
+	if _, err := Replay(dir, 0, mem); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	// Verify that every batch that returned nil error was successfully recovered.
+	for i, e := range errs {
+		if e == nil {
+			key1 := fmt.Sprintf("batch-drain-%04d-1", i)
+			key2 := fmt.Sprintf("batch-drain-%04d-2", i)
+			if _, ok := mem.puts[key1]; !ok {
+				t.Errorf("batch key %s returned success but was lost", key1)
+			}
+			if _, ok := mem.puts[key2]; !ok {
+				t.Errorf("batch key %s returned success but was lost", key2)
+			}
+		}
+	}
+}

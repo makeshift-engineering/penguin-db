@@ -291,6 +291,11 @@ func openManifestLevels(dir string, manifestLevels map[int][]string, sstRefs map
 	for level, filenames := range manifestLevels {
 		readers := make([]*sstable.Reader, 0, len(filenames))
 		for _, name := range filenames {
+			if !isSafeBasename(name) {
+				levels[level] = readers
+				closeOpenedLevels(levels)
+				return nil, fmt.Errorf("unsafe SSTable filename in manifest: %q", name)
+			}
 			path := filepath.Join(dir, name)
 			sstableReader, err := sstable.Open(path)
 			if err != nil {
@@ -766,9 +771,6 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	return nil, ErrKeyNotFound
 }
 
-
-
-
 // Scan returns a prefix-filtering iterator sorted by key.
 func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	engine.mu.RLock()
@@ -1017,4 +1019,12 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 	mergingIteratorInstance.findNext()
 
 	return mergingIteratorInstance
+}
+
+// isSafeBasename checks if a filename is a clean, simple basename without path separators or parent directory references.
+func isSafeBasename(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return filepath.Base(name) == name
 }

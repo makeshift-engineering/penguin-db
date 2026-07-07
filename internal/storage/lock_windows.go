@@ -14,12 +14,7 @@ type windowsLock struct {
 }
 
 func (l *windowsLock) Close() error {
-	closeErr := syscall.CloseHandle(l.handle)
-	pathPtr, err := syscall.UTF16PtrFromString(l.path)
-	if err == nil {
-		_ = syscall.DeleteFile(pathPtr)
-	}
-	return closeErr
+	return syscall.CloseHandle(l.handle)
 }
 
 func lockDirectory(dir string) (interface{ Close() error }, error) {

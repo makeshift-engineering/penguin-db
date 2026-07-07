@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -105,7 +106,9 @@ func writeManifest(dir string, m *Manifest) error {
 
 	// Backup existing manifest before overwriting
 	if _, statErr := os.Stat(path); statErr == nil {
-		_ = copyFile(path, backupPath)
+		if err := copyFile(path, backupPath); err != nil {
+			slog.Warn("failed to backup manifest file", "error", err)
+		}
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {

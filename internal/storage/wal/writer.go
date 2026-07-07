@@ -178,9 +178,15 @@ func (writer *LogWriter) rotateActiveFile() error {
 
 	if runtime.GOOS != "windows" {
 		d, err := os.Open(writer.directory)
-		if err == nil {
-			_ = d.Sync()
-			_ = d.Close()
+		if err != nil {
+			slog.Warn("failed to open WAL directory for sync", "directory", writer.directory, "error", err)
+		} else {
+			if err := d.Sync(); err != nil {
+				slog.Warn("failed to sync WAL directory", "directory", writer.directory, "error", err)
+			}
+			if err := d.Close(); err != nil {
+				slog.Warn("failed to close WAL directory after sync", "directory", writer.directory, "error", err)
+			}
 		}
 	}
 
