@@ -2156,10 +2156,38 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 		t.Errorf("expected ErrKeyNotFound for key2 from snapshot, got %v", err)
 	}
 
+	// Verify Scan works on Snapshot under isolation
+	iter := snap.Scan([]byte("key"))
+	var snapshotKeys [][]byte
+	var snapshotVals [][]byte
+	for iter.Valid() {
+		k, v := iter.Next()
+		snapshotKeys = append(snapshotKeys, k)
+		snapshotVals = append(snapshotVals, v)
+	}
+	iter.Close()
+
+	if len(snapshotKeys) != 1 || !bytes.Equal(snapshotKeys[0], []byte("key1")) || !bytes.Equal(snapshotVals[0], []byte("initial")) {
+		t.Errorf("expected only key1=initial in snapshot scan, got keys=%s, vals=%s", snapshotKeys, snapshotVals)
+	}
+
 	// Query live engine
 	val1Live, err := engine.Get([]byte("key1"))
 	if err != nil || !bytes.Equal(val1Live, []byte("modified")) {
 		t.Errorf("expected modified value from live engine, got %q, err=%v", val1Live, err)
+	}
+
+	// Scan live engine (should see both updates)
+	liveIter := engine.Scan([]byte("key"))
+	var liveKeys [][]byte
+	for liveIter.Valid() {
+		k, _ := liveIter.Next()
+		liveKeys = append(liveKeys, k)
+	}
+	liveIter.Close()
+
+	if len(liveKeys) != 2 {
+		t.Errorf("expected 2 keys in live engine scan, got %q", liveKeys)
 	}
 }
 

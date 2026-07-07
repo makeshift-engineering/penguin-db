@@ -13,6 +13,8 @@ import (
 type Snapshot interface {
 	// Get retrieves a value for a given key from the snapshot.
 	Get(key []byte) ([]byte, error)
+	// Scan returns a prefix-filtering iterator sorted by key over the snapshot's point-in-time state.
+	Scan(prefix []byte) Iterator
 	// Close releases the pinned readers of the snapshot.
 	Close()
 }
@@ -88,6 +90,19 @@ func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
 	}
 
 	return nil, ErrKeyNotFound
+}
+
+func (s *dbSnapshot) Scan(prefix []byte) Iterator {
+	s.engine.mu.RLock()
+	if s.engine.isClosing {
+		s.engine.mu.RUnlock()
+		return &closedIterator{}
+	}
+	s.engine.mu.RUnlock()
+
+	level0 := s.levels[levelZero]
+	level1 := s.levels[levelOne]
+	return s.engine.scanInternal(prefix, level0, level1, s.imm)
 }
 
 func (s *dbSnapshot) Close() {

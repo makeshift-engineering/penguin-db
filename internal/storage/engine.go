@@ -766,6 +766,9 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	return nil, ErrKeyNotFound
 }
 
+
+
+
 // Scan returns a prefix-filtering iterator sorted by key.
 func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	engine.mu.RLock()
@@ -780,92 +783,13 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	level1 := make([]*sstable.Reader, 0, len(engine.levels[levelOne]))
 	level1 = append(level1, engine.levels[levelOne]...)
 
-	// Pin all snapshotted readers using the lightweight sstRefsMu.
-	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
-	engine.sstRefsMu.Lock()
-	for _, sstableReader := range level0 {
-		engine.pinSSTable(sstableReader)
-		pinned = append(pinned, sstableReader)
-	}
-	for _, sstableReader := range level1 {
-		engine.pinSSTable(sstableReader)
-		pinned = append(pinned, sstableReader)
-	}
-	engine.sstRefsMu.Unlock()
-
 	// Get active and immutable memtables
-	memtableIter := engine.memtable.NewIteratorAt(prefix)
-	immMemtableIters := make([]*memtable.Iterator, 0, len(engine.immMemtables))
-	for _, imm := range engine.immMemtables {
-		immMemtableIters = append(immMemtableIters, imm.NewIteratorAt(prefix))
-	}
-
-	engine.iterWg.Add(1)
+	memtables := make([]*memtable.SkipList, 0, 1+len(engine.immMemtables))
+	memtables = append(memtables, engine.memtable)
+	memtables = append(memtables, engine.immMemtables...)
 	engine.mu.RUnlock()
 
-	var iterators []internalIterator
-
-	// Active memtable iterator.
-	iterators = append(iterators, newMemAdapter(memtableIter))
-
-	// Immutable memtable iterators.
-	for _, immIter := range immMemtableIters {
-		iterators = append(iterators, newMemAdapter(immIter))
-	}
-
-	// Level 0 SSTable iterators (all files, as L0 ranges overlap).
-	for _, sstableReader := range level0 {
-		sstableIterator, err := sstableReader.NewIteratorAt(prefix)
-		if err == nil {
-			iterators = append(iterators, newSstAdapter(sstableIterator))
-		}
-	}
-
-	// Level 1 SSTable iterators (only files whose key range overlaps the prefix).
-	var prefixLimit []byte
-	if len(prefix) > 0 {
-		prefixLimit = make([]byte, len(prefix))
-		copy(prefixLimit, prefix)
-		overflowed := true
-		for i := len(prefixLimit) - 1; i >= 0; i-- {
-			prefixLimit[i]++
-			if prefixLimit[i] != 0 {
-				overflowed = false
-				break
-			}
-		}
-		if overflowed {
-			prefixLimit = nil
-		}
-	}
-
-	for _, sstableReader := range level1 {
-		overlap := true
-		if len(prefix) > 0 {
-			if bytes.Compare(sstableReader.MaxKey(), prefix) < 0 {
-				overlap = false
-			}
-			if len(prefixLimit) > 0 && bytes.Compare(sstableReader.MinKey(), prefixLimit) >= 0 {
-				overlap = false
-			}
-		}
-		if overlap {
-			sstableIterator, err := sstableReader.NewIteratorAt(prefix)
-			if err == nil {
-				iterators = append(iterators, newSstAdapter(sstableIterator))
-			}
-		}
-	}
-
-	mergingIteratorInstance := &mergingIterator{
-		engine: engine,
-		pinned: pinned,
-		iters:  iterators,
-		prefix: prefix,
-	}
-	mergingIteratorInstance.findNext()
-
-	return mergingIteratorInstance
+	return engine.scanInternal(prefix, level0, level1, memtables)
 }
 
 // Close flushes in-memory contents and safely releases lock and worker resources.
@@ -1014,4 +938,83 @@ func cleanupWALFiles(walDir string, upToSegmentID int) {
 			}
 		}
 	}
+}
+
+// scanInternal creates an Iterator over the given level readers, pinned list, and memtables.
+// Must be called with engine.mu RLock NOT held.
+func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Reader, memtables []*memtable.SkipList) Iterator {
+	// Pin all readers for the iterator's lifetime.
+	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
+	engine.sstRefsMu.Lock()
+	for _, r := range level0 {
+		engine.pinSSTable(r)
+		pinned = append(pinned, r)
+	}
+	for _, r := range level1 {
+		engine.pinSSTable(r)
+		pinned = append(pinned, r)
+	}
+	engine.sstRefsMu.Unlock()
+
+	// Get iterators for all memtables
+	var iterators []internalIterator
+	for _, m := range memtables {
+		iterators = append(iterators, newMemAdapter(m.NewIteratorAt(prefix)))
+	}
+
+	// Level 0 SSTable iterators (all files, as L0 ranges overlap).
+	for _, sstableReader := range level0 {
+		sstableIterator, err := sstableReader.NewIteratorAt(prefix)
+		if err == nil {
+			iterators = append(iterators, newSstAdapter(sstableIterator))
+		}
+	}
+
+	// Level 1 SSTable iterators (only files whose key range overlaps the prefix).
+	var prefixLimit []byte
+	if len(prefix) > 0 {
+		prefixLimit = make([]byte, len(prefix))
+		copy(prefixLimit, prefix)
+		overflowed := true
+		for i := len(prefixLimit) - 1; i >= 0; i-- {
+			prefixLimit[i]++
+			if prefixLimit[i] != 0 {
+				overflowed = false
+				break
+			}
+		}
+		if overflowed {
+			prefixLimit = nil
+		}
+	}
+
+	for _, sstableReader := range level1 {
+		overlap := true
+		if len(prefix) > 0 {
+			if bytes.Compare(sstableReader.MaxKey(), prefix) < 0 {
+				overlap = false
+			}
+			if len(prefixLimit) > 0 && bytes.Compare(sstableReader.MinKey(), prefixLimit) >= 0 {
+				overlap = false
+			}
+		}
+		if overlap {
+			sstableIterator, err := sstableReader.NewIteratorAt(prefix)
+			if err == nil {
+				iterators = append(iterators, newSstAdapter(sstableIterator))
+			}
+		}
+	}
+
+	engine.iterWg.Add(1)
+
+	mergingIteratorInstance := &mergingIterator{
+		engine: engine,
+		pinned: pinned,
+		iters:  iterators,
+		prefix: prefix,
+	}
+	mergingIteratorInstance.findNext()
+
+	return mergingIteratorInstance
 }
