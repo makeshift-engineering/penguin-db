@@ -1063,5 +1063,11 @@ func isSafeBasename(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
 	}
+
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' || name[i] == '\\' {
+			return false
+		}
+	}
 	return filepath.Base(name) == name
 }

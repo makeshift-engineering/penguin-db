@@ -59,9 +59,9 @@ func waitForCompaction(de *dbEngine, maxWait time.Duration) {
 func triggerFlush(t *testing.T, eng Engine, prefix string, startVal int) {
 	t.Helper()
 	de := eng.(*dbEngine)
-	de.mu.RLock()
-	initialL0 := len(de.levels[0])
-	de.mu.RUnlock()
+	de.mu.Lock()
+	targetSegID := de.activeWALSegmentID
+	de.mu.Unlock()
 
 	for valID := startVal; ; valID++ {
 		key := []byte(fmt.Sprintf("%s%05d", prefix, valID))
@@ -70,14 +70,22 @@ func triggerFlush(t *testing.T, eng Engine, prefix string, startVal int) {
 			t.Fatalf("triggerFlush Put failed: %v", err)
 		}
 
-		time.Sleep(10 * time.Millisecond)
-
-		de.mu.RLock()
-		currentL0 := len(de.levels[0])
-		de.mu.RUnlock()
-		if currentL0 > initialL0 {
+		de.mu.Lock()
+		currentSegID := de.activeWALSegmentID
+		de.mu.Unlock()
+		if currentSegID > targetSegID {
 			break
 		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	de.mu.Lock()
+	defer de.mu.Unlock()
+	for de.flushedSegmentID < targetSegID && de.bgErr == nil {
+		de.flushCond.Wait()
+	}
+	if de.bgErr != nil {
+		t.Fatalf("triggerFlush background error: %v", de.bgErr)
 	}
 }
 
@@ -1273,6 +1281,7 @@ func TestEngine_UnpinSSTable_DeletesObsoleteFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
+	defer iter.Close()
 
 	// Trigger second L0 flush to exceed CompactionThreshold=2 and kick off compaction.
 	_ = eng.Put([]byte("del2a"), []byte("very-long-value-z"))
@@ -2256,8 +2265,8 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 
 	closeDone := make(chan struct{})
 	go func() {
-		if err := engine.Close(); err != nil {
-			t.Errorf("expected Close to succeed concurrently, got %v", err)
+		if closeErr := engine.Close(); closeErr != nil {
+			t.Errorf("expected Close to succeed concurrently, got %v", closeErr)
 		}
 		close(closeDone)
 	}()
