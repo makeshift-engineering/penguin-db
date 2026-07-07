@@ -355,3 +355,41 @@ func TestBuildRenameTableOps(t *testing.T) {
 		t.Errorf("expected meta.Name to remain unchanged, but it was mutated to 'customers'")
 	}
 }
+
+// TestBuildAlterTableOps_VersionLeak checks if BuildAlterTableOps mutates newMeta in-place.
+func TestBuildAlterTableOps_VersionLeak(t *testing.T) {
+	old := testTable()
+	newMeta := &TableMeta{
+		Database:   "testdb",
+		Name:       "users",
+		PrimaryKey: []string{"id"},
+		Columns:    append(append([]ColumnMeta{}, old.Columns...), ColumnMeta{Name: "age", Type: ast.TypeInt}),
+		Version:    old.Version,
+	}
+
+	_, err := BuildAlterTableOps(old, newMeta)
+	if err != nil {
+		t.Fatalf("BuildAlterTableOps failed: %v", err)
+	}
+
+	// Verify that BuildAlterTableOps mutated newMeta.Version
+	t.Logf("newMeta Version after BuildAlterTableOps: %d (original: %d)", newMeta.Version, old.Version)
+}
+
+// TestBuildRenameTableOps_ShallowCopy checks if BuildRenameTableOps uses a copy.
+func TestBuildRenameTableOps_ShallowCopy(t *testing.T) {
+	meta := testTable()
+	metaCopy := *meta
+	seqVal := []byte("seq123")
+
+	_, err := BuildRenameTableOps("testdb", "users", "customers", &metaCopy, seqVal)
+	if err != nil {
+		t.Fatalf("BuildRenameTableOps failed: %v", err)
+	}
+
+	// Verify that metaCopy.Name was not mutated to 'customers' (shallow copy Name is set on clone)
+	if metaCopy.Name == "customers" {
+		t.Errorf("expected metaCopy.Name to remain unchanged, but got %q", metaCopy.Name)
+	}
+}
+

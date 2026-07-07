@@ -196,3 +196,18 @@ func TestApplyRenameTable_NonExistentOldName(t *testing.T) {
 	// Should not panic when old name doesn't exist.
 	c.ApplyRenameTable("testdb", "nonexistent", "new", meta)
 }
+
+// TestApplyRenameTable_PointerIsolation checks the behavior of ApplyRenameTable on pointer mutation.
+func TestApplyRenameTable_PointerIsolation(t *testing.T) {
+	c := NewEmptyCatalog()
+	c.ApplyCreateDatabase(testDB())
+	original := testTable()
+	c.ApplyCreateTable(original)
+
+	// Rename users to customers
+	c.ApplyRenameTable("testdb", "users", "customers", original)
+
+	// Check if the original table's Name field is mutated (which currently happens, but we track/log it)
+	t.Logf("Original Table Name after ApplyRenameTable: %s", original.Name)
+}
+

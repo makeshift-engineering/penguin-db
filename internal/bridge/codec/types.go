@@ -130,7 +130,7 @@ func BoolValue(v bool) ColumnValue {
 // Panics if the byte length of v exceeds 4294967295.
 func TextValue(v string) ColumnValue {
 	b := []byte(v)
-	if len(b) > maxTextLen {
+	if int64(len(b)) > int64(maxTextLen) {
 		panic("codec: text value exceeds maximum length of 4294967295 bytes")
 	}
 	raw := make([]byte, sizeTextPrefix+len(b))

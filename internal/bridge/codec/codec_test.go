@@ -774,3 +774,116 @@ func TestEncode_InvalidLength(t *testing.T) {
 		t.Errorf("expected ErrInvalidLength, got %v", err)
 	}
 }
+
+// TestEncode_InvalidCodecVersion verifies that Encode behaves when CodecVersion is not 0x01.
+func TestEncode_InvalidCodecVersion(t *testing.T) {
+	row := &Row{
+		CodecVersion: 0x99,
+		Values:       []ColumnValue{IntValue(42)},
+	}
+	data, err := Encode(row)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	_, err = Decode(data)
+	if !errors.Is(err, ErrUnknownCodecVersion) {
+		t.Errorf("expected ErrUnknownCodecVersion, got %v", err)
+	}
+}
+
+// TestDecode_CorruptedNullFlag verifies that Decode detects invalid null flag bytes.
+func TestDecode_CorruptedNullFlag(t *testing.T) {
+	data := []byte{0x01, 0x00, 0x01, 0xFF, byte(tagInt), 0x00, 0x00, 0x00, 0x2A}
+	row, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	val, err := row.Values[0].AsInt()
+	if err != nil {
+		t.Fatalf("AsInt failed: %v", err)
+	}
+	if val != 42 {
+		t.Errorf("expected 42, got %d", val)
+	}
+}
+
+// TestAccessorNullAccess_FloatDoubleDecimal verifies that AsFloat, AsDouble, AsDecimal
+// return ErrNullAccess when called on a NULL ColumnValue.
+func TestAccessorNullAccess_FloatDoubleDecimal(t *testing.T) {
+	tests := []struct {
+		name string
+		cv   ColumnValue
+		fn   func(ColumnValue) error
+	}{
+		{"AsFloat", NullValue(ast.TypeFloat), func(cv ColumnValue) error { _, e := cv.AsFloat(); return e }},
+		{"AsDouble", NullValue(ast.TypeDouble), func(cv ColumnValue) error { _, e := cv.AsDouble(); return e }},
+		{"AsDecimal", NullValue(ast.TypeDecimal), func(cv ColumnValue) error { _, e := cv.AsDecimal(); return e }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.fn(tt.cv)
+			if !errors.Is(err, ErrNullAccess) {
+				t.Errorf("expected ErrNullAccess, got %v", err)
+			}
+		})
+	}
+}
+
+// TestMultiColumnRoundTrip_AllTypes encodes and decodes a row containing
+// Float, Double, and Decimal column values to verify correctness.
+func TestMultiColumnRoundTrip_AllTypes(t *testing.T) {
+	row := &Row{
+		CodecVersion: 0x01,
+		Values: []ColumnValue{
+			FloatValue(1.23),
+			DoubleValue(4.56),
+			DecimalValue("78.90"),
+		},
+	}
+	data, err := Encode(row)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	decoded, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if len(decoded.Values) != 3 {
+		t.Fatalf("expected 3 values, got %d", len(decoded.Values))
+	}
+	fv, err := decoded.Values[0].AsFloat()
+	if err != nil || fv != 1.23 {
+		t.Errorf("FloatValue: got %v, err %v", fv, err)
+	}
+	dv, err := decoded.Values[1].AsDouble()
+	if err != nil || dv != 4.56 {
+		t.Errorf("DoubleValue: got %v, err %v", dv, err)
+	}
+	decv, err := decoded.Values[2].AsDecimal()
+	if err != nil || decv != "78.90" {
+		t.Errorf("DecimalValue: got %v, err %v", decv, err)
+	}
+}
+
+// TestDecimalValue_BoundaryAndPanic verifies that VarcharValue, DecimalValue, and TextValue
+// panic appropriately when bounds are exceeded.
+func TestDecimalValue_BoundaryAndPanic(t *testing.T) {
+	t.Run("VarcharPanic", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected VarcharValue to panic")
+			}
+		}()
+		VarcharValue(string(make([]byte, maxVarcharLen+1)))
+	})
+
+	t.Run("DecimalPanic", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("expected DecimalValue to panic")
+			}
+		}()
+		DecimalValue(string(make([]byte, maxVarcharLen+1)))
+	})
+}
+

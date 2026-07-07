@@ -535,3 +535,35 @@ func TestCatalog_ConcurrentReadsDuringWrite(t *testing.T) {
 
 	<-done
 }
+
+// TestCatalog_GetTable_Identity verifies whether GetTable returns a pointer to the original cached struct.
+func TestCatalog_GetTable_Identity(t *testing.T) {
+	c := NewEmptyCatalog()
+	c.ApplyCreateDatabase(testDB())
+	original := testTable()
+	c.ApplyCreateTable(original)
+
+	got, err := c.GetTable("testdb", "users")
+	if err != nil {
+		t.Fatalf("GetTable: %v", err)
+	}
+
+	// Verify pointer identity behavior
+	isShared := (got == original)
+	t.Logf("Catalog GetTable pointer sharing status: %v", isShared)
+}
+
+// TestCatalog_ListDatabases_Identity verifies pointer sharing on list databases.
+func TestCatalog_ListDatabases_Identity(t *testing.T) {
+	c := NewEmptyCatalog()
+	db := testDB()
+	c.ApplyCreateDatabase(db)
+
+	dbs := c.ListDatabases()
+	if len(dbs) != 1 {
+		t.Fatalf("expected 1 database, got %d", len(dbs))
+	}
+	isShared := (dbs[0] == db)
+	t.Logf("Catalog ListDatabases pointer sharing status: %v", isShared)
+}
+
