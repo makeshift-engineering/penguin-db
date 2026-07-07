@@ -827,6 +827,11 @@ func TestEncodeDecimal_SortOrder(t *testing.T) {
 // TestEncodeDecimal_Errors verifies that EncodeDecimal returns appropriate errors
 // for invalid input or excessively large numbers.
 func TestEncodeDecimal_Errors(t *testing.T) {
+	tooLargeInt := ""
+	for i := 0; i < 65; i++ {
+		tooLargeInt += "1"
+	}
+
 	cases := []struct {
 		name string
 		val  string
@@ -836,14 +841,9 @@ func TestEncodeDecimal_Errors(t *testing.T) {
 		{"only_sign", "-", ErrInvalidDecimal},
 		{"multiple_dots", "1.2.3", ErrInvalidDecimal},
 		{"invalid_chars", "12a.45", ErrInvalidDecimal},
-		{"too_large_int", "", ErrDecimalTooLarge},
+		{"too_large_int", tooLargeInt, ErrDecimalTooLarge},
+		{"too_large_frac", "0." + tooLargeInt, ErrDecimalTooLarge},
 	}
-
-	tooLargeInt := ""
-	for i := 0; i < 65; i++ { tooLargeInt += "1" }
-	cases[4].val = tooLargeInt
-
-	cases = append(cases, struct{name, val string; want error}{"too_large_frac", "0." + tooLargeInt, ErrDecimalTooLarge})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

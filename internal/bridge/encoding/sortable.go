@@ -331,7 +331,7 @@ const decimalEncodedLen = 1 + decimalPrecision + decimalPrecision
 // EncodeDecimal encodes a decimal string into a fixed-width byte slice
 // that preserves numeric sort order lexicographically.
 func EncodeDecimal(v string) ([]byte, error) {
-	if len(v) == 0 {
+	if v == "" {
 		return nil, ErrInvalidDecimal
 	}
 
@@ -344,7 +344,7 @@ func EncodeDecimal(v string) ([]byte, error) {
 		v = v[1:]
 	}
 
-	if len(v) == 0 {
+	if v == "" {
 		return nil, ErrInvalidDecimal
 	}
 

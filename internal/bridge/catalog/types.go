@@ -77,47 +77,47 @@ type ForeignKeyRef struct {
 }
 
 // Clone returns a deep copy of the DatabaseMeta.
-func (m *DatabaseMeta) Clone() *DatabaseMeta {
-	if m == nil {
+func (dm *DatabaseMeta) Clone() *DatabaseMeta {
+	if dm == nil {
 		return nil
 	}
-	clone := *m
+	clone := *dm
 	return &clone
 }
 
 // Clone returns a deep copy of the TableMeta.
-func (m *TableMeta) Clone() *TableMeta {
-	if m == nil {
+func (tm *TableMeta) Clone() *TableMeta {
+	if tm == nil {
 		return nil
 	}
-	clone := *m
-	if m.Columns != nil {
-		clone.Columns = make([]ColumnMeta, len(m.Columns))
-		for i := range m.Columns {
-			clone.Columns[i] = m.Columns[i].Clone()
+	clone := *tm
+	if tm.Columns != nil {
+		clone.Columns = make([]ColumnMeta, len(tm.Columns))
+		for i := range tm.Columns {
+			clone.Columns[i] = tm.Columns[i].Clone()
 		}
 	}
-	if m.PrimaryKey != nil {
-		clone.PrimaryKey = make([]string, len(m.PrimaryKey))
-		copy(clone.PrimaryKey, m.PrimaryKey)
+	if tm.PrimaryKey != nil {
+		clone.PrimaryKey = make([]string, len(tm.PrimaryKey))
+		copy(clone.PrimaryKey, tm.PrimaryKey)
 	}
 	return &clone
 }
 
 // Clone returns a deep copy of the ColumnMeta.
-func (m *ColumnMeta) Clone() ColumnMeta {
-	clone := *m
-	if m.VarcharLen != nil {
-		val := *m.VarcharLen
-		clone.VarcharLen = &val
+func (cm *ColumnMeta) Clone() ColumnMeta {
+	clone := *cm
+	if cm.VarcharLen != nil {
+		l := *cm.VarcharLen
+		clone.VarcharLen = &l
 	}
-	if m.DefaultValue != nil {
-		val := *m.DefaultValue
-		clone.DefaultValue = &val
+	if cm.DefaultValue != nil {
+		d := *cm.DefaultValue
+		clone.DefaultValue = &d
 	}
-	if m.ForeignKey != nil {
-		val := *m.ForeignKey
-		clone.ForeignKey = &val
+	if cm.ForeignKey != nil {
+		fk := *cm.ForeignKey
+		clone.ForeignKey = &fk
 	}
 	return clone
 }
