@@ -74,6 +74,7 @@ func (catalog *Catalog) ApplyRenameTable(db, oldName, newName string, meta *Tabl
 	if catalog.tables[db] == nil {
 		catalog.tables[db] = make(map[string]*TableMeta)
 	}
-	meta.Name = newName
-	catalog.tables[db][newName] = meta
+	newMeta := meta.Clone()
+	newMeta.Name = newName
+	catalog.tables[db][newName] = newMeta
 }

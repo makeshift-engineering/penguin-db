@@ -33,7 +33,7 @@ func (tm *TableMeta) ActiveColumns() []ColumnMeta {
 	active := make([]ColumnMeta, 0, len(tm.Columns))
 	for _, col := range tm.Columns {
 		if !col.Dropped {
-			active = append(active, col)
+			active = append(active, col.Clone())
 		}
 	}
 	return active
@@ -44,7 +44,8 @@ func (tm *TableMeta) ActiveColumns() []ColumnMeta {
 func (tm *TableMeta) FindColumn(name string) *ColumnMeta {
 	for i := range tm.Columns {
 		if tm.Columns[i].Name == name && !tm.Columns[i].Dropped {
-			return &tm.Columns[i]
+			cloned := tm.Columns[i].Clone()
+			return &cloned
 		}
 	}
 	return nil

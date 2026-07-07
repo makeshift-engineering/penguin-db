@@ -136,26 +136,27 @@ func BuildDropTableOps(db, table string) ([]kv.Op, error) {
 // BuildAlterTableOps validates the schema transition from oldMeta to
 // newMeta and constructs the KV operations to persist the change. The
 // newMeta.Version is set to oldMeta.Version + 1 on success.
-func BuildAlterTableOps(oldMeta, newMeta *TableMeta) ([]kv.Op, error) {
+func BuildAlterTableOps(oldMeta, newMeta *TableMeta) ([]kv.Op, *TableMeta, error) {
 	if err := validateAlter(oldMeta, newMeta); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	newMeta.Version = oldMeta.Version + 1
+	finalMeta := newMeta.Clone()
+	finalMeta.Version = oldMeta.Version + 1
 
-	tableKey, err := encoding.EncodeCatalogTableKey(newMeta.Database, newMeta.Name)
+	tableKey, err := encoding.EncodeCatalogTableKey(finalMeta.Database, finalMeta.Name)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: encoding table key: %w", err)
+		return nil, nil, fmt.Errorf("catalog: encoding table key: %w", err)
 	}
 
-	value, err := encodeTableMeta(newMeta)
+	value, err := encodeTableMeta(finalMeta)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: encoding table meta: %w", err)
+		return nil, nil, fmt.Errorf("catalog: encoding table meta: %w", err)
 	}
 
 	return []kv.Op{
 		{Type: kv.OpPut, Key: tableKey, Value: value},
-	}, nil
+	}, finalMeta, nil
 }
 
 // BuildRenameTableOps constructs the KV operations to atomically rename a
@@ -172,8 +173,8 @@ func BuildRenameTableOps(db, oldName, newName string, meta *TableMeta, seqValue 
 		return nil, fmt.Errorf("catalog: encoding old seq key: %w", err)
 	}
 
-	metaCopy := *meta
-	metaCopy.Name = newName
+	metaClone := meta.Clone()
+	metaClone.Name = newName
 
 	newKey, err := encoding.EncodeCatalogTableKey(db, newName)
 	if err != nil {
@@ -185,7 +186,7 @@ func BuildRenameTableOps(db, oldName, newName string, meta *TableMeta, seqValue 
 		return nil, fmt.Errorf("catalog: encoding new seq key: %w", err)
 	}
 
-	value, err := encodeTableMeta(&metaCopy)
+	value, err := encodeTableMeta(metaClone)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: encoding table meta: %w", err)
 	}
@@ -239,6 +240,9 @@ func validateAlter(oldMeta, newMeta *TableMeta) error {
 		if !existed {
 			// This is a newly added column.
 			if col.NotNull && col.DefaultValue == nil {
+				return ErrUnsupportedAlter
+			}
+			if col.Unique {
 				return ErrUnsupportedAlter
 			}
 			continue

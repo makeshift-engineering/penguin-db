@@ -177,15 +177,15 @@ func TestBuildAlterTableOps_AddNullableColumn(t *testing.T) {
 		Version: old.Version,
 	}
 
-	ops, err := BuildAlterTableOps(old, newMeta)
+	ops, finalMeta, err := BuildAlterTableOps(old, newMeta)
 	if err != nil {
 		t.Fatalf("BuildAlterTableOps: %v", err)
 	}
 	if len(ops) != 1 {
 		t.Fatalf("expected 1 op, got %d", len(ops))
 	}
-	if newMeta.Version != old.Version+1 {
-		t.Errorf("expected version %d, got %d", old.Version+1, newMeta.Version)
+	if finalMeta.Version != old.Version+1 {
+		t.Errorf("expected version %d, got %d", old.Version+1, finalMeta.Version)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestBuildAlterTableOps_AddNotNullWithDefault(t *testing.T) {
 		Version: old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, _, err := BuildAlterTableOps(old, newMeta)
 	if err != nil {
 		t.Fatalf("expected success for NOT NULL with DEFAULT: %v", err)
 	}
@@ -229,7 +229,27 @@ func TestBuildAlterTableOps_AddNotNullWithoutDefault_Rejected(t *testing.T) {
 		Version: old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, _, err := BuildAlterTableOps(old, newMeta)
+	if !errors.Is(err, ErrUnsupportedAlter) {
+		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
+	}
+}
+
+// TestBuildAlterTableOps_AddUniqueColumn_Rejected verifies that adding
+// a UNIQUE column is rejected by BuildAlterTableOps.
+func TestBuildAlterTableOps_AddUniqueColumn_Rejected(t *testing.T) {
+	old := testTable()
+	newMeta := &TableMeta{
+		Database:   "testdb",
+		Name:       "users",
+		PrimaryKey: []string{"id"},
+		Columns: append(append([]ColumnMeta{}, old.Columns...),
+			ColumnMeta{Name: "username", Type: ast.TypeInt, Unique: true},
+		),
+		Version: old.Version,
+	}
+
+	_, _, err := BuildAlterTableOps(old, newMeta)
 	if !errors.Is(err, ErrUnsupportedAlter) {
 		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
 	}
@@ -251,7 +271,7 @@ func TestBuildAlterTableOps_DropColumn(t *testing.T) {
 		Version:    old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, _, err := BuildAlterTableOps(old, newMeta)
 	if err != nil {
 		t.Fatalf("expected drop column to succeed: %v", err)
 	}
@@ -273,7 +293,7 @@ func TestBuildAlterTableOps_DropPKColumn_Rejected(t *testing.T) {
 		Version:    old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, _, err := BuildAlterTableOps(old, newMeta)
 	if !errors.Is(err, ErrCannotDropPKColumn) {
 		t.Errorf("expected ErrCannotDropPKColumn, got %v", err)
 	}
@@ -295,7 +315,7 @@ func TestBuildAlterTableOps_ChangeColumnType_Rejected(t *testing.T) {
 		Version:    old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, _, err := BuildAlterTableOps(old, newMeta)
 	if !errors.Is(err, ErrUnsupportedAlter) {
 		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
 	}
@@ -313,7 +333,7 @@ func TestBuildAlterTableOps_ChangePK_Rejected(t *testing.T) {
 		Version:    old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, _, err := BuildAlterTableOps(old, newMeta)
 	if !errors.Is(err, ErrUnsupportedAlter) {
 		t.Errorf("expected ErrUnsupportedAlter, got %v", err)
 	}
@@ -367,13 +387,17 @@ func TestBuildAlterTableOps_VersionLeak(t *testing.T) {
 		Version:    old.Version,
 	}
 
-	_, err := BuildAlterTableOps(old, newMeta)
+	_, finalMeta, err := BuildAlterTableOps(old, newMeta)
 	if err != nil {
 		t.Fatalf("BuildAlterTableOps failed: %v", err)
 	}
 
-	// Verify that BuildAlterTableOps mutated newMeta.Version
-	t.Logf("newMeta Version after BuildAlterTableOps: %d (original: %d)", newMeta.Version, old.Version)
+	if newMeta.Version != old.Version {
+		t.Errorf("expected newMeta.Version to be unmodified (%d), got %d", old.Version, newMeta.Version)
+	}
+	if finalMeta.Version != old.Version+1 {
+		t.Errorf("expected finalMeta.Version to be incremented to %d, got %d", old.Version+1, finalMeta.Version)
+	}
 }
 
 // TestBuildRenameTableOps_ShallowCopy checks if BuildRenameTableOps uses a copy.
