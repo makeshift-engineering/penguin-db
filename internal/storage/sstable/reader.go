@@ -295,8 +295,8 @@ func (r *Reader) MaxKey() []byte {
 
 // NewIteratorAt creates a new Iterator positioned at the first key greater than or equal to startKey.
 // It uses binary search on the reader's index to locate the starting file offset.
-func (reader *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*Iterator, error) {
-	if atomic.LoadInt32(&reader.closed) != 0 {
+func (r *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*Iterator, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, ErrReaderClosed
 	}
 
@@ -310,18 +310,18 @@ func (reader *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*I
 	}
 
 	var startOffset uint64 = 0
-	if len(startKey) > 0 && len(reader.index) > 0 {
-		i := sort.Search(len(reader.index), func(i int) bool {
-			return bytes.Compare(reader.index[i].key, startKey) >= 0
+	if len(startKey) > 0 && len(r.index) > 0 {
+		i := sort.Search(len(r.index), func(i int) bool {
+			return bytes.Compare(r.index[i].key, startKey) >= 0
 		})
-		if i < len(reader.index) {
-			startOffset = reader.index[i].offset
+		if i < len(r.index) {
+			startOffset = r.index[i].offset
 		} else {
-			startOffset = reader.indexOffset
+			startOffset = r.indexOffset
 		}
 	}
 
-	file, err := os.Open(reader.FilePath())
+	file, err := os.Open(r.FilePath())
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file for iteration: %w", err)
 	}
@@ -343,7 +343,7 @@ func (reader *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*I
 	return &Iterator{
 		file:        file,
 		reader:      bufio.NewReaderSize(file, config.BufferSize),
-		limitOffset: reader.indexOffset,
+		limitOffset: r.indexOffset,
 		currOffset:  startOffset,
 		key:         make([]byte, 0, config.InitialKeyCap),
 		value:       make([]byte, 0, config.InitialValueCap),
