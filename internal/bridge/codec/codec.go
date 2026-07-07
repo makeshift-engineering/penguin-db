@@ -63,7 +63,7 @@ func Encode(row *Row) ([]byte, error) {
 	}
 	buf := make([]byte, 0, headerSize+colCount*10)
 
-	buf = append(buf, row.CodecVersion)
+	buf = append(buf, codecVersion)
 	var countBuf [2]byte
 	binary.BigEndian.PutUint16(countBuf[:], uint16(colCount))
 	buf = append(buf, countBuf[:]...)
@@ -151,6 +151,9 @@ func Decode(data []byte) (*Row, error) {
 		}
 
 		nullFlag := data[offset]
+		if nullFlag != nullFlagNull && nullFlag != nullFlagNotNull {
+			return nil, ErrCorruptedRow
+		}
 		tag := typeTag(data[offset+1])
 		offset += colHeaderSize
 

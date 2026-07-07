@@ -34,4 +34,7 @@ var (
 	// ErrInvalidLength is returned when a column value has a byte length that
 	// does not match the expected size for its fixed-width type.
 	ErrInvalidLength = errors.New("codec: invalid value length for type")
+
+	// ErrCorruptedRow is returned when decoding encounters invalid bytes (e.g. an invalid null flag)
+	ErrCorruptedRow = errors.New("codec: corrupted row data")
 )

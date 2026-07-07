@@ -15,15 +15,16 @@ import (
 type typeTag byte
 
 const (
-	tagInt       typeTag = 0x00
-	tagBigInt    typeTag = 0x01
-	tagVarchar   typeTag = 0x02
-	tagBoolean   typeTag = 0x03
-	tagText      typeTag = 0x04
-	tagTimestamp typeTag = 0x05
-	tagFloat     typeTag = 0x06
-	tagDouble    typeTag = 0x07
-	tagDecimal   typeTag = 0x08
+	tagUnknown   typeTag = 0x00 // sentinel — never written to disk
+	tagInt       typeTag = 0x01
+	tagBigInt    typeTag = 0x02
+	tagVarchar   typeTag = 0x03
+	tagBoolean   typeTag = 0x04
+	tagText      typeTag = 0x05
+	tagTimestamp typeTag = 0x06
+	tagFloat     typeTag = 0x07
+	tagDouble    typeTag = 0x08
+	tagDecimal   typeTag = 0x09
 )
 
 // maxVarcharLen is the maximum byte length for a VARCHAR value (2-byte prefix → 65535).
@@ -89,30 +90,30 @@ func DoubleValue(v float64) ColumnValue {
 
 // DecimalValue creates a non-null DECIMAL ColumnValue from v.
 // The raw bytes are [2-byte BE uint16 length][UTF-8 bytes], encoding the string representation.
-// Panics if the byte length of v exceeds 65535.
-func DecimalValue(v string) ColumnValue {
+// Returns ErrStringTooLong if the byte length of v exceeds 65535.
+func DecimalValue(v string) (ColumnValue, error) {
 	b := []byte(v)
 	if len(b) > math.MaxUint16 {
-		panic("codec: decimal value exceeds maximum length of 65535 bytes")
+		return ColumnValue{}, ErrStringTooLong
 	}
 	raw := make([]byte, sizeDecimalPrefix+len(b))
 	binary.BigEndian.PutUint16(raw, uint16(len(b)))
 	copy(raw[sizeDecimalPrefix:], b)
-	return ColumnValue{Type: ast.TypeDecimal, Raw: raw}
+	return ColumnValue{Type: ast.TypeDecimal, Raw: raw}, nil
 }
 
 // VarcharValue creates a non-null VARCHAR ColumnValue from v.
 // The raw bytes are [2-byte BE uint16 length][UTF-8 bytes].
-// Panics if the byte length of v exceeds 65535.
-func VarcharValue(v string) ColumnValue {
+// Returns ErrStringTooLong if the byte length of v exceeds 65535.
+func VarcharValue(v string) (ColumnValue, error) {
 	b := []byte(v)
 	if len(b) > maxVarcharLen {
-		panic("codec: varchar value exceeds maximum length of 65535 bytes")
+		return ColumnValue{}, ErrStringTooLong
 	}
 	raw := make([]byte, sizeVarcharPrefix+len(b))
 	binary.BigEndian.PutUint16(raw, uint16(len(b)))
 	copy(raw[sizeVarcharPrefix:], b)
-	return ColumnValue{Type: ast.TypeVarchar, Raw: raw}
+	return ColumnValue{Type: ast.TypeVarchar, Raw: raw}, nil
 }
 
 // BoolValue creates a non-null BOOLEAN ColumnValue from v.
@@ -127,16 +128,16 @@ func BoolValue(v bool) ColumnValue {
 
 // TextValue creates a non-null TEXT ColumnValue from v.
 // The raw bytes are [4-byte BE uint32 length][UTF-8 bytes].
-// Panics if the byte length of v exceeds 4294967295.
-func TextValue(v string) ColumnValue {
+// Returns ErrStringTooLong if the byte length of v exceeds 4294967295.
+func TextValue(v string) (ColumnValue, error) {
 	b := []byte(v)
 	if int64(len(b)) > int64(maxTextLen) {
-		panic("codec: text value exceeds maximum length of 4294967295 bytes")
+		return ColumnValue{}, ErrStringTooLong
 	}
 	raw := make([]byte, sizeTextPrefix+len(b))
 	binary.BigEndian.PutUint32(raw, uint32(len(b)))
 	copy(raw[sizeTextPrefix:], b)
-	return ColumnValue{Type: ast.TypeText, Raw: raw}
+	return ColumnValue{Type: ast.TypeText, Raw: raw}, nil
 }
 
 // TimestampValue creates a non-null TIMESTAMP ColumnValue from t.
