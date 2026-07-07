@@ -54,6 +54,11 @@ type Iterator interface {
 	// Close releases all resources held by the iterator. After Close
 	// returns, Valid() must return false and Next() must return (nil, nil).
 	Close()
+
+	// Err returns any error encountered during iteration. It must be called
+	// after Valid() returns false to distinguish between reaching the end of
+	// the iterator and encountering a mid-scan error.
+	Err() error
 }
 
 // KV is the storage interface consumed by the catalog and row store layers.

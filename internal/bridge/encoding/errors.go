@@ -27,4 +27,11 @@ var (
 	// ErrInvalidPK is returned when the number of types provided for decoding a primary key
 	// does not match the encoded data, or if an unsupported data type is encountered.
 	ErrInvalidPK = errors.New("encoding: invalid primary key type mismatch")
+
+	// ErrDecimalTooLarge is returned when attempting to encode a DECIMAL value
+	// whose integer or fractional part exceeds 64 digits.
+	ErrDecimalTooLarge = errors.New("encoding: decimal value exceeds 64 digits of precision per part")
+
+	// ErrInvalidDecimal is returned when a string cannot be parsed as a valid DECIMAL.
+	ErrInvalidDecimal = errors.New("encoding: invalid decimal format")
 )

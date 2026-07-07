@@ -730,3 +730,47 @@ func TestVarcharValue_ExceedsMaxLength(t *testing.T) {
 	v := string(make([]byte, 65536))
 	VarcharValue(v)
 }
+
+// TestEncode_TooManyColumns verifies that Encode returns ErrTooManyColumns
+// when a row contains more than math.MaxUint16 columns.
+func TestEncode_TooManyColumns(t *testing.T) {
+	row := &Row{
+		CodecVersion: 0x01,
+		Values:       make([]ColumnValue, math.MaxUint16+1),
+	}
+	_, err := Encode(row)
+	if !errors.Is(err, ErrTooManyColumns) {
+		t.Errorf("expected ErrTooManyColumns, got %v", err)
+	}
+}
+
+// TestEncode_InvalidLength verifies that Encode returns ErrInvalidLength
+// when a fixed-width column has an incorrect raw byte length.
+func TestEncode_InvalidLength(t *testing.T) {
+	// Create a row with a malformed INT column (should be 4 bytes, but given 2).
+	row := &Row{
+		CodecVersion: 0x01,
+		Values: []ColumnValue{
+			{
+				Type:   ast.TypeInt,
+				IsNull: false,
+				Raw:    []byte{0x00, 0x01}, // 2 bytes instead of 4
+			},
+		},
+	}
+	_, err := Encode(row)
+	if !errors.Is(err, ErrInvalidLength) {
+		t.Errorf("expected ErrInvalidLength, got %v", err)
+	}
+
+	// Create a row with a malformed BOOLEAN column (should be 1 byte, but given 2).
+	row.Values[0] = ColumnValue{
+		Type:   ast.TypeBoolean,
+		IsNull: false,
+		Raw:    []byte{0x01, 0x00}, // 2 bytes instead of 1
+	}
+	_, err = Encode(row)
+	if !errors.Is(err, ErrInvalidLength) {
+		t.Errorf("expected ErrInvalidLength, got %v", err)
+	}
+}

@@ -27,4 +27,11 @@ var (
 	// ErrUnknownTypeTag is returned during decoding when a type_tag byte
 	// does not correspond to any known SQL type.
 	ErrUnknownTypeTag = errors.New("codec: unknown type tag")
+
+	// ErrTooManyColumns is returned when encoding a row with more than 65535 columns.
+	ErrTooManyColumns = errors.New("codec: row has too many columns")
+
+	// ErrInvalidLength is returned when a column value has a byte length that
+	// does not match the expected size for its fixed-width type.
+	ErrInvalidLength = errors.New("codec: invalid value length for type")
 )

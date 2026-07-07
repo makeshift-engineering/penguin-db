@@ -209,12 +209,22 @@ func EncodePK(cols []ast.DataTypeKind, vals []any) (out []byte, err error) {
 				return nil, err
 			}
 			out = append(out, b...)
-		case ast.TypeVarchar, ast.TypeText, ast.TypeDecimal:
+		case ast.TypeVarchar, ast.TypeText:
 			v, ok := val.(string)
 			if !ok {
 				return nil, ErrInvalidPK
 			}
 			b, err := EncodeString(v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, b...)
+		case ast.TypeDecimal:
+			v, ok := val.(string)
+			if !ok {
+				return nil, ErrInvalidPK
+			}
+			b, err := EncodeDecimal(v)
 			if err != nil {
 				return nil, err
 			}
@@ -284,7 +294,7 @@ func DecodePK(cols []ast.DataTypeKind, pk []byte) (vals []any, err error) {
 			}
 			vals = append(vals, DecodeFloat64(pk[offset:offset+8]))
 			offset += 8
-		case ast.TypeVarchar, ast.TypeText, ast.TypeDecimal:
+		case ast.TypeVarchar, ast.TypeText:
 			idx := bytes.IndexByte(pk[offset:], 0x00)
 			if idx < 0 {
 				return nil, ErrKeyTooShort
@@ -295,6 +305,16 @@ func DecodePK(cols []ast.DataTypeKind, pk []byte) (vals []any, err error) {
 			}
 			vals = append(vals, str)
 			offset += idx + 1
+		case ast.TypeDecimal:
+			if offset+decimalEncodedLen > len(pk) {
+				return nil, ErrKeyTooShort
+			}
+			str, err := DecodeDecimal(pk[offset : offset+decimalEncodedLen])
+			if err != nil {
+				return nil, err
+			}
+			vals = append(vals, str)
+			offset += decimalEncodedLen
 		default:
 			return nil, ErrInvalidPK
 		}
@@ -303,4 +323,160 @@ func DecodePK(cols []ast.DataTypeKind, pk []byte) (vals []any, err error) {
 		return nil, ErrInvalidPK
 	}
 	return vals, nil
+}
+
+const decimalPrecision = 64
+const decimalEncodedLen = 1 + decimalPrecision + decimalPrecision
+
+// EncodeDecimal encodes a decimal string into a fixed-width byte slice
+// that preserves numeric sort order lexicographically.
+func EncodeDecimal(v string) ([]byte, error) {
+	if len(v) == 0 {
+		return nil, ErrInvalidDecimal
+	}
+
+	isNeg := false
+	switch v[0] {
+	case '-':
+		isNeg = true
+		v = v[1:]
+	case '+':
+		v = v[1:]
+	}
+
+	if len(v) == 0 {
+		return nil, ErrInvalidDecimal
+	}
+
+	var intPart, fracPart string
+	dotIdx := -1
+	for i := 0; i < len(v); i++ {
+		if v[i] == '.' {
+			if dotIdx != -1 {
+				return nil, ErrInvalidDecimal // multiple dots
+			}
+			dotIdx = i
+		} else if v[i] < '0' || v[i] > '9' {
+			return nil, ErrInvalidDecimal // invalid char
+		}
+	}
+
+	if dotIdx == -1 {
+		intPart = v
+	} else {
+		intPart = v[:dotIdx]
+		fracPart = v[dotIdx+1:]
+	}
+
+	// Trim leading zeros from int part
+	start := 0
+	for start < len(intPart) && intPart[start] == '0' {
+		start++
+	}
+	intPart = intPart[start:]
+	if intPart == "" {
+		intPart = "0"
+	}
+
+	// Trim trailing zeros from frac part
+	end := len(fracPart)
+	for end > 0 && fracPart[end-1] == '0' {
+		end--
+	}
+	fracPart = fracPart[:end]
+
+	if intPart == "0" && fracPart == "" {
+		isNeg = false // normalize -0 to +0
+	}
+
+	if len(intPart) > decimalPrecision {
+		return nil, ErrDecimalTooLarge
+	}
+	if len(fracPart) > decimalPrecision {
+		return nil, ErrDecimalTooLarge
+	}
+
+	out := make([]byte, decimalEncodedLen)
+
+	if isNeg {
+		out[0] = 0x00
+	} else {
+		out[0] = 0x01
+	}
+
+	// Fill integer part with leading zeros
+	intOffset := 1
+	padInt := decimalPrecision - len(intPart)
+	for i := range padInt {
+		out[intOffset+i] = '0'
+	}
+	copy(out[intOffset+padInt:], intPart)
+
+	// Fill fractional part with trailing zeros
+	fracOffset := 1 + decimalPrecision
+	copy(out[fracOffset:], fracPart)
+	padFrac := decimalPrecision - len(fracPart)
+	for i := range padFrac {
+		out[fracOffset+len(fracPart)+i] = '0'
+	}
+
+	// Invert digits if negative to correct sort order
+	if isNeg {
+		for i := 1; i < decimalEncodedLen; i++ {
+			out[i] = '9' - (out[i] - '0')
+		}
+	}
+
+	return out, nil
+}
+
+// DecodeDecimal extracts a canonical decimal string from its sortable encoding.
+func DecodeDecimal(b []byte) (string, error) {
+	if len(b) < decimalEncodedLen {
+		return "", ErrKeyTooShort
+	}
+
+	isNeg := b[0] == 0x00
+
+	intPartBytes := make([]byte, decimalPrecision)
+	copy(intPartBytes, b[1:1+decimalPrecision])
+
+	fracPartBytes := make([]byte, decimalPrecision)
+	copy(fracPartBytes, b[1+decimalPrecision:decimalEncodedLen])
+
+	if isNeg {
+		for i := range decimalPrecision {
+			intPartBytes[i] = '9' - (intPartBytes[i] - '0')
+			fracPartBytes[i] = '9' - (fracPartBytes[i] - '0')
+		}
+	}
+
+	// Trim leading zeros
+	start := 0
+	for start < decimalPrecision && intPartBytes[start] == '0' {
+		start++
+	}
+	intPart := string(intPartBytes[start:])
+	if intPart == "" {
+		intPart = "0"
+	}
+
+	// Trim trailing zeros
+	end := decimalPrecision
+	for end > 0 && fracPartBytes[end-1] == '0' {
+		end--
+	}
+	fracPart := string(fracPartBytes[:end])
+
+	if fracPart == "" {
+		if isNeg && intPart != "0" {
+			return "-" + intPart, nil
+		}
+		return intPart, nil
+	}
+
+	if isNeg {
+		return "-" + intPart + "." + fracPart, nil
+	}
+	return intPart + "." + fracPart, nil
 }

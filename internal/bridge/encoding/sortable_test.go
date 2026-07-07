@@ -502,7 +502,7 @@ func TestEncodePK_SingleColumn(t *testing.T) {
 		{"timestamp", ast.TypeTimestamp, ts},
 		{"float", ast.TypeFloat, float32(2.71)},
 		{"double", ast.TypeDouble, float64(3.1415)},
-		{"decimal", ast.TypeDecimal, "100.00"},
+		{"decimal", ast.TypeDecimal, "100"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -746,5 +746,111 @@ func TestDecodePK_EmptyString(t *testing.T) {
 	}
 	if dec[1].(int32) != int32(99) {
 		t.Errorf("int32: got %v", dec[1])
+	}
+}
+
+// TestEncodeDecimal_Roundtrip verifies that encoding and decoding decimal values
+// preserves the original canonical representation.
+func TestEncodeDecimal_Roundtrip(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+		want string // expected canonical form after roundtrip
+	}{
+		{"zero", "0", "0"},
+		{"zero_padded", "00.00", "0"},
+		{"negative_zero", "-0", "0"},
+		{"positive_one", "1", "1"},
+		{"negative_one", "-1", "-1"},
+		{"positive_decimal", "123.456", "123.456"},
+		{"negative_decimal", "-987.654", "-987.654"},
+		{"leading_zeros", "00123.45", "123.45"},
+		{"trailing_zeros", "123.4500", "123.45"},
+		{"only_fractional", "0.123", "0.123"},
+		{"dot_only_fractional", ".123", "0.123"},
+		{"large_precision", "12345678901234567890.12345678901234567890", "12345678901234567890.1234567890123456789"},
+		{"negative_large", "-1234567890.1234567890", "-1234567890.123456789"},
+		{"explicit_positive", "+1.23", "1.23"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enc, err := EncodeDecimal(tc.val)
+			if err != nil {
+				t.Fatalf("EncodeDecimal(%q): unexpected error: %v", tc.val, err)
+			}
+			if len(enc) != decimalEncodedLen {
+				t.Fatalf("EncodeDecimal(%q): expected %d bytes, got %d", tc.val, decimalEncodedLen, len(enc))
+			}
+			got, err := DecodeDecimal(enc)
+			if err != nil {
+				t.Fatalf("DecodeDecimal(%q): unexpected error: %v", tc.val, err)
+			}
+			if got != tc.want {
+				t.Errorf("roundtrip: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEncodeDecimal_SortOrder verifies that lexicographic byte order of encoded
+// decimals matches natural numeric order.
+func TestEncodeDecimal_SortOrder(t *testing.T) {
+	ordered := []string{
+		"-1000",
+		"-100.5",
+		"-100",
+		"-2",
+		"-1.5",
+		"-1",
+		"-0.1",
+		"0",
+		"0.1",
+		"1",
+		"1.5",
+		"2",
+		"10",
+		"10.01",
+		"100",
+	}
+	for i := 0; i < len(ordered)-1; i++ {
+		a, errA := EncodeDecimal(ordered[i])
+		b, errB := EncodeDecimal(ordered[i+1])
+		if errA != nil || errB != nil {
+			t.Fatalf("Encoding error: %v, %v", errA, errB)
+		}
+		if bytes.Compare(a, b) >= 0 {
+			t.Errorf("sort order violation: encode(%q) >= encode(%q)", ordered[i], ordered[i+1])
+		}
+	}
+}
+
+// TestEncodeDecimal_Errors verifies that EncodeDecimal returns appropriate errors
+// for invalid input or excessively large numbers.
+func TestEncodeDecimal_Errors(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+		want error
+	}{
+		{"empty", "", ErrInvalidDecimal},
+		{"only_sign", "-", ErrInvalidDecimal},
+		{"multiple_dots", "1.2.3", ErrInvalidDecimal},
+		{"invalid_chars", "12a.45", ErrInvalidDecimal},
+		{"too_large_int", "", ErrDecimalTooLarge},
+	}
+
+	tooLargeInt := ""
+	for i := 0; i < 65; i++ { tooLargeInt += "1" }
+	cases[4].val = tooLargeInt
+
+	cases = append(cases, struct{name, val string; want error}{"too_large_frac", "0." + tooLargeInt, ErrDecimalTooLarge})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := EncodeDecimal(tc.val)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("EncodeDecimal(%q): expected %v, got %v", tc.val, tc.want, err)
+			}
+		})
 	}
 }

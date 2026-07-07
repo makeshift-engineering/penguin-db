@@ -23,6 +23,7 @@ package codec
 
 import (
 	"encoding/binary"
+	"math"
 )
 
 // codecVersion is the current on-disk format version byte. It is incremented
@@ -57,6 +58,9 @@ func Encode(row *Row) ([]byte, error) {
 	// Pre-compute an estimated capacity for the output buffer.
 	// Header size + estimated 10 bytes per column is a reasonable guess.
 	colCount := len(row.Values)
+	if colCount > math.MaxUint16 {
+		return nil, ErrTooManyColumns
+	}
 	buf := make([]byte, 0, headerSize+colCount*10)
 
 	buf = append(buf, row.CodecVersion)
@@ -100,6 +104,12 @@ func Encode(row *Row) ([]byte, error) {
 			}
 			if int64(len(cv.Raw)) > int64(maxTextLen)+sizeTextPrefix {
 				return nil, ErrStringTooLong
+			}
+		default:
+			if expectedLen := valueBytesLen(tag, nil, 0); expectedLen > 0 {
+				if len(cv.Raw) != expectedLen {
+					return nil, ErrInvalidLength
+				}
 			}
 		}
 

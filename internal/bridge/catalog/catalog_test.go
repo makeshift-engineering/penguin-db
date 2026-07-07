@@ -97,6 +97,8 @@ func (it *mockIterator) Next() ([]byte, []byte) {
 
 func (it *mockIterator) Close() {}
 
+func (it *mockIterator) Err() error { return nil }
+
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
