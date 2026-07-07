@@ -379,7 +379,6 @@ func TestDecodeParts_MalformedKey(t *testing.T) {
 		t.Errorf("wrong namespace: expected ErrMalformedKey, got %v", err)
 	}
 
-
 	// Empty key
 	_, _, _, err = DecodeParts([]byte{})
 	if !errors.Is(err, ErrKeyTooShort) {

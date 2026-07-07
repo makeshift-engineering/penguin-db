@@ -51,7 +51,7 @@ func EncodeRowKey(db, table string, pk []byte) (key []byte, err error) {
 //	| (1 byte)  | (2 bytes BE)| (n bytes)| (2 bytes BE) | (m bytes)   |
 //	+-----------+-------------+----------+--------------+-------------+
 func EncodeScanPrefix(db, table string) (buf []byte, err error) {
-	if len(db) == 0 || len(table) == 0 {
+	if db == "" || table == "" {
 		return nil, ErrNameEmpty
 	}
 	if len(db) > maxNameLen {
@@ -134,7 +134,7 @@ func DecodeParts(key []byte) (db, table string, pk []byte, err error) {
 //	| (0x00)    | "db\0" | (2 bytes BE)| (n bytes)|
 //	+-----------+--------+-------------+----------+
 func EncodeCatalogDBKey(db string) (buf []byte, err error) {
-	if len(db) == 0 {
+	if db == "" {
 		return nil, ErrNameEmpty
 	}
 	if len(db) > maxNameLen {
@@ -183,7 +183,7 @@ func EncodeCatalogSeqKey(db, table string) (key []byte, err error) {
 // This is the shared implementation behind EncodeCatalogTableKey and
 // EncodeCatalogSeqKey.
 func encodeCatalogCompoundKey(tag, db, table string) (buf []byte, err error) {
-	if len(db) == 0 || len(table) == 0 {
+	if db == "" || table == "" {
 		return nil, ErrNameEmpty
 	}
 	if len(db) > maxNameLen {
