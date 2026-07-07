@@ -322,22 +322,34 @@ func TestBuildAlterTableOps_ChangePK_Rejected(t *testing.T) {
 // TestBuildRenameTableOps verifies that BuildRenameTableOps produces an
 // OpDelete for the old table key and an OpPut for the new table key, and
 // updates the table metadata's Name field to the new name.
+// It also verifies that the old sequence key is deleted and the new one
+// is inserted if a sequence value is provided.
 func TestBuildRenameTableOps(t *testing.T) {
 	meta := testTable()
 	metaCopy := *meta
 
-	ops, err := BuildRenameTableOps("testdb", "users", "customers", &metaCopy)
+	seqVal := []byte("seq123")
+	ops, err := BuildRenameTableOps("testdb", "users", "customers", &metaCopy, seqVal)
 	if err != nil {
 		t.Fatalf("BuildRenameTableOps: %v", err)
 	}
-	if len(ops) != 2 {
-		t.Fatalf("expected 2 ops (delete + put), got %d", len(ops))
+	if len(ops) != 4 {
+		t.Fatalf("expected 4 ops (delete/put table + delete/put seq), got %d", len(ops))
 	}
 	if ops[0].Type != kv.OpDelete {
 		t.Errorf("first op should be OpDelete, got %d", ops[0].Type)
 	}
 	if ops[1].Type != kv.OpPut {
 		t.Errorf("second op should be OpPut, got %d", ops[1].Type)
+	}
+	if ops[2].Type != kv.OpDelete {
+		t.Errorf("third op should be OpDelete, got %d", ops[2].Type)
+	}
+	if ops[3].Type != kv.OpPut {
+		t.Errorf("fourth op should be OpPut, got %d", ops[3].Type)
+	}
+	if string(ops[3].Value) != "seq123" {
+		t.Errorf("expected sequence value to be seq123, got %s", string(ops[3].Value))
 	}
 	if metaCopy.Name == "customers" {
 		t.Errorf("expected meta.Name to remain unchanged, but it was mutated to 'customers'")

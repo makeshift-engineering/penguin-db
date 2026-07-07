@@ -24,10 +24,11 @@ const maxNameLen = math.MaxUint16
 // raw primary key bytes.
 //
 // Row Key Layout:
-// +-----------+-------------+----------+------+--------------+-------------+------+---------+
-// | Namespace | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes | 0x00 | PK      |
-// | (1 byte)  | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   | sep  | (varies)|
-// +-----------+-------------+----------+------+--------------+-------------+------+---------+
+//
+//	+-----------+-------------+----------+------+--------------+-------------+------+---------+
+//	| Namespace | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes | 0x00 | PK      |
+//	| (1 byte)  | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   | sep  | (varies)|
+//	+-----------+-------------+----------+------+--------------+-------------+------+---------+
 func EncodeRowKey(db, table string, pk []byte) (key []byte, err error) {
 	prefix, err := EncodeScanPrefix(db, table)
 	if err != nil {
@@ -44,10 +45,11 @@ func EncodeRowKey(db, table string, pk []byte) (key []byte, err error) {
 // row in the table.
 //
 // Scan Prefix Layout:
-// +-----------+-------------+----------+------+--------------+-------------+------+
-// | Namespace | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes | 0x00 |
-// | (1 byte)  | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   | sep  |
-// +-----------+-------------+----------+------+--------------+-------------+------+
+//
+//	+-----------+-------------+----------+------+--------------+-------------+------+
+//	| Namespace | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes | 0x00 |
+//	| (1 byte)  | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   | sep  |
+//	+-----------+-------------+----------+------+--------------+-------------+------+
 func EncodeScanPrefix(db, table string) (buf []byte, err error) {
 	if len(db) > maxNameLen {
 		return nil, ErrNameTooLong
@@ -142,10 +144,11 @@ func DecodeParts(key []byte) (db, table string, pk []byte, err error) {
 // EncodeCatalogDBKey generates a system KV key for database-level metadata.
 //
 // Catalog DB Key Layout:
-// +-----------+--------+-------------+----------+
-// | Namespace | Tag    | DB Length   | DB Bytes |
-// | (0x00)    | "db\0" | (2 bytes BE)| (n bytes)|
-// +-----------+--------+-------------+----------+
+//
+//	+-----------+--------+-------------+----------+
+//	| Namespace | Tag    | DB Length   | DB Bytes |
+//	| (0x00)    | "db\0" | (2 bytes BE)| (n bytes)|
+//	+-----------+--------+-------------+----------+
 func EncodeCatalogDBKey(db string) (buf []byte, err error) {
 	if len(db) > maxNameLen {
 		return nil, ErrNameTooLong
@@ -166,10 +169,11 @@ func EncodeCatalogDBKey(db string) (buf []byte, err error) {
 // EncodeCatalogTableKey generates a system KV key for table schema metadata.
 //
 // Catalog Table Key Layout:
-// +-----------+---------+-------------+----------+------+--------------+-------------+
-// | Namespace | Tag     | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes |
-// | (0x00)    | "tbl\0" | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   |
-// +-----------+---------+-------------+----------+------+--------------+-------------+
+//
+//	+-----------+---------+-------------+----------+------+--------------+-------------+
+//	| Namespace | Tag     | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes |
+//	| (0x00)    | "tbl\0" | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   |
+//	+-----------+---------+-------------+----------+------+--------------+-------------+
 func EncodeCatalogTableKey(db, table string) (key []byte, err error) {
 	return encodeCatalogCompoundKey("tbl\x00", db, table)
 }
@@ -178,10 +182,11 @@ func EncodeCatalogTableKey(db, table string) (key []byte, err error) {
 // counters.
 //
 // Catalog Seq Key Layout:
-// +-----------+---------+-------------+----------+------+--------------+-------------+
-// | Namespace | Tag     | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes |
-// | (0x00)    | "seq\0" | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   |
-// +-----------+---------+-------------+----------+------+--------------+-------------+
+//
+//	+-----------+---------+-------------+----------+------+--------------+-------------+
+//	| Namespace | Tag     | DB Length   | DB Bytes | 0x00 | Table Length | Table Bytes |
+//	| (0x00)    | "seq\0" | (2 bytes BE)| (n bytes)| sep  | (2 bytes BE) | (m bytes)   |
+//	+-----------+---------+-------------+----------+------+--------------+-------------+
 func EncodeCatalogSeqKey(db, table string) (key []byte, err error) {
 	return encodeCatalogCompoundKey("seq\x00", db, table)
 }

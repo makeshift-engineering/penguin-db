@@ -7,16 +7,18 @@
 // unknown or dropped columns without consulting the catalog.
 //
 // Wire format overview:
-// +----------------+---------------+---------------------+
-// | codec_version  | col_count     | column_1 … column_N |
-// | (1 byte)       | (2 bytes BE)  | (variable)          |
-// +----------------+---------------+---------------------+
+//
+//	+----------------+---------------+---------------------+
+//	| codec_version  | col_count     | column_1 … column_N |
+//	| (1 byte)       | (2 bytes BE)  | (variable)          |
+//	+----------------+---------------+---------------------+
 //
 // Each column entry:
-// +------------+-----------+--------------------------------+
-// | null_flag  | type_tag  | value_bytes (absent when null) |
-// | (1 byte)   | (1 byte)  | (type-determined length)       |
-// +------------+-----------+--------------------------------+
+//
+//	+------------+-----------+--------------------------------+
+//	| null_flag  | type_tag  | value_bytes (absent when null) |
+//	| (1 byte)   | (1 byte)  | (type-determined length)       |
+//	+------------+-----------+--------------------------------+
 package codec
 
 import (

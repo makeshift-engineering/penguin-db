@@ -160,10 +160,16 @@ func BuildAlterTableOps(oldMeta, newMeta *TableMeta) ([]kv.Op, error) {
 
 // BuildRenameTableOps constructs the KV operations to atomically rename a
 // table by deleting the old catalog key and inserting a new one.
-func BuildRenameTableOps(db, oldName, newName string, meta *TableMeta) ([]kv.Op, error) {
+// It also migrates the sequence counter to the new table name.
+func BuildRenameTableOps(db, oldName, newName string, meta *TableMeta, seqValue []byte) ([]kv.Op, error) {
 	oldKey, err := encoding.EncodeCatalogTableKey(db, oldName)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: encoding old table key: %w", err)
+	}
+
+	oldSeqKey, err := encoding.EncodeCatalogSeqKey(db, oldName)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: encoding old seq key: %w", err)
 	}
 
 	metaCopy := *meta
@@ -174,15 +180,25 @@ func BuildRenameTableOps(db, oldName, newName string, meta *TableMeta) ([]kv.Op,
 		return nil, fmt.Errorf("catalog: encoding new table key: %w", err)
 	}
 
+	newSeqKey, err := encoding.EncodeCatalogSeqKey(db, newName)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: encoding new seq key: %w", err)
+	}
+
 	value, err := encodeTableMeta(&metaCopy)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: encoding table meta: %w", err)
 	}
 
-	return []kv.Op{
+	ops := []kv.Op{
 		{Type: kv.OpDelete, Key: oldKey},
 		{Type: kv.OpPut, Key: newKey, Value: value},
-	}, nil
+		{Type: kv.OpDelete, Key: oldSeqKey},
+	}
+	if seqValue != nil {
+		ops = append(ops, kv.Op{Type: kv.OpPut, Key: newSeqKey, Value: seqValue})
+	}
+	return ops, nil
 }
 
 // validateAlter checks that the transition from oldMeta to newMeta is a
