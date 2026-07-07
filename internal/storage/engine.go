@@ -559,7 +559,18 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 		return fmt.Errorf("batch size %d exceeds MaxMemTableSize %d", batchSize, engine.opts.MaxMemTableSize)
 	}
 
+	engine.mu.Lock()
+	if engine.isClosing {
+		engine.mu.Unlock()
+		return fmt.Errorf("engine is closing")
+	}
+	if engine.bgErr != nil {
+		engine.mu.Unlock()
+		return engine.bgErr
+	}
 	engine.writesInFlight.Add(1)
+	engine.mu.Unlock()
+
 	defer engine.writesInFlight.Done()
 
 	engine.writeMu.Lock()

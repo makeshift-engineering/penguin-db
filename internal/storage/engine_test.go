@@ -2232,6 +2232,22 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 	}
 }
 
+// runWriteBatchForTest is a helper to run WriteBatch concurrently.
+func runWriteBatchForTest(d *dbEngine, w *sync.WaitGroup, errCh chan error) {
+	defer w.Done()
+	errCh <- (*dbEngine).WriteBatch(d, []Op{
+		{Type: OpPut, Key: []byte("concurrentKey"), Value: []byte("concurrentValue")},
+	})
+}
+
+// runCloseForTest is a helper to run Close concurrently.
+func runCloseForTest(d *dbEngine, testingT *testing.T, done chan struct{}) {
+	if closeErr := (*dbEngine).Close(d); closeErr != nil {
+		testingT.Errorf("expected Close to succeed concurrently, got %v", closeErr)
+	}
+	close(done)
+}
+
 // TestEngine_ClosedDoorConcurrency verifies that Close() blocks and waits
 // for active WriteBatch calls to finish without returning error or crashing.
 func TestEngine_ClosedDoorConcurrency(t *testing.T) {
@@ -2250,29 +2266,16 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	engForWrite := engine
-	engForClose := engine
+	writeErrCh := make(chan error, 1)
 
-	var writeErr error
-	// Start a goroutine that performs WriteBatch
-	go func() {
-		defer wg.Done()
-		writeErr = engForWrite.WriteBatch([]Op{
-			{Type: OpPut, Key: []byte("concurrentKey"), Value: []byte("concurrentValue")},
-		})
-	}()
+	go runWriteBatchForTest(de, &wg, writeErrCh)
 
 	// Sleep briefly to ensure the goroutine has called writesInFlight.Add(1)
 	// and is now blocked on de.writeMu.Lock().
 	time.Sleep(10 * time.Millisecond)
 
 	closeDone := make(chan struct{})
-	go func() {
-		if closeErr := engForClose.Close(); closeErr != nil {
-			t.Errorf("expected Close to succeed concurrently, got %v", closeErr)
-		}
-		close(closeDone)
-	}()
+	go runCloseForTest(de, t, closeDone)
 
 	// Sleep briefly to let Close run and block on writesInFlight.Wait().
 	time.Sleep(10 * time.Millisecond)
@@ -2291,6 +2294,7 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 	wg.Wait()
 	<-closeDone
 
+	writeErr := <-writeErrCh
 	if writeErr == nil {
 		t.Error("expected WriteBatch to fail with closing error, got nil")
 	} else if !strings.Contains(writeErr.Error(), "engine is closing") {
