@@ -345,7 +345,10 @@ func TestEngine_Scan(t *testing.T) {
 
 	_ = engine.Put([]byte("bb1"), []byte("val_bb1")) // active memtable
 
-	iter := engine.Scan([]byte("ab"))
+	iter, err := engine.Scan([]byte("ab"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	defer iter.Close()
 
 	expected := [][2]string{{"ab1", "val_ab1"}, {"ab2", "val_ab2"}}
@@ -372,7 +375,10 @@ func TestEngine_ScanFullNoPrefix(t *testing.T) {
 		_ = engine.Put([]byte(k), []byte("v-"+k))
 	}
 
-	iter := engine.Scan(nil) // nil prefix = full scan
+	iter, err := engine.Scan(nil) // nil prefix = full scan
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	defer iter.Close()
 
 	got := collectScan(iter)
@@ -403,7 +409,10 @@ func TestEngine_ScanAcrossL0AndL1(t *testing.T) {
 	waitForCompaction(de, 1*time.Second)
 
 	// Scan after compaction so data comes from L1 SSTables.
-	iter := eng.Scan([]byte("m"))
+	iter, err := eng.Scan([]byte("m"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	defer iter.Close()
 
 	got := collectScan(iter)
@@ -418,7 +427,10 @@ func TestEngine_ScanDoubleClose(t *testing.T) {
 	engine := mustNewEngine(t, dir, DefaultOptions())
 	_ = engine.Put([]byte("x"), []byte("y"))
 
-	iter := engine.Scan(nil)
+	iter, err := engine.Scan(nil)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	iter.Close()
 	iter.Close() // must not panic
 }
@@ -428,7 +440,10 @@ func TestEngine_ScanNextAfterExhausted(t *testing.T) {
 	dir := t.TempDir()
 	engine := mustNewEngine(t, dir, DefaultOptions())
 
-	iter := engine.Scan(nil) // empty db
+	iter, err := engine.Scan(nil) // empty db
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	defer iter.Close()
 
 	if iter.Valid() {
@@ -455,7 +470,10 @@ func TestEngine_ScanImmMemtable(t *testing.T) {
 
 	_ = engine.Put([]byte("imm3"), []byte("v3")) // lands in fresh active memtable
 
-	iter := engine.Scan([]byte("imm"))
+	iter, err := engine.Scan([]byte("imm"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	defer iter.Close()
 
 	got := collectScan(iter)
@@ -571,8 +589,10 @@ func TestEngine_ConcurrentReadCompactionIsolation(t *testing.T) {
 	_ = engine.Put([]byte("k2"), []byte("v2"))
 	time.Sleep(30 * time.Millisecond)
 
-	// Pin L0 files via an open iterator.
-	iter := engine.Scan([]byte("k"))
+	iter, err := engine.Scan([]byte("k"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 
 	// Write more to trigger compaction that would otherwise delete L0 files.
 	_ = engine.Put([]byte("k3"), []byte("v3"))
@@ -892,13 +912,12 @@ func TestEngine_OpenManifestLevels_InvalidFile(t *testing.T) {
 	}
 }
 
-// TestEngine_MemAdapterClose verifies the no-op Close on memAdapter is reached.
+// TestEngine_MemAdapterClose verifies the no-op Close on memtable.Iterator.
 func TestEngine_MemAdapterClose(t *testing.T) {
 	mem := newTestSkipList(t)
 	_ = mem.Put([]byte("x"), []byte("y"))
-	iter := mem.NewIterator()
-	adapter := newMemAdapter(iter)
-	adapter.Close() // must not panic; it is a no-op
+	var iter internalIterator = mem.NewIterator()
+	iter.Close() // must not panic; it is a no-op
 }
 
 // TestEngine_SstAdapterMethods exercises Valid/Key/Value/IsDeleted/Next/Close
@@ -956,7 +975,10 @@ func TestEngine_UnpinSSTable_ObsoleteDeletion(t *testing.T) {
 	time.Sleep(40 * time.Millisecond) // flush to L0
 
 	// Open a scan to pin the L0 readers.
-	iter := eng.Scan([]byte("u"))
+	iter, err := eng.Scan([]byte("u"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 
 	// Trigger compaction which will mark L0 readers as obsolete.
 	_ = eng.Put([]byte("u3"), []byte("v3"))
@@ -1113,7 +1135,10 @@ func TestEngine_ScanL1RangeExclusion(t *testing.T) {
 	waitForCompaction(de, 1*time.Second)
 
 	// Prefix "a" → prefixLimit="b" < L1 MinKey="m1" → MinKey branch: overlap=false.
-	iter1 := eng.Scan([]byte("a"))
+	iter1, err := eng.Scan([]byte("a"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	got1 := collectScan(iter1)
 	iter1.Close()
 	if len(got1) != 0 {
@@ -1121,7 +1146,10 @@ func TestEngine_ScanL1RangeExclusion(t *testing.T) {
 	}
 
 	// Prefix "z" → L1 MaxKey="m3" < "z" → MaxKey branch: overlap=false.
-	iter2 := eng.Scan([]byte("z"))
+	iter2, err := eng.Scan([]byte("z"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	got2 := collectScan(iter2)
 	iter2.Close()
 	if len(got2) != 0 {
@@ -1259,7 +1287,10 @@ func TestEngine_UnpinSSTable_DeletesObsoleteFile(t *testing.T) {
 	triggerFlush(t, eng, "dummy1", 1000)
 
 	// Pin L0 readers by opening a scan.
-	iter := eng.Scan(nil)
+	iter, err := eng.Scan(nil)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 
 	// Trigger second L0 flush to exceed CompactionThreshold=2 and kick off compaction.
 	_ = eng.Put([]byte("del2a"), []byte("very-long-value-z"))
@@ -1604,7 +1635,10 @@ func TestEngine_ScanActiveMemtable(t *testing.T) {
 	dir := t.TempDir()
 	eng := mustNewEngine(t, dir, DefaultOptions())
 	_ = eng.Put([]byte("key1"), []byte("val1"))
-	iter := eng.Scan([]byte("k"))
+	iter, err := eng.Scan([]byte("k"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	if !iter.Valid() {
 		t.Error("expected valid iterator")
 	}
@@ -1906,15 +1940,10 @@ func TestEngine_Scan_ClosedOrFailed(t *testing.T) {
 	de.isClosing = true
 	de.mu.Unlock()
 
-	iter := eng.Scan([]byte("prefix"))
-	if iter.Valid() {
-		t.Error("expected invalid iterator on closed engine")
+	_, err := eng.Scan([]byte("prefix"))
+	if err == nil {
+		t.Error("expected error scanning on closed engine")
 	}
-	k, v := iter.Next()
-	if k != nil || v != nil {
-		t.Error("expected nil next on closed iterator")
-	}
-	iter.Close()
 
 	// Test failed engine (bgErr)
 	de.mu.Lock()
@@ -1922,11 +1951,10 @@ func TestEngine_Scan_ClosedOrFailed(t *testing.T) {
 	de.bgErr = fmt.Errorf("mock background error")
 	de.mu.Unlock()
 
-	iter = eng.Scan([]byte("prefix"))
-	if iter.Valid() {
-		t.Error("expected invalid iterator on failed engine")
+	_, err = eng.Scan([]byte("prefix"))
+	if err == nil {
+		t.Error("expected error scanning on failed engine")
 	}
-	iter.Close()
 
 	_ = eng.Close()
 }
@@ -2158,7 +2186,10 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 	}
 
 	// Verify Scan works on Snapshot under isolation
-	iter := snap.Scan([]byte("key"))
+	iter, err := snap.Scan([]byte("key"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	var snapshotKeys [][]byte
 	var snapshotVals [][]byte
 	for iter.Valid() {
@@ -2179,7 +2210,10 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 	}
 
 	// Scan live engine (should see both updates)
-	liveIter := engine.Scan([]byte("key"))
+	liveIter, err := engine.Scan([]byte("key"))
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
 	var liveKeys [][]byte
 	for liveIter.Valid() {
 		k, _ := liveIter.Next()

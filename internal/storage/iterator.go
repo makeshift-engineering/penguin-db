@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 
-	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 )
 
@@ -20,14 +19,11 @@ type Iterator interface {
 	Close()
 }
 
-// closedIterator is an Iterator that is always invalid.
-type closedIterator struct{}
-
-func (c *closedIterator) Valid() bool               { return false }
-func (c *closedIterator) Next() (key, value []byte) { return nil, nil }
-func (c *closedIterator) Close()                    {}
-
 // internalIterator wraps memory & SSTable iterators into a uniform peekable cursor.
+//
+// memtable.Iterator satisfies this interface structurally (via its peek-based
+// Key/Value/IsDeleted/Next/Valid/Close methods). sstable.Iterator requires the
+// sstAdapter wrapper below because its Next() returns bool and Close() returns error.
 type internalIterator interface {
 	Valid() bool
 	Key() []byte
@@ -37,40 +33,10 @@ type internalIterator interface {
 	Close()
 }
 
-// memAdapter adapts a *memtable.Iterator into the internalIterator interface.
-type memAdapter struct {
-	iter       *memtable.Iterator
-	hasCurrent bool
-	currKey    []byte
-	currVal    []byte
-	currDel    bool
-}
-
-// newMemAdapter creates a memAdapter and positions it on the first valid entry.
-func newMemAdapter(iter *memtable.Iterator) *memAdapter {
-	adapter := &memAdapter{iter: iter}
-	adapter.Next()
-	return adapter
-}
-
-func (adapter *memAdapter) Valid() bool     { return adapter.hasCurrent }
-func (adapter *memAdapter) Key() []byte     { return adapter.currKey }
-func (adapter *memAdapter) Value() []byte   { return adapter.currVal }
-func (adapter *memAdapter) IsDeleted() bool { return adapter.currDel }
-
-func (adapter *memAdapter) Next() {
-	if adapter.iter.Valid() {
-		adapter.currKey, adapter.currVal, adapter.currDel = adapter.iter.Next()
-		adapter.hasCurrent = true
-	} else {
-		adapter.hasCurrent = false
-		adapter.currKey, adapter.currVal = nil, nil
-	}
-}
-
-func (adapter *memAdapter) Close() {}
-
 // sstAdapter adapts a *sstable.Iterator into the internalIterator interface.
+// This adapter is necessary because sstable.Iterator has different method
+// signatures (Next() bool, Close() error) that cannot structurally satisfy
+// internalIterator without wrapper logic.
 type sstAdapter struct {
 	iter       *sstable.Iterator
 	hasCurrent bool

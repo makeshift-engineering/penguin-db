@@ -45,33 +45,6 @@ func NewSkipList(maxSize int64, maxLevel int) *SkipList {
 	}
 }
 
-// Get returns the value associated with key. It returns ErrKeyNotFound if the key
-// is absent or if the key is present but marked as deleted by a tombstone. Get
-// acquires a shared read lock and is safe to call concurrently with other Gets.
-func (skipList *SkipList) Get(key []byte) ([]byte, error) {
-	if len(key) == 0 {
-		slog.Debug("get failed: empty key provided")
-		return nil, ErrEmptyKey
-	}
-
-	skipList.mutex.RLock()
-	defer skipList.mutex.RUnlock()
-
-	_, targetNode := skipList.findPredecessors(key)
-
-	if targetNode != nil && bytes.Equal(targetNode.key, key) {
-		if targetNode.isDeleted {
-			slog.Debug("get: key has tombstone marker (logically deleted)", "key", string(key))
-			return nil, ErrKeyNotFound
-		}
-		slog.Debug("get: key found", "key", string(key), "valueLength", len(targetNode.value))
-		return targetNode.value, nil
-	}
-
-	slog.Debug("get: key not found", "key", string(key))
-	return nil, ErrKeyNotFound
-}
-
 // Put inserts or updates the key-value pair in the skip list.
 //
 // If the key already exists, its value is replaced in-place and the size counter
@@ -272,9 +245,13 @@ func (skipList *SkipList) Size() int64 {
 	return skipList.currentSizeBytes
 }
 
-// GetWithTombstone searches the skip list for the given key and returns its value,
+// Get searches the skip list for the given key and returns its value,
 // whether it was found, and whether it has a tombstone marker (isDeleted).
-func (skipList *SkipList) GetWithTombstone(key []byte) (value []byte, found, deleted bool, err error) {
+//
+// Callers must inspect the found and deleted flags to distinguish between
+// "key not present", "key present and live", and "key present but tombstoned".
+// Get acquires a shared read lock and is safe to call concurrently.
+func (skipList *SkipList) Get(key []byte) (value []byte, found, deleted bool, err error) {
 	if len(key) == 0 {
 		return nil, false, false, ErrEmptyKey
 	}
@@ -298,8 +275,10 @@ func (skipList *SkipList) NewIteratorAt(startKey []byte) *Iterator {
 	defer skipList.mutex.RUnlock()
 	_, startNode := skipList.findPredecessors(startKey)
 	slog.Debug("created new iterator starting at sought node", "foundKey", startNode != nil)
-	return &Iterator{
+	iter := &Iterator{
 		skipList:    skipList,
 		currentNode: startNode,
 	}
+	iter.bufferCurrent()
+	return iter
 }

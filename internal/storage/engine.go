@@ -61,7 +61,8 @@ type Engine interface {
 	Delete(key []byte) error
 
 	// Scan returns a prefix-filtered sorted iterator starting at the first key >= prefix.
-	Scan(prefix []byte) Iterator
+	// Returns an error if the engine is closing or has a background error.
+	Scan(prefix []byte) (Iterator, error)
 
 	// WriteBatch writes multiple operations atomically to the database.
 	WriteBatch(operations []Op) error
@@ -413,16 +414,16 @@ func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reade
 
 	iterator := mem.NewIterator()
 	for iterator.Valid() {
-		key, value, isDeleted := iterator.Next()
 		opcode := sstable.OpcodePut
-		if isDeleted {
+		if iterator.IsDeleted() {
 			opcode = sstable.OpcodeDelete
 		}
-		if err := sstableWriter.Add(key, value, opcode); err != nil {
+		if err := sstableWriter.Add(iterator.Key(), iterator.Value(), opcode); err != nil {
 			_ = sstableWriter.Close()
 			_ = os.Remove(path)
 			return nil, err
 		}
+		iterator.Next()
 	}
 
 	if err := sstableWriter.Close(); err != nil {
@@ -665,7 +666,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	defer engine.iterWg.Done()
 
 	// Search active memtable.
-	value, found, deleted, err := engine.memtable.GetWithTombstone(key)
+	value, found, deleted, err := engine.memtable.Get(key)
 	if err != nil {
 		engine.mu.RUnlock()
 		return nil, err
@@ -681,7 +682,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	// Search queue of immutable memtables (newest to oldest).
 	for i := len(engine.immMemtables) - 1; i >= 0; i-- {
 		imm := engine.immMemtables[i]
-		value, found, deleted, err := imm.GetWithTombstone(key)
+		value, found, deleted, err := imm.Get(key)
 		if err != nil {
 			engine.mu.RUnlock()
 			return nil, err
@@ -702,81 +703,41 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	level1 = append(level1, engine.levels[levelOne]...)
 
 	// Pin all snapshotted readers using the lightweight sstRefsMu while holding RLock.
-	engine.sstRefsMu.Lock()
-	for _, sstableReader := range level0 {
-		engine.pinSSTable(sstableReader)
-	}
-	for _, sstableReader := range level1 {
-		engine.pinSSTable(sstableReader)
-	}
-	engine.sstRefsMu.Unlock()
+	pinned := engine.pinReaders(level0, level1)
 
 	engine.mu.RUnlock()
 
 	probed := 0
 	defer func() {
 		engine.opts.Metrics.RecordReadAmplification(probed)
-		engine.sstRefsMu.Lock()
-		for _, sstableReader := range level0 {
-			engine.unpinSSTable(sstableReader)
-		}
-		for _, sstableReader := range level1 {
-			engine.unpinSSTable(sstableReader)
-		}
-		engine.sstRefsMu.Unlock()
+		engine.unpinReaders(pinned)
 	}()
 
-	// Search Level 0 SSTables (overlapping ranges, search newest to oldest).
-	for _, sstableReader := range level0 {
-		probed++
-		if sstableReader.BloomMayContain(key) {
-			value, found, deleted, err := sstableReader.Get(key)
-			if err != nil {
-				return nil, err
-			}
-			if found {
-				if deleted {
-					return nil, ErrKeyNotFound
-				}
-				return value, nil
-			}
-		}
+	value, found, deleted, probed, err = searchLevels(level0, level1, key)
+	if err != nil {
+		return nil, err
 	}
-
-	// Search Level 1 SSTables (non-overlapping ranges, binary search on MaxKey).
-	if len(level1) > 0 {
-		index := sort.Search(len(level1), func(i int) bool {
-			return bytes.Compare(level1[i].MaxKey(), key) >= 0
-		})
-		if index < len(level1) {
-			sstableReader := level1[index]
-			if bytes.Compare(sstableReader.MinKey(), key) <= 0 {
-				probed++
-				if sstableReader.BloomMayContain(key) {
-					value, found, deleted, err := sstableReader.Get(key)
-					if err != nil {
-						return nil, err
-					}
-					if found {
-						if deleted {
-							return nil, ErrKeyNotFound
-						}
-						return value, nil
-					}
-				}
-			}
+	if found {
+		if deleted {
+			return nil, ErrKeyNotFound
 		}
+		return value, nil
 	}
 
 	return nil, ErrKeyNotFound
 }
 
 // Scan returns a prefix-filtering iterator sorted by key.
-func (engine *dbEngine) Scan(prefix []byte) Iterator {
+func (engine *dbEngine) Scan(prefix []byte) (Iterator, error) {
 	engine.mu.RLock()
-	if engine.isClosing || engine.bgErr != nil {
+	if engine.isClosing {
 		engine.mu.RUnlock()
-		return &closedIterator{}
+		return nil, fmt.Errorf("engine is closing")
+	}
+	if engine.bgErr != nil {
+		bgErr := engine.bgErr
+		engine.mu.RUnlock()
+		return nil, bgErr
 	}
 
 	level0 := make([]*sstable.Reader, 0, len(engine.levels[levelZero]))
@@ -791,7 +752,7 @@ func (engine *dbEngine) Scan(prefix []byte) Iterator {
 	memtables = append(memtables, engine.immMemtables...)
 	engine.mu.RUnlock()
 
-	return engine.scanInternal(prefix, level0, level1, memtables)
+	return engine.scanInternal(prefix, level0, level1, memtables), nil
 }
 
 // Close flushes in-memory contents and safely releases lock and worker resources.
@@ -887,6 +848,76 @@ func (engine *dbEngine) unpinSSTable(sstableReader *sstable.Reader) {
 	}
 }
 
+// pinReaders pins all SSTable readers from both levels and returns the pinned slice.
+// Acquires sstRefsMu internally.
+func (engine *dbEngine) pinReaders(level0, level1 []*sstable.Reader) []*sstable.Reader {
+	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
+	engine.sstRefsMu.Lock()
+	for _, r := range level0 {
+		engine.pinSSTable(r)
+		pinned = append(pinned, r)
+	}
+	for _, r := range level1 {
+		engine.pinSSTable(r)
+		pinned = append(pinned, r)
+	}
+	engine.sstRefsMu.Unlock()
+	return pinned
+}
+
+// unpinReaders releases the reference counts for all pinned SSTable readers.
+// Acquires sstRefsMu internally.
+func (engine *dbEngine) unpinReaders(pinned []*sstable.Reader) {
+	engine.sstRefsMu.Lock()
+	for _, r := range pinned {
+		engine.unpinSSTable(r)
+	}
+	engine.sstRefsMu.Unlock()
+}
+
+// searchLevels searches L0 and L1 SSTable readers for a key.
+// Returns the value, whether it was found, whether it was deleted, the number
+// of files probed, and any I/O error.
+func searchLevels(level0, level1 []*sstable.Reader, key []byte) (value []byte, found, deleted bool, probed int, err error) {
+	// Search Level 0 SSTables (overlapping ranges, search newest to oldest).
+	for _, sstableReader := range level0 {
+		probed++
+		if sstableReader.BloomMayContain(key) {
+			value, found, deleted, err = sstableReader.Get(key)
+			if err != nil {
+				return nil, false, false, probed, err
+			}
+			if found {
+				return value, true, deleted, probed, nil
+			}
+		}
+	}
+
+	// Search Level 1 SSTables (non-overlapping ranges, binary search on MaxKey).
+	if len(level1) > 0 {
+		index := sort.Search(len(level1), func(i int) bool {
+			return bytes.Compare(level1[i].MaxKey(), key) >= 0
+		})
+		if index < len(level1) {
+			sstableReader := level1[index]
+			if bytes.Compare(sstableReader.MinKey(), key) <= 0 {
+				probed++
+				if sstableReader.BloomMayContain(key) {
+					value, found, deleted, err = sstableReader.Get(key)
+					if err != nil {
+						return nil, false, false, probed, err
+					}
+					if found {
+						return value, true, deleted, probed, nil
+					}
+				}
+			}
+		}
+	}
+
+	return nil, false, false, probed, nil
+}
+
 // writeManifestDurable writes the manifest to disk atomically, serialized by manifestMu.
 func (engine *dbEngine) writeManifestDurable(m *Manifest) error {
 	engine.manifestMu.Lock()
@@ -946,22 +977,12 @@ func cleanupWALFiles(walDir string, upToSegmentID int) {
 // Must be called with engine.mu RLock NOT held.
 func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Reader, memtables []*memtable.SkipList) Iterator {
 	// Pin all readers for the iterator's lifetime.
-	pinned := make([]*sstable.Reader, 0, len(level0)+len(level1))
-	engine.sstRefsMu.Lock()
-	for _, r := range level0 {
-		engine.pinSSTable(r)
-		pinned = append(pinned, r)
-	}
-	for _, r := range level1 {
-		engine.pinSSTable(r)
-		pinned = append(pinned, r)
-	}
-	engine.sstRefsMu.Unlock()
+	pinned := engine.pinReaders(level0, level1)
 
-	// Get iterators for all memtables
+	// Get iterators for all memtables — memtable.Iterator directly satisfies internalIterator.
 	var iterators []internalIterator
 	for _, m := range memtables {
-		iterators = append(iterators, newMemAdapter(m.NewIteratorAt(prefix)))
+		iterators = append(iterators, m.NewIteratorAt(prefix))
 	}
 
 	// Level 0 SSTable iterators (all files, as L0 ranges overlap).

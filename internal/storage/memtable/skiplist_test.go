@@ -12,14 +12,17 @@ import (
 )
 
 // TestSkipList_Basic verifies the fundamental read and write contract of the skip
-// list. It ensures that a Get on a missing key returns ErrKeyNotFound and that a
+// list. It ensures that a Get on a missing key returns found=false and that a
 // subsequent Put followed by Get returns the correct stored value.
 func TestSkipList_Basic(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
 
-	_, err := skipList.Get([]byte("key1"))
-	if !errors.Is(err, ErrKeyNotFound) {
-		t.Fatalf("expected ErrKeyNotFound, got %v", err)
+	_, found, _, err := skipList.Get([]byte("key1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatalf("expected found=false for missing key")
 	}
 
 	err = skipList.Put([]byte("key1"), []byte("val1"))
@@ -27,9 +30,12 @@ func TestSkipList_Basic(t *testing.T) {
 		t.Fatalf("failed to Put: %v", err)
 	}
 
-	val, err := skipList.Get([]byte("key1"))
+	val, found, deleted, err := skipList.Get([]byte("key1"))
 	if err != nil {
 		t.Fatalf("failed to Get: %v", err)
+	}
+	if !found || deleted {
+		t.Fatalf("expected found=true, deleted=false")
 	}
 	if !bytes.Equal(val, []byte("val1")) {
 		t.Fatalf("expected val1, got %s", val)
@@ -51,24 +57,27 @@ func TestSkipList_Delete(t *testing.T) {
 	if !iterator.Valid() {
 		t.Fatalf("expected iterator to be valid since Delete should insert a tombstone")
 	}
-	k, v, deleted := iterator.Next()
-	if !bytes.Equal(k, []byte("key1")) {
-		t.Fatalf("expected key1, got %s", k)
+	if !bytes.Equal(iterator.Key(), []byte("key1")) {
+		t.Fatalf("expected key1, got %s", iterator.Key())
 	}
-	if !deleted {
+	if !iterator.IsDeleted() {
 		t.Fatalf("expected tombstone to be marked as deleted")
 	}
-	if len(v) != 0 {
-		t.Fatalf("expected value of deleted key to be empty/nil, got %s", v)
+	if len(iterator.Value()) != 0 {
+		t.Fatalf("expected value of deleted key to be empty/nil, got %s", iterator.Value())
 	}
+	iterator.Next()
 
 	err = skipList.Put([]byte("key1"), []byte("alive"))
 	if err != nil {
 		t.Fatalf("failed to Put deleted key: %v", err)
 	}
-	val, err := skipList.Get([]byte("key1"))
+	val, found, deleted, err := skipList.Get([]byte("key1"))
 	if err != nil {
 		t.Fatalf("failed to Get key after re-put: %v", err)
+	}
+	if !found || deleted {
+		t.Fatalf("expected found=true, deleted=false after re-put")
 	}
 	if !bytes.Equal(val, []byte("alive")) {
 		t.Fatalf("expected alive, got %s", val)
@@ -78,16 +87,16 @@ func TestSkipList_Delete(t *testing.T) {
 	if !iterator.Valid() {
 		t.Fatalf("expected iterator to be valid after putting back key1")
 	}
-	k, v, deleted = iterator.Next()
-	if !bytes.Equal(k, []byte("key1")) {
-		t.Fatalf("expected key1, got %s", k)
+	if !bytes.Equal(iterator.Key(), []byte("key1")) {
+		t.Fatalf("expected key1, got %s", iterator.Key())
 	}
-	if deleted {
+	if iterator.IsDeleted() {
 		t.Fatalf("expected deleted to be false after putting back key1")
 	}
-	if !bytes.Equal(v, []byte("alive")) {
-		t.Fatalf("expected value to be alive, got %s", v)
+	if !bytes.Equal(iterator.Value(), []byte("alive")) {
+		t.Fatalf("expected value to be alive, got %s", iterator.Value())
 	}
+	iterator.Next()
 }
 
 // TestSkipList_SizeTracking verifies that the internal byte counter is updated
@@ -153,11 +162,11 @@ func TestSkipList_SizeTracking(t *testing.T) {
 func TestSkipList_EmptyAndNil(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
 
-	_, err := skipList.Get(nil)
+	_, _, _, err := skipList.Get(nil)
 	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Get with nil key, got %v", err)
 	}
-	_, err = skipList.Get([]byte(""))
+	_, _, _, err = skipList.Get([]byte(""))
 	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey for Get with empty key, got %v", err)
 	}
@@ -203,11 +212,11 @@ func TestSkipList_StrictConcurrency(t *testing.T) {
 		go func() {
 			defer waitGroup.Done()
 			for i := 0; i < 1000; i++ {
-				val, err := skipList.Get(key)
-				if err != nil && !errors.Is(err, ErrKeyNotFound) {
+				val, found, _, err := skipList.Get(key)
+				if err != nil {
 					t.Errorf("unexpected error on Get: %v", err)
 				}
-				if err == nil {
+				if found {
 					if !bytes.HasPrefix(val, []byte("val-")) {
 						t.Errorf("corrupted value: %s", val)
 					}
@@ -255,7 +264,7 @@ func TestSkipList_Concurrency(t *testing.T) {
 			defer waitGroup.Done()
 			iterator := skipList.NewIterator()
 			for iterator.Valid() {
-				_, _, _ = iterator.Next()
+				iterator.Next()
 			}
 		}()
 	}
@@ -265,16 +274,20 @@ func TestSkipList_Concurrency(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		key := []byte(fmt.Sprintf("key-%03d", i))
 		expected := []byte(fmt.Sprintf("val-%03d", i))
-		got, err := skipList.Get(key)
-		if err != nil || !bytes.Equal(got, expected) {
-			t.Fatalf("unexpected state for %s: got (%q, %v), want (%q, nil)", key, got, err, expected)
+		got, found, deleted, err := skipList.Get(key)
+		if err != nil || !found || deleted || !bytes.Equal(got, expected) {
+			t.Fatalf("unexpected state for %s: got (%q, found=%v, deleted=%v, %v), want (%q, true, false, nil)", key, got, found, deleted, err, expected)
 		}
 	}
 
 	for i := 100; i < 200; i++ {
 		key := []byte(fmt.Sprintf("key-%03d", i))
-		if _, err := skipList.Get(key); !errors.Is(err, ErrKeyNotFound) {
-			t.Fatalf("expected ErrKeyNotFound for deleted/tombstoned key %s, got %v", key, err)
+		_, found, deleted, err := skipList.Get(key)
+		if err != nil {
+			t.Fatalf("unexpected error for deleted key %s: %v", key, err)
+		}
+		if found && !deleted {
+			t.Fatalf("expected tombstone or missing for key %s, got found=%v deleted=%v", key, found, deleted)
 		}
 	}
 }
@@ -298,10 +311,10 @@ func TestSkipList_SortedOrder(t *testing.T) {
 		if !iterator.Valid() {
 			t.Fatalf("iterator exhausted early, expected key %s", expectedKey)
 		}
-		key, _, _ := iterator.Next()
-		if !bytes.Equal(key, []byte(expectedKey)) {
-			t.Errorf("expected key %s, got %s", expectedKey, key)
+		if !bytes.Equal(iterator.Key(), []byte(expectedKey)) {
+			t.Errorf("expected key %s, got %s", expectedKey, iterator.Key())
 		}
+		iterator.Next()
 	}
 	if iterator.Valid() {
 		t.Errorf("iterator has extra elements after all expected keys were consumed")
@@ -356,9 +369,12 @@ func TestSkipList_DuplicateDelete(t *testing.T) {
 			sizeAfterFirstDelete, skipList.currentSizeBytes)
 	}
 
-	_, err = skipList.Get([]byte("key"))
-	if !errors.Is(err, ErrKeyNotFound) {
-		t.Errorf("expected ErrKeyNotFound after duplicate Delete, got %v", err)
+	_, found, deleted, err := skipList.Get([]byte("key"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found && !deleted {
+		t.Errorf("expected tombstone or missing after duplicate Delete, got found=%v deleted=%v", found, deleted)
 	}
 }
 
@@ -374,24 +390,22 @@ func TestSkipList_IteratorExhaustion(t *testing.T) {
 
 	iterator := skipList.NewIterator()
 
-	key, val, isDeleted := iterator.Next()
-	if !bytes.Equal(key, []byte("only-key")) {
-		t.Errorf("expected only-key, got %s", key)
+	if !iterator.Valid() {
+		t.Errorf("expected iterator to be valid on first entry")
 	}
-	if !bytes.Equal(val, []byte("val")) {
-		t.Errorf("expected val, got %s", val)
+	if !bytes.Equal(iterator.Key(), []byte("only-key")) {
+		t.Errorf("expected only-key, got %s", iterator.Key())
 	}
-	if isDeleted {
+	if !bytes.Equal(iterator.Value(), []byte("val")) {
+		t.Errorf("expected val, got %s", iterator.Value())
+	}
+	if iterator.IsDeleted() {
 		t.Errorf("expected isDeleted=false, got true")
 	}
+	iterator.Next()
 
 	if iterator.Valid() {
 		t.Errorf("expected iterator to be invalid after consuming all nodes")
-	}
-
-	key, val, isDeleted = iterator.Next()
-	if key != nil || val != nil || isDeleted {
-		t.Errorf("exhausted Next() should return (nil, nil, false), got (%s, %s, %v)", key, val, isDeleted)
 	}
 }
 
@@ -443,9 +457,12 @@ func TestSkipList_ConfigurableMaxLevel(t *testing.T) {
 		t.Fatalf("failed to Put with custom maxLevel: %v", err)
 	}
 
-	val, err := skipList.Get([]byte("key"))
+	val, found, deleted, err := skipList.Get([]byte("key"))
 	if err != nil {
 		t.Fatalf("failed to Get with custom maxLevel: %v", err)
+	}
+	if !found || deleted {
+		t.Fatalf("expected found=true, deleted=false")
 	}
 	if !bytes.Equal(val, []byte("value")) {
 		t.Fatalf("expected value, got %s", val)
@@ -509,9 +526,12 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 		}
 
 		for k, expectedVal := range entries {
-			got, err := skipList.Get([]byte(k))
+			got, found, deleted, err := skipList.Get([]byte(k))
 			if err != nil {
 				t.Fatalf("Get(%q) failed: %v", k, err)
+			}
+			if !found || deleted {
+				t.Fatalf("Get(%q) expected found=true, deleted=false", k)
 			}
 			if !bytes.Equal(got, []byte(expectedVal)) {
 				t.Errorf("Get(%q) = %q, want %q", k, got, expectedVal)
@@ -532,9 +552,12 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 			t.Fatalf("Put update failed: %v", err)
 		}
 
-		got, err := skipList.Get(key)
+		got, found, deleted, err := skipList.Get(key)
 		if err != nil {
 			t.Fatalf("Get after update failed: %v", err)
+		}
+		if !found || deleted {
+			t.Fatalf("expected found=true, deleted=false")
 		}
 		if !bytes.Equal(got, updated) {
 			t.Errorf("Get = %q, want %q", got, updated)
@@ -552,9 +575,12 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 			t.Fatalf("Delete failed: %v", err)
 		}
 
-		_, err := skipList.Get(key)
-		if !errors.Is(err, ErrKeyNotFound) {
-			t.Errorf("expected ErrKeyNotFound after Delete, got %v", err)
+		_, found, deleted, err := skipList.Get(key)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found && !deleted {
+			t.Errorf("expected tombstone or missing after Delete, got found=%v deleted=%v", found, deleted)
 		}
 
 		// Verify tombstone is visible to iterator.
@@ -562,16 +588,16 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 		if !iter.Valid() {
 			t.Fatal("expected iterator to be valid (tombstone should be present)")
 		}
-		k, v, deleted := iter.Next()
-		if !bytes.Equal(k, key) {
-			t.Errorf("iterator key = %q, want %q", k, key)
+		if !bytes.Equal(iter.Key(), key) {
+			t.Errorf("iterator key = %q, want %q", iter.Key(), key)
 		}
-		if !deleted {
+		if !iter.IsDeleted() {
 			t.Error("expected tombstone marker on deleted unicode key")
 		}
-		if len(v) != 0 {
-			t.Errorf("expected nil/empty value for tombstone, got %q", v)
+		if len(iter.Value()) != 0 {
+			t.Errorf("expected nil/empty value for tombstone, got %q", iter.Value())
 		}
+		iter.Next()
 	})
 
 	t.Run("SortedOrderByBytes", func(t *testing.T) {
@@ -602,10 +628,10 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 			if !iter.Valid() {
 				t.Fatalf("iterator exhausted at index %d, expected key %q", idx, expected)
 			}
-			k, _, _ := iter.Next()
-			if !bytes.Equal(k, []byte(expected)) {
-				t.Errorf("position %d: got key %q, want %q", idx, k, expected)
+			if !bytes.Equal(iter.Key(), []byte(expected)) {
+				t.Errorf("position %d: got key %q, want %q", idx, iter.Key(), expected)
 			}
+			iter.Next()
 		}
 		if iter.Valid() {
 			t.Error("iterator has extra elements after consuming all expected keys")
@@ -648,9 +674,13 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 		}
 
 		for k, expectedVal := range entries {
-			got, err := skipList.Get([]byte(k))
+			got, found, deleted, err := skipList.Get([]byte(k))
 			if err != nil {
 				t.Errorf("Get(%q) failed: %v", k, err)
+				continue
+			}
+			if !found || deleted {
+				t.Errorf("Get(%q) expected found=true, deleted=false", k)
 				continue
 			}
 			if !bytes.Equal(got, []byte(expectedVal)) {
@@ -663,12 +693,12 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 		var prev []byte
 		count := 0
 		for iter.Valid() {
-			k, _, _ := iter.Next()
-			if prev != nil && bytes.Compare(prev, k) >= 0 {
-				t.Errorf("iterator order violation: %q >= %q", prev, k)
+			if prev != nil && bytes.Compare(prev, iter.Key()) >= 0 {
+				t.Errorf("iterator order violation: %q >= %q", prev, iter.Key())
 			}
-			prev = k
+			prev = append([]byte(nil), iter.Key()...)
 			count++
+			iter.Next()
 		}
 		if count != numEntries {
 			t.Errorf("iterator yielded %d entries, want %d", count, numEntries)
@@ -691,9 +721,13 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 					v := []byte(randomUnicodeString(localRng, 3))
 					_ = skipList.Put(k, v)
 
-					got, err := skipList.Get(k)
+					got, found, _, err := skipList.Get(k)
 					if err != nil {
 						t.Errorf("goroutine %d: Get(%q) failed: %v", id, k, err)
+						continue
+					}
+					if !found {
+						t.Errorf("goroutine %d: Get(%q) not found after Put", id, k)
 						continue
 					}
 					if !bytes.Equal(got, v) {
@@ -706,7 +740,7 @@ func TestSkipList_UnicodeKeys(t *testing.T) {
 	})
 }
 
-// TestSkipList_Extensions covers Size(), GetWithTombstone(), and NewIteratorAt()
+// TestSkipList_Extensions covers Size(), Get() (with tombstone awareness), and NewIteratorAt()
 // to verify correct LSM-tree semantics and iterator positioning.
 func TestSkipList_Extensions(t *testing.T) {
 	skipList := NewSkipList(1000, 12)
@@ -724,27 +758,27 @@ func TestSkipList_Extensions(t *testing.T) {
 		t.Error("expected non-zero size after puts and deletes")
 	}
 
-	// Test GetWithTombstone
+	// Test Get
 	// - nil/empty key
-	_, _, _, err := skipList.GetWithTombstone(nil)
+	_, _, _, err := skipList.Get(nil)
 	if !errors.Is(err, ErrEmptyKey) {
 		t.Errorf("expected ErrEmptyKey, got %v", err)
 	}
 
 	// existing non-deleted key
-	val, found, deleted, err := skipList.GetWithTombstone([]byte("key1"))
+	val, found, deleted, err := skipList.Get([]byte("key1"))
 	if err != nil || !found || deleted || !bytes.Equal(val, []byte("val1")) {
 		t.Errorf("expected (val1, true, false, nil), got (%s, %v, %v, %v)", val, found, deleted, err)
 	}
 
 	// existing deleted key (tombstone)
-	val, found, deleted, err = skipList.GetWithTombstone([]byte("key4"))
+	val, found, deleted, err = skipList.Get([]byte("key4"))
 	if err != nil || !found || !deleted {
 		t.Errorf("expected (nil, true, true, nil), got (%s, %v, %v, %v)", val, found, deleted, err)
 	}
 
 	// missing key
-	val, found, deleted, err = skipList.GetWithTombstone([]byte("key2"))
+	val, found, deleted, err = skipList.Get([]byte("key2"))
 	if err != nil || found || deleted {
 		t.Errorf("expected (nil, false, false, nil), got (%s, %v, %v, %v)", val, found, deleted, err)
 	}
@@ -755,30 +789,30 @@ func TestSkipList_Extensions(t *testing.T) {
 	if !iterEmpty.Valid() {
 		t.Error("expected valid iterator for empty start key")
 	}
-	k, _, _ := iterEmpty.Next()
-	if !bytes.Equal(k, []byte("key1")) {
-		t.Errorf("expected first key key1, got %s", k)
+	if !bytes.Equal(iterEmpty.Key(), []byte("key1")) {
+		t.Errorf("expected first key key1, got %s", iterEmpty.Key())
 	}
+	iterEmpty.Next()
 
 	// startKey positioned exactly on a key
 	iterExact := skipList.NewIteratorAt([]byte("key3"))
 	if !iterExact.Valid() {
 		t.Error("expected valid iterator for startKey 'key3'")
 	}
-	k, _, _ = iterExact.Next()
-	if !bytes.Equal(k, []byte("key3")) {
-		t.Errorf("expected key3, got %s", k)
+	if !bytes.Equal(iterExact.Key(), []byte("key3")) {
+		t.Errorf("expected key3, got %s", iterExact.Key())
 	}
+	iterExact.Next()
 
 	// startKey positioned between keys
 	iterBetween := skipList.NewIteratorAt([]byte("key2"))
 	if !iterBetween.Valid() {
 		t.Error("expected valid iterator for startKey 'key2' (should find key3)")
 	}
-	k, _, _ = iterBetween.Next()
-	if !bytes.Equal(k, []byte("key3")) {
-		t.Errorf("expected key3, got %s", k)
+	if !bytes.Equal(iterBetween.Key(), []byte("key3")) {
+		t.Errorf("expected key3, got %s", iterBetween.Key())
 	}
+	iterBetween.Next()
 
 	// startKey positioned after all keys
 	iterAfter := skipList.NewIteratorAt([]byte("key5"))
@@ -786,3 +820,4 @@ func TestSkipList_Extensions(t *testing.T) {
 		t.Error("expected invalid iterator for startKey after all keys")
 	}
 }
+
