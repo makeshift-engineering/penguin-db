@@ -2250,11 +2250,14 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
+	engForWrite := engine
+	engForClose := engine
+
 	var writeErr error
 	// Start a goroutine that performs WriteBatch
 	go func() {
 		defer wg.Done()
-		writeErr = engine.WriteBatch([]Op{
+		writeErr = engForWrite.WriteBatch([]Op{
 			{Type: OpPut, Key: []byte("concurrentKey"), Value: []byte("concurrentValue")},
 		})
 	}()
@@ -2265,7 +2268,7 @@ func TestEngine_ClosedDoorConcurrency(t *testing.T) {
 
 	closeDone := make(chan struct{})
 	go func() {
-		if closeErr := engine.Close(); closeErr != nil {
+		if closeErr := engForClose.Close(); closeErr != nil {
 			t.Errorf("expected Close to succeed concurrently, got %v", closeErr)
 		}
 		close(closeDone)
