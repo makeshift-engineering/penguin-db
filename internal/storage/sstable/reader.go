@@ -1,9 +1,11 @@
 package sstable
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -289,4 +291,61 @@ func (r *Reader) MaxKey() []byte {
 	k := make([]byte, len(r.index[len(r.index)-1].key))
 	copy(k, r.index[len(r.index)-1].key)
 	return k
+}
+
+// NewIteratorAt creates a new Iterator positioned at the first key greater than or equal to startKey.
+// It uses binary search on the reader's index to locate the starting file offset.
+func (reader *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*Iterator, error) {
+	if atomic.LoadInt32(&reader.closed) != 0 {
+		return nil, ErrReaderClosed
+	}
+
+	config := &IteratorOptions{
+		BufferSize:      DefaultIteratorBufferSize,
+		InitialKeyCap:   DefaultIteratorKeyCap,
+		InitialValueCap: DefaultIteratorValueCap,
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	var startOffset uint64 = 0
+	if len(startKey) > 0 && len(reader.index) > 0 {
+		i := sort.Search(len(reader.index), func(i int) bool {
+			return bytes.Compare(reader.index[i].key, startKey) >= 0
+		})
+		if i < len(reader.index) {
+			startOffset = reader.index[i].offset
+		} else {
+			startOffset = reader.indexOffset
+		}
+	}
+
+	file, err := os.Open(reader.FilePath())
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file for iteration: %w", err)
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			file.Close()
+		}
+	}()
+
+	if startOffset > 0 {
+		if _, err := file.Seek(int64(startOffset), io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to seek to startOffset %d: %w", startOffset, err)
+		}
+	}
+
+	success = true
+	return &Iterator{
+		file:        file,
+		reader:      bufio.NewReaderSize(file, config.BufferSize),
+		limitOffset: reader.indexOffset,
+		currOffset:  startOffset,
+		key:         make([]byte, 0, config.InitialKeyCap),
+		value:       make([]byte, 0, config.InitialValueCap),
+	}, nil
 }
