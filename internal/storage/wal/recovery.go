@@ -89,13 +89,13 @@ func Replay(directory string, minSegmentID int, recordConsumer RecordConsumer) (
 	return highestSegmentID, nil
 }
 
-// replayFile opens a single WAL segment with R/W access, reads it frame-by-frame,
-// validates checksums and frame sizes, and applies the operations onto the RecordConsumer.
-// If it encounters corruption or a partial write, it truncates the segment in-place.
+// replayFile opens a single WAL segment read-only, reads it frame-by-frame, validates
+// checksums and frame sizes, and applies the operations onto the RecordConsumer.
+// If it encounters corruption or a partial write, it truncates the segment.
 func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
-	file, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
+	file, err := os.Open(filePath)
 	if err != nil {
-		return fmt.Errorf("unable to open WAL segment: %w", err)
+		return fmt.Errorf("unable to open WAL segment for reading: %w", err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil && err == nil {
@@ -123,10 +123,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes)
 
-				if truncateErr := file.Truncate(validBytes); truncateErr != nil {
-					return truncateErr
-				}
-				return file.Sync()
+				return truncateSegment(filePath, validBytes)
 			}
 			return fmt.Errorf("unexpected disk error reading frame header: %w", err)
 		}
@@ -140,10 +137,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 				"frame_size", totalFrameSizeBytes,
 				"valid_bytes", validBytes)
 
-			if truncateErr := file.Truncate(validBytes); truncateErr != nil {
-				return truncateErr
-			}
-			return file.Sync()
+			return truncateSegment(filePath, validBytes)
 		}
 
 		// Allocate a single buffer for the full frame and copy the already-read
@@ -159,10 +153,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 					"file", filepath.Base(filePath),
 					"valid_bytes", validBytes)
 
-				if truncateErr := file.Truncate(validBytes); truncateErr != nil {
-					return truncateErr
-				}
-				return file.Sync()
+				return truncateSegment(filePath, validBytes)
 			}
 			return fmt.Errorf("disk error reading frame payload: %w", err)
 		}
@@ -175,10 +166,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 					"valid_bytes", validBytes,
 					"error", err)
 
-				if truncateErr := file.Truncate(validBytes); truncateErr != nil {
-					return truncateErr
-				}
-				return file.Sync()
+				return truncateSegment(filePath, validBytes)
 			}
 			return fmt.Errorf("failed to decode valid frame payload: %w", err)
 		}
@@ -199,4 +187,23 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 	}
 
 	return nil
+}
+
+// truncateSegment opens the segment with write access and truncates it to validBytes,
+// then syncs. This is called only when corruption or a partial write is detected,
+// keeping the replay pass itself read-only (least-privilege).
+func truncateSegment(filePath string, validBytes int64) (err error) {
+	f, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("unable to open WAL segment for truncation: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close WAL segment %s after truncation: %w", filePath, closeErr)
+		}
+	}()
+	if truncateErr := f.Truncate(validBytes); truncateErr != nil {
+		return truncateErr
+	}
+	return f.Sync()
 }
