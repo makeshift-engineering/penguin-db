@@ -1640,7 +1640,8 @@ func TestReader_MinMaxAndIteratorAt(t *testing.T) {
 		t.Fatalf("NewIteratorAt: %v", err)
 	}
 	defer iterExact.Close()
-	if !iterExact.Next() {
+	iterExact.Next()
+	if !iterExact.Valid() {
 		t.Fatal("expected iterExact to have next")
 	}
 	if !bytes.Equal(iterExact.Key(), []byte("key3")) {
@@ -1653,7 +1654,8 @@ func TestReader_MinMaxAndIteratorAt(t *testing.T) {
 		t.Fatalf("NewIteratorAt: %v", err)
 	}
 	defer iterBetween.Close()
-	if !iterBetween.Next() {
+	iterBetween.Next()
+	if !iterBetween.Valid() {
 		t.Fatal("expected iterBetween to have next")
 	}
 	if !bytes.Equal(iterBetween.Key(), []byte("key3")) {
@@ -1666,7 +1668,8 @@ func TestReader_MinMaxAndIteratorAt(t *testing.T) {
 		t.Fatalf("NewIteratorAt: %v", err)
 	}
 	defer iterAfter.Close()
-	if iterAfter.Next() {
+	iterAfter.Next()
+	if iterAfter.Valid() {
 		t.Error("expected iterAfter to be exhausted")
 	}
 

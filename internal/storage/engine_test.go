@@ -394,7 +394,7 @@ func TestEngine_ScanFullNoPrefix(t *testing.T) {
 }
 
 // TestEngine_ScanAcrossL0AndL1 forces a flush and then compaction so the scan
-// exercises the L1 SSTable iterator path (sstAdapter methods).
+// exercises the L1 SSTable iterator path.
 func TestEngine_ScanAcrossL0AndL1(t *testing.T) {
 	dir := t.TempDir()
 	opts := DefaultOptions()
@@ -909,9 +909,9 @@ func TestEngine_MemAdapterClose(t *testing.T) {
 	iter.Close() // must not panic; it is a no-op
 }
 
-// TestEngine_SstAdapterMethods exercises Valid/Key/Value/IsDeleted/Next/Close
-// on sstAdapter by writing a real SSTable and iterating over it.
-func TestEngine_SstAdapterMethods(t *testing.T) {
+// TestEngine_SstIteratorInternalInterface exercises Valid/Key/Value/IsDeleted/Next/Close
+// on sstable.Iterator to verify it structurally satisfies internalIterator.
+func TestEngine_SstIteratorInternalInterface(t *testing.T) {
 	dir := t.TempDir()
 	mem := newTestSkipList(t)
 	_ = mem.Put([]byte("sk1"), []byte("sv1"))
@@ -927,25 +927,27 @@ func TestEngine_SstAdapterMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIteratorAt: %v", err)
 	}
-	adapter := newSstAdapter(rawIter)
+	// Confirm sstable.Iterator satisfies internalIterator.
+	var iter internalIterator = rawIter
+	iter.Next() // position on first entry
 
-	if !adapter.Valid() {
-		t.Fatal("sstAdapter should be valid after creation")
+	if !iter.Valid() {
+		t.Fatal("sstable.Iterator should be valid after first Next()")
 	}
-	if !bytes.Equal(adapter.Key(), []byte("sk1")) {
-		t.Errorf("Key(): expected sk1, got %q", adapter.Key())
+	if !bytes.Equal(iter.Key(), []byte("sk1")) {
+		t.Errorf("Key(): expected sk1, got %q", iter.Key())
 	}
-	if !bytes.Equal(adapter.Value(), []byte("sv1")) {
-		t.Errorf("Value(): expected sv1, got %q", adapter.Value())
+	if !bytes.Equal(iter.Value(), []byte("sv1")) {
+		t.Errorf("Value(): expected sv1, got %q", iter.Value())
 	}
-	if adapter.IsDeleted() {
+	if iter.IsDeleted() {
 		t.Error("IsDeleted() should be false for a Put record")
 	}
-	adapter.Next() // advance past the only entry
-	if adapter.Valid() {
-		t.Error("adapter should be invalid after exhaustion")
+	iter.Next() // advance past the only entry
+	if iter.Valid() {
+		t.Error("iterator should be invalid after exhaustion")
 	}
-	adapter.Close() // must not panic
+	iter.Close() // must not panic
 }
 
 // TestEngine_UnpinSSTable_ObsoleteDeletion verifies the deferred-deletion code
@@ -1439,7 +1441,7 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 
 	foundKey1 := false
 	foundKey2 := false
-	for iter.Next() {
+	for iter.Next(); iter.Valid(); iter.Next() {
 		if bytes.Equal(iter.Key(), []byte("key1")) {
 			foundKey1 = true
 		}

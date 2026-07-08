@@ -1016,7 +1016,8 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 	for _, sstableReader := range level0 {
 		sstableIterator, err := sstableReader.NewIteratorAt(prefix)
 		if err == nil {
-			iterators = append(iterators, newSstAdapter(sstableIterator))
+			sstableIterator.Next()
+			iterators = append(iterators, sstableIterator)
 		}
 	}
 
@@ -1051,7 +1052,8 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 		if overlap {
 			sstableIterator, err := sstableReader.NewIteratorAt(prefix)
 			if err == nil {
-				iterators = append(iterators, newSstAdapter(sstableIterator))
+				sstableIterator.Next()
+				iterators = append(iterators, sstableIterator)
 			}
 		}
 	}

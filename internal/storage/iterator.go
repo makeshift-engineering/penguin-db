@@ -20,10 +20,6 @@ type Iterator interface {
 }
 
 // internalIterator wraps memory & SSTable iterators into a uniform peekable cursor.
-//
-// memtable.Iterator satisfies this interface structurally (via its peek-based
-// Key/Value/IsDeleted/Next/Valid/Close methods). sstable.Iterator requires the
-// sstAdapter wrapper below because its Next() returns bool and Close() returns error.
 type internalIterator interface {
 	Valid() bool
 	Key() []byte
@@ -32,29 +28,6 @@ type internalIterator interface {
 	Next()
 	Close()
 }
-
-// sstAdapter adapts a *sstable.Iterator into the internalIterator interface.
-// This adapter is necessary because sstable.Iterator has different method
-// signatures (Next() bool, Close() error) that cannot structurally satisfy
-// internalIterator without wrapper logic.
-type sstAdapter struct {
-	iter       *sstable.Iterator
-	hasCurrent bool
-}
-
-// newSstAdapter creates an sstAdapter and positions it on the first valid entry.
-func newSstAdapter(iter *sstable.Iterator) *sstAdapter {
-	adapter := &sstAdapter{iter: iter}
-	adapter.Next()
-	return adapter
-}
-
-func (adapter *sstAdapter) Valid() bool     { return adapter.hasCurrent && adapter.iter.Error() == nil }
-func (adapter *sstAdapter) Key() []byte     { return adapter.iter.Key() }
-func (adapter *sstAdapter) Value() []byte   { return adapter.iter.Value() }
-func (adapter *sstAdapter) IsDeleted() bool { return adapter.iter.Opcode() == sstable.OpcodeDelete }
-func (adapter *sstAdapter) Next()           { adapter.hasCurrent = adapter.iter.Next() }
-func (adapter *sstAdapter) Close()          { _ = adapter.iter.Close() }
 
 // mergingIterator merges multiple internalIterators into a single sorted cursor.
 type mergingIterator struct {

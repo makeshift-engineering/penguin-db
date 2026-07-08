@@ -84,7 +84,7 @@ func Run(task *Task, opts ...Option) (res *Result, err error) {
 	}
 	defer func() {
 		for _, it := range iterators {
-			_ = it.Close()
+			it.Close()
 		}
 	}()
 
@@ -124,7 +124,7 @@ func initializeInputs(task *Task, config *Options) (iterators []*sstable.Iterato
 	defer func() {
 		if !success {
 			for _, it := range iters {
-				_ = it.Close()
+				it.Close()
 			}
 		}
 	}()
@@ -140,7 +140,8 @@ func initializeInputs(task *Task, config *Options) (iterators []*sstable.Iterato
 
 		iters = append(iters, iter)
 
-		if iter.Next() {
+		iter.Next()
+		if iter.Valid() {
 			heap.Push(&minHeap, &MergeNode{
 				Key:      iter.Key(),
 				Value:    iter.Value(),
@@ -306,7 +307,8 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 // called to re-establish the heap invariant. If the iterator is exhausted, the node
 // is popped and removed from the heap.
 func fixOrPop(h *MergeHeap, node *MergeNode) (err error) {
-	if node.Iterator.Next() {
+	node.Iterator.Next()
+	if node.Iterator.Valid() {
 		node.Key = node.Iterator.Key()
 		node.Value = node.Iterator.Value()
 		node.Opcode = node.Iterator.Opcode()
