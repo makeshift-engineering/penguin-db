@@ -45,6 +45,25 @@ func NewSkipList(maxSize int64, maxLevel int) *SkipList {
 	}
 }
 
+// Get searches the skip list for the given key and returns its value,
+// whether it was found, and whether it has a tombstone marker (isDeleted).
+//
+// Callers must inspect the found and deleted flags to distinguish between
+// "key not present", "key present and live", and "key present but tombstoned".
+// Get acquires a shared read lock and is safe to call concurrently.
+func (skipList *SkipList) Get(key []byte) (value []byte, found, deleted bool, err error) {
+	if len(key) == 0 {
+		return nil, false, false, ErrEmptyKey
+	}
+	skipList.mutex.RLock()
+	defer skipList.mutex.RUnlock()
+	_, targetNode := skipList.findPredecessors(key)
+	if targetNode != nil && bytes.Equal(targetNode.key, key) {
+		return targetNode.value, true, targetNode.isDeleted, nil
+	}
+	return nil, false, false, nil
+}
+
 // Put inserts or updates the key-value pair in the skip list.
 //
 // If the key already exists, its value is replaced in-place and the size counter
@@ -243,25 +262,6 @@ func (skipList *SkipList) Size() int64 {
 	skipList.mutex.RLock()
 	defer skipList.mutex.RUnlock()
 	return skipList.currentSizeBytes
-}
-
-// Get searches the skip list for the given key and returns its value,
-// whether it was found, and whether it has a tombstone marker (isDeleted).
-//
-// Callers must inspect the found and deleted flags to distinguish between
-// "key not present", "key present and live", and "key present but tombstoned".
-// Get acquires a shared read lock and is safe to call concurrently.
-func (skipList *SkipList) Get(key []byte) (value []byte, found, deleted bool, err error) {
-	if len(key) == 0 {
-		return nil, false, false, ErrEmptyKey
-	}
-	skipList.mutex.RLock()
-	defer skipList.mutex.RUnlock()
-	_, targetNode := skipList.findPredecessors(key)
-	if targetNode != nil && bytes.Equal(targetNode.key, key) {
-		return targetNode.value, true, targetNode.isDeleted, nil
-	}
-	return nil, false, false, nil
 }
 
 // NewIteratorAt returns a new Iterator positioned at the first node of the skip list
