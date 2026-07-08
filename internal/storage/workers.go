@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/compactor"
@@ -169,19 +170,14 @@ func (engine *dbEngine) collectCompactionInputs() (inputFiles []string, fileIDs 
 	fileIDs = make([]int, 0, capacity)
 	obsoleteReaders = make([]*sstable.Reader, 0, capacity)
 
-	for _, sstableReader := range engine.levels[levelZero] {
-		inputFiles = append(inputFiles, sstableReader.FilePath())
-		var segmentID int
-		_, _ = fmt.Sscanf(filepath.Base(sstableReader.FilePath()), "%d.sst", &segmentID)
-		fileIDs = append(fileIDs, segmentID)
-		obsoleteReaders = append(obsoleteReaders, sstableReader)
-	}
-	for _, sstableReader := range engine.levels[levelOne] {
-		inputFiles = append(inputFiles, sstableReader.FilePath())
-		var segmentID int
-		_, _ = fmt.Sscanf(filepath.Base(sstableReader.FilePath()), "%d.sst", &segmentID)
-		fileIDs = append(fileIDs, segmentID)
-		obsoleteReaders = append(obsoleteReaders, sstableReader)
+	for _, level := range []int{levelZero, levelOne} {
+		for _, sstableReader := range engine.levels[level] {
+			inputFiles = append(inputFiles, sstableReader.FilePath())
+			var segmentID int
+			_, _ = fmt.Sscanf(filepath.Base(sstableReader.FilePath()), "%d.sst", &segmentID)
+			fileIDs = append(fileIDs, segmentID)
+			obsoleteReaders = append(obsoleteReaders, sstableReader)
+		}
 	}
 	return inputFiles, fileIDs, obsoleteReaders
 }
@@ -232,17 +228,11 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 
 	// Build prospective level slices without mutating engine.levels yet.
 	// Filter out the compacted files from Level 0 (preserving any concurrent flushes).
-	var newL0 []*sstable.Reader
+	var newL0Readers []*sstable.Reader
 	for _, r := range engine.levels[levelZero] {
-		isObsolete := false
-		for _, obs := range obsoleteReaders {
-			if r == obs {
-				isObsolete = true
-				break
-			}
-		}
+		isObsolete := slices.Contains(obsoleteReaders, r)
 		if !isObsolete {
-			newL0 = append(newL0, r)
+			newL0Readers = append(newL0Readers, r)
 		}
 	}
 
@@ -253,8 +243,8 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 
 	// Build the prospective manifest from the new level slices (without swapping live state).
 	prospectiveLevels := make(map[int][]string)
-	l0Names := make([]string, 0, len(newL0))
-	for _, r := range newL0 {
+	l0Names := make([]string, 0, len(newL0Readers))
+	for _, r := range newL0Readers {
 		l0Names = append(l0Names, filepath.Base(r.FilePath()))
 	}
 	prospectiveLevels[levelZero] = l0Names
@@ -290,7 +280,7 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	}
 
 	// Manifest is durable — now commit the level swap atomically.
-	engine.levels[levelZero] = newL0
+	engine.levels[levelZero] = newL0Readers
 	engine.levels[levelOne] = newL1Readers
 
 	// Register the new L1 readers.
