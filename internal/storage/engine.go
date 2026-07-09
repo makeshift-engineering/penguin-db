@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -27,8 +28,14 @@ const (
 	numLevels = 2
 )
 
-// ErrKeyNotFound is returned when the key is not found in the storage engine.
-var ErrKeyNotFound = errors.New("key not found")
+// Sentinel errors for the storage package.
+var (
+	ErrKeyNotFound    = errors.New("key not found")
+	ErrEmptyKey       = errors.New("empty key")
+	ErrEngineClosed   = errors.New("engine is closing")
+	ErrActiveWALNil   = errors.New("active WAL is nil")
+	ErrSnapshotClosed = errors.New("snapshot is closed")
+)
 
 // OpType represents the operation type in a WriteBatch.
 type OpType uint8
@@ -221,7 +228,9 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 	// Clean up any stale temp manifests
 	tmpManifestPath := filepath.Join(dir, "manifest.tmp")
 	if fi, err := os.Stat(tmpManifestPath); err == nil && !fi.IsDir() {
-		_ = os.Remove(tmpManifestPath)
+		if err := os.Remove(tmpManifestPath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to remove stale temp manifest during engine init", "path", tmpManifestPath, "error", err)
+		}
 	}
 
 	manifest, err := loadManifest(dir)
@@ -348,7 +357,9 @@ func cleanupOrphanedSSTables(dir string, manifest *Manifest) error {
 		if filepath.Ext(name) == ".sst" {
 			if _, active := activeSSTs[name]; !active {
 				path := filepath.Join(dir, name)
-				_ = os.Remove(path)
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to remove orphaned SSTable", "path", path, "error", err)
+				}
 			}
 		}
 	}
@@ -381,7 +392,9 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 		engine.flushedSegmentID = highestWALSegmentID
 		if err := writeManifest(engine.dir, manifest); err != nil {
 			_ = sstableReader.Close()
-			_ = os.Remove(sstablePath)
+			if err := os.Remove(sstablePath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to clean up sstable after manifest write error during recovery", "path", sstablePath, "error", err)
+			}
 			return fmt.Errorf("failed to save manifest during recovery flush: %w", err)
 		}
 
@@ -426,14 +439,18 @@ func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reade
 		}
 		if err := sstableWriter.Add(iterator.Key(), iterator.Value(), opcode); err != nil {
 			_ = sstableWriter.Close()
-			_ = os.Remove(path)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to clean up partial sstable on write error", "path", path, "error", err)
+			}
 			return nil, err
 		}
 		iterator.Next()
 	}
 
 	if err := sstableWriter.Close(); err != nil {
-		_ = os.Remove(path)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to clean up sstable on close error", "path", path, "error", err)
+		}
 		return nil, err
 	}
 
@@ -459,7 +476,7 @@ func validateOperations(operations []Op) (int64, error) {
 	var size int64
 	for _, operation := range operations {
 		if len(operation.Key) == 0 {
-			return 0, memtable.ErrEmptyKey
+			return 0, ErrEmptyKey
 		}
 		switch operation.Type {
 		case OpPut:
@@ -572,7 +589,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	engine.mu.Lock()
 	if engine.isClosing {
 		engine.mu.Unlock()
-		return fmt.Errorf("engine is closing")
+		return ErrEngineClosed
 	}
 	if engine.bgErr != nil {
 		engine.mu.Unlock()
@@ -595,7 +612,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 		}
 		if engine.isClosing {
 			engine.mu.Unlock()
-			return fmt.Errorf("engine is closing")
+			return ErrEngineClosed
 		}
 
 		// If the batch would overflow the active memtable, freeze it and rotate.
@@ -636,7 +653,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	activeWAL := engine.wal
 	if activeWAL == nil {
 		engine.mu.Unlock()
-		return fmt.Errorf("active WAL is nil")
+		return ErrActiveWALNil
 	}
 	engine.mu.Unlock()
 
@@ -678,7 +695,7 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 // Get retrieves a key-value record from memory or SSTable files.
 func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	if len(key) == 0 {
-		return nil, memtable.ErrEmptyKey
+		return nil, ErrEmptyKey
 	}
 
 	engine.mu.RLock()
@@ -688,7 +705,7 @@ func (engine *dbEngine) Get(key []byte) ([]byte, error) {
 	}
 	if engine.isClosing {
 		engine.mu.RUnlock()
-		return nil, fmt.Errorf("engine is closing")
+		return nil, ErrEngineClosed
 	}
 
 	engine.iterWg.Add(1)
@@ -761,7 +778,7 @@ func (engine *dbEngine) Scan(prefix []byte) (Iterator, error) {
 	engine.mu.RLock()
 	if engine.isClosing {
 		engine.mu.RUnlock()
-		return nil, fmt.Errorf("engine is closing")
+		return nil, ErrEngineClosed
 	}
 	if engine.bgErr != nil {
 		bgErr := engine.bgErr
@@ -850,12 +867,6 @@ func (engine *dbEngine) Close() error {
 		_ = engine.lock.Close()
 	}
 
-	for _, readerList := range engine.levels {
-		for _, sstableReader := range readerList {
-			_ = sstableReader.Close()
-		}
-	}
-
 	engine.sstRefsMu.Lock()
 	for sstableReader := range engine.sstRefs {
 		_ = sstableReader.Close()
@@ -880,7 +891,10 @@ func (engine *dbEngine) unpinSSTable(sstableReader *sstable.Reader) {
 		ref.refs--
 		if ref.refs == 0 && ref.obsolete {
 			_ = sstableReader.Close()
-			_ = os.Remove(sstableReader.FilePath())
+			filePath := sstableReader.FilePath()
+			if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to remove obsolete SSTable", "path", filePath, "error", err)
+			}
 			delete(engine.sstRefs, sstableReader)
 		}
 	}
@@ -992,6 +1006,25 @@ func createWALWriter(walDir string, segmentID int, walOptions wal.Options) (*wal
 	return wal.NewLogWriter(walDir, segmentID, walOpts...)
 }
 
+// parseSegmentID parses the integer segment ID from a file name (e.g. "000001.sst" or "000001.wal").
+func parseSegmentID(filename string) (int, error) {
+	base := filepath.Base(filename)
+	ext := filepath.Ext(base)
+	if ext != ".sst" && ext != ".wal" {
+		return 0, fmt.Errorf("invalid segment file extension: %s", ext)
+	}
+	name := base[:len(base)-len(ext)]
+	var segmentID int
+	n, err := fmt.Sscanf(name, "%d", &segmentID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse segment ID from %s: %w", filename, err)
+	}
+	if n != 1 {
+		return 0, fmt.Errorf("expected 1 parsed item from segment filename %s, got %d", filename, n)
+	}
+	return segmentID, nil
+}
+
 // cleanupWALFiles deletes WAL segment files with IDs up to and including upToSegmentID.
 func cleanupWALFiles(walDir string, upToSegmentID int) {
 	entries, err := os.ReadDir(walDir)
@@ -1002,10 +1035,13 @@ func cleanupWALFiles(walDir string, upToSegmentID int) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".wal" {
 			continue
 		}
-		var segmentID int
-		if n, _ := fmt.Sscanf(entry.Name(), "%d.wal", &segmentID); n == 1 {
+		segmentID, err := parseSegmentID(entry.Name())
+		if err == nil {
 			if segmentID <= upToSegmentID {
-				_ = os.Remove(filepath.Join(walDir, entry.Name()))
+				filePath := filepath.Join(walDir, entry.Name())
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to clean up old WAL segment file", "path", filePath, "error", err)
+				}
 			}
 		}
 	}

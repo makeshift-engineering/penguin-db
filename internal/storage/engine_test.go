@@ -1871,7 +1871,11 @@ func TestEngine_Compaction_Failure(t *testing.T) {
 
 	// Manually run compaction synchronously
 	de.mu.Lock()
-	inputFiles, fileIDs, obsoleteReaders := de.collectCompactionInputs()
+	inputFiles, fileIDs, obsoleteReaders, collectErr := de.collectCompactionInputs()
+	if collectErr != nil {
+		de.mu.Unlock()
+		t.Fatalf("collectCompactionInputs failed: %v", collectErr)
+	}
 	compactionSegID := de.nextSegmentID
 	de.nextSegmentID++
 	de.mu.Unlock()

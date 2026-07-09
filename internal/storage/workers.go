@@ -9,8 +9,50 @@ import (
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/compactor"
+	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 )
+
+// nextFlushWork checks if there is any immutable memtable to flush.
+// Returns the memtable, its segment ID, and a boolean indicating whether the worker should exit.
+// Must be called with engine.mu held.
+func (engine *dbEngine) nextFlushWork() (*memtable.SkipList, int, bool) {
+	if len(engine.immMemtables) == 0 {
+		return nil, 0, engine.isClosing
+	}
+	return engine.immMemtables[0], engine.immWALSegmentIDs[0], false
+}
+
+// failFlush registers a background flush error, dequeues the failed memtable, and broadcasts.
+// Must be called with engine.mu held.
+func (engine *dbEngine) failFlush(err error) {
+	engine.bgErr = err
+	engine.immMemtables = engine.immMemtables[1:]
+	engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
+	engine.flushCond.Broadcast()
+}
+
+// registerFlushedSSTable inserts the flushed L0 reader, dequeues the flushed memtable,
+// and returns the manifest to write.
+// Must be called with engine.mu held.
+func (engine *dbEngine) registerFlushedSSTable(sstableReader *sstable.Reader, segmentID int) *Manifest {
+	// Prepend the new file to Level 0 (newest first).
+	engine.levels[levelZero] = append([]*sstable.Reader{sstableReader}, engine.levels[levelZero]...)
+	engine.sstRefsMu.Lock()
+	engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
+	engine.sstRefsMu.Unlock()
+
+	engine.immMemtables = engine.immMemtables[1:]
+	engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
+	engine.flushedSegmentID = segmentID
+	engine.flushCond.Broadcast()
+
+	return &Manifest{
+		NextSegmentID:    engine.nextSegmentID,
+		Levels:           engine.manifestLevels(),
+		FlushedSegmentID: engine.flushedSegmentID,
+	}
+}
 
 // flushWorker is the background goroutine that serializes immutable memtables to Level 0 SSTables.
 func (engine *dbEngine) flushWorker() {
@@ -29,16 +71,15 @@ func (engine *dbEngine) flushWorker() {
 		}
 
 		engine.mu.Lock()
-		if len(engine.immMemtables) == 0 {
-			if engine.isClosing {
-				engine.mu.Unlock()
-				return
-			}
+		immutable, segmentID, shouldExit := engine.nextFlushWork()
+		if shouldExit {
+			engine.mu.Unlock()
+			return
+		}
+		if immutable == nil {
 			engine.mu.Unlock()
 			continue
 		}
-		immutable := engine.immMemtables[0]
-		segmentID := engine.immWALSegmentIDs[0]
 		engine.mu.Unlock()
 
 		sstableFilename := fmt.Sprintf("%06d.sst", segmentID)
@@ -47,33 +88,18 @@ func (engine *dbEngine) flushWorker() {
 		startTime := time.Now()
 		sstableReader, flushErr := writeMemTableToSSTable(sstablePath, immutable)
 
-		engine.mu.Lock()
 		if flushErr != nil {
-			_ = os.Remove(sstablePath)
-			engine.bgErr = flushErr
-			engine.immMemtables = engine.immMemtables[1:]
-			engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
-			engine.flushCond.Broadcast()
+			if err := os.Remove(sstablePath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to clean up sstable file after flush error", "path", sstablePath, "error", err)
+			}
+			engine.mu.Lock()
+			engine.failFlush(flushErr)
 			engine.mu.Unlock()
 			return
 		}
 
-		// Prepend the new file to Level 0 (newest first).
-		engine.levels[levelZero] = append([]*sstable.Reader{sstableReader}, engine.levels[levelZero]...)
-		engine.sstRefsMu.Lock()
-		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
-		engine.sstRefsMu.Unlock()
-
-		engine.immMemtables = engine.immMemtables[1:]
-		engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
-		engine.flushedSegmentID = segmentID
-		engine.flushCond.Broadcast()
-
-		manifest := &Manifest{
-			NextSegmentID:    engine.nextSegmentID,
-			Levels:           engine.manifestLevels(),
-			FlushedSegmentID: engine.flushedSegmentID,
-		}
+		engine.mu.Lock()
+		manifest := engine.registerFlushedSSTable(sstableReader, segmentID)
 		engine.mu.Unlock()
 
 		writeErr := engine.writeManifestDurable(manifest)
@@ -85,6 +111,7 @@ func (engine *dbEngine) flushWorker() {
 			engine.mu.Unlock()
 			return
 		}
+		engine.mu.Unlock()
 
 		// Remove the corresponding WAL segment.
 		walPath := filepath.Join(engine.walDir, fmt.Sprintf("%06d.wal", segmentID))
@@ -98,6 +125,7 @@ func (engine *dbEngine) flushWorker() {
 		}
 		engine.opts.Metrics.RecordFlush(time.Since(startTime).Milliseconds(), bytesWritten)
 
+		engine.mu.Lock()
 		triggerCompaction := len(engine.levels[levelZero]) >= engine.opts.CompactionThreshold
 		engine.mu.Unlock()
 
@@ -149,7 +177,14 @@ func (engine *dbEngine) compactionWorker() {
 
 		engine.isCompacting = true
 
-		inputFiles, fileIDs, obsoleteReaders := engine.collectCompactionInputs()
+		inputFiles, fileIDs, obsoleteReaders, err := engine.collectCompactionInputs()
+		if err != nil {
+			engine.bgErr = err
+			engine.isCompacting = false
+			engine.flushCond.Broadcast()
+			engine.mu.Unlock()
+			return
+		}
 
 		compactionSegID := engine.nextSegmentID
 		engine.nextSegmentID++
@@ -164,7 +199,7 @@ func (engine *dbEngine) compactionWorker() {
 
 // collectCompactionInputs gathers the files and readers that will be merged.
 // Must be called with lock held.
-func (engine *dbEngine) collectCompactionInputs() (inputFiles []string, fileIDs []int, obsoleteReaders []*sstable.Reader) {
+func (engine *dbEngine) collectCompactionInputs() (inputFiles []string, fileIDs []int, obsoleteReaders []*sstable.Reader, err error) {
 	capacity := len(engine.levels[levelZero]) + len(engine.levels[levelOne])
 	inputFiles = make([]string, 0, capacity)
 	fileIDs = make([]int, 0, capacity)
@@ -173,13 +208,15 @@ func (engine *dbEngine) collectCompactionInputs() (inputFiles []string, fileIDs 
 	for _, level := range []int{levelZero, levelOne} {
 		for _, sstableReader := range engine.levels[level] {
 			inputFiles = append(inputFiles, sstableReader.FilePath())
-			var segmentID int
-			_, _ = fmt.Sscanf(filepath.Base(sstableReader.FilePath()), "%d.sst", &segmentID)
+			segmentID, parseErr := parseSegmentID(filepath.Base(sstableReader.FilePath()))
+			if parseErr != nil {
+				return nil, nil, nil, fmt.Errorf("failed to parse segment ID from sstable path %s: %w", sstableReader.FilePath(), parseErr)
+			}
 			fileIDs = append(fileIDs, segmentID)
 			obsoleteReaders = append(obsoleteReaders, sstableReader)
 		}
 	}
-	return inputFiles, fileIDs, obsoleteReaders
+	return inputFiles, fileIDs, obsoleteReaders, nil
 }
 
 // runAndRegisterCompaction runs the compaction work and registers the result in Level 1.
@@ -216,7 +253,10 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		if err != nil {
 			for _, r := range newL1Readers {
 				_ = r.Close()
-				_ = os.Remove(r.FilePath())
+				filePath := r.FilePath()
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to clean up compacted file after compaction failure", "path", filePath, "error", err)
+				}
 			}
 			engine.bgErr = fmt.Errorf("compaction failed to open output file %s: %w", compactedPath, err)
 			engine.isCompacting = false
@@ -270,7 +310,10 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		// the new L1 readers that were never registered.
 		for _, r := range newL1Readers {
 			_ = r.Close()
-			_ = os.Remove(r.FilePath())
+			filePath := r.FilePath()
+			if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to clean up compacted file after manifest write failure", "path", filePath, "error", err)
+			}
 		}
 		engine.bgErr = fmt.Errorf("compaction failed to write manifest: %w", writeErr)
 		engine.isCompacting = false
@@ -283,21 +326,20 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	engine.levels[levelZero] = newL0Readers
 	engine.levels[levelOne] = newL1Readers
 
-	// Register the new L1 readers.
+	// Register the new L1 readers and mark old readers as obsolete.
 	engine.sstRefsMu.Lock()
 	for _, sstableReader := range newL1Readers {
 		engine.sstRefs[sstableReader] = &sstableRef{reader: sstableReader, refs: 0, obsolete: false}
 	}
-	engine.sstRefsMu.Unlock()
-
-	// Mark old readers as obsolete and remove them if unreferenced.
-	engine.sstRefsMu.Lock()
 	for _, obsR := range obsoleteReaders {
 		if ref, ok := engine.sstRefs[obsR]; ok {
 			ref.obsolete = true
 			if ref.refs == 0 {
 				_ = obsR.Close()
-				_ = os.Remove(obsR.FilePath())
+				filePath := obsR.FilePath()
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to remove obsolete reader file after compaction", "path", filePath, "error", err)
+				}
 				delete(engine.sstRefs, obsR)
 			}
 		}

@@ -99,11 +99,15 @@ func writeManifest(dir string, m *Manifest) error {
 
 	closeErr := file.Close()
 	if writeErr != nil {
-		_ = os.Remove(tmpPath)
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to clean up temp manifest file after write error", "path", tmpPath, "error", err)
+		}
 		return writeErr
 	}
 	if closeErr != nil {
-		_ = os.Remove(tmpPath)
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("failed to clean up temp manifest file after close error", "path", tmpPath, "error", err)
+		}
 		return closeErr
 	}
 

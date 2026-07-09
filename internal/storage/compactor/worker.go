@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -231,10 +232,14 @@ func performMerge(task *Task, minHeap *MergeHeap, config *Options) (newFiles []s
 				state.currentWriter = nil
 			}
 			if state.currentFilePath != "" {
-				_ = os.Remove(state.currentFilePath)
+				if err := os.Remove(state.currentFilePath); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to clean up compaction temporary file", "path", state.currentFilePath, "error", err)
+				}
 			}
 			for _, f := range state.newFilesCreated {
-				_ = os.Remove(f)
+				if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+					slog.Warn("failed to clean up compaction new file on error", "path", f, "error", err)
+				}
 			}
 			return
 		}

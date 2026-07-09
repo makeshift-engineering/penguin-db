@@ -31,13 +31,13 @@ type dbSnapshot struct {
 
 func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
 	if len(key) == 0 {
-		return nil, memtable.ErrEmptyKey
+		return nil, ErrEmptyKey
 	}
 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("snapshot is closed")
+		return nil, ErrSnapshotClosed
 	}
 	s.mu.Unlock()
 
@@ -76,7 +76,7 @@ func (s *dbSnapshot) Scan(prefix []byte) (Iterator, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("snapshot is closed")
+		return nil, ErrSnapshotClosed
 	}
 	s.mu.Unlock()
 
@@ -112,7 +112,7 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 	}
 	if engine.isClosing {
 		engine.mu.Unlock()
-		return nil, fmt.Errorf("engine is closing")
+		return nil, ErrEngineClosed
 	}
 
 	// Rotate active memtable if it contains any data to freeze its state for snapshot isolation
@@ -155,12 +155,6 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 	}
 
 	onScan := func(prefix []byte, lvl0, lvl1 []*sstable.Reader, immMem []*memtable.SkipList) (Iterator, error) {
-		engine.mu.RLock()
-		if engine.isClosing {
-			engine.mu.RUnlock()
-			return nil, fmt.Errorf("engine is closing")
-		}
-		engine.mu.RUnlock()
 		return engine.scanInternal(prefix, lvl0, lvl1, immMem), nil
 	}
 
