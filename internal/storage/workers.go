@@ -253,7 +253,8 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		if err != nil {
 			for _, r := range newL1Readers {
 				_ = r.Close()
-				filePath := r.FilePath()
+			}
+			for _, filePath := range res.NewFilesCreated {
 				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 					slog.Warn("failed to clean up compacted file after compaction failure", "path", filePath, "error", err)
 				}

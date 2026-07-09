@@ -801,9 +801,18 @@ func (engine *dbEngine) Scan(prefix []byte) (Iterator, error) {
 	for i := len(engine.immMemtables) - 1; i >= 0; i-- {
 		memtables = append(memtables, engine.immMemtables[i])
 	}
+
+	pinned := engine.pinReaders(level0, level1)
+	engine.iterWg.Add(1)
 	engine.mu.RUnlock()
 
-	return engine.scanInternal(prefix, level0, level1, memtables), nil
+	iter, err := engine.scanInternal(prefix, level0, level1, memtables, pinned)
+	if err != nil {
+		engine.unpinReaders(pinned)
+		engine.iterWg.Done()
+		return nil, err
+	}
+	return iter, nil
 }
 
 // Close flushes in-memory contents and safely releases lock and worker resources.
@@ -972,13 +981,6 @@ func searchLevels(level0, level1 []*sstable.Reader, key []byte) (value []byte, f
 	return nil, false, false, probed, nil
 }
 
-// writeManifestDurable writes the manifest to disk atomically, serialized by manifestMu.
-func (engine *dbEngine) writeManifestDurable(m *Manifest) error {
-	engine.manifestMu.Lock()
-	defer engine.manifestMu.Unlock()
-	return writeManifest(engine.dir, m)
-}
-
 // manifestLevels builds the file basename mapping required by the atomic manifest writer.
 // Must be called with engine.mu held.
 func (engine *dbEngine) manifestLevels() map[int][]string {
@@ -1051,10 +1053,7 @@ func cleanupWALFiles(walDir string, upToSegmentID int) {
 
 // scanInternal creates an Iterator over the given level readers, pinned list, and memtables.
 // Must be called with engine.mu RLock NOT held.
-func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Reader, memtables []*memtable.SkipList) Iterator {
-	// Pin all readers for the iterator's lifetime.
-	pinned := engine.pinReaders(level0, level1)
-
+func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Reader, memtables []*memtable.SkipList, pinned []*sstable.Reader) (Iterator, error) {
 	// Get iterators for all memtables — memtable.Iterator directly satisfies internalIterator.
 	// Callers must pass memtables in newest-to-oldest order so the merge
 	// iterator's first-match tie-break correctly resolves duplicate keys.
@@ -1066,10 +1065,14 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 	// Level 0 SSTable iterators (all files, as L0 ranges overlap).
 	for _, sstableReader := range level0 {
 		sstableIterator, err := sstableReader.NewIteratorAt(prefix)
-		if err == nil {
-			sstableIterator.Next()
-			iterators = append(iterators, sstableIterator)
+		if err != nil {
+			for _, it := range iterators {
+				it.Close()
+			}
+			return nil, err
 		}
+		sstableIterator.Next()
+		iterators = append(iterators, sstableIterator)
 	}
 
 	// Level 1 SSTable iterators (only files whose key range overlaps the prefix).
@@ -1102,14 +1105,16 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 		}
 		if overlap {
 			sstableIterator, err := sstableReader.NewIteratorAt(prefix)
-			if err == nil {
-				sstableIterator.Next()
-				iterators = append(iterators, sstableIterator)
+			if err != nil {
+				for _, it := range iterators {
+					it.Close()
+				}
+				return nil, err
 			}
+			sstableIterator.Next()
+			iterators = append(iterators, sstableIterator)
 		}
 	}
-
-	engine.iterWg.Add(1)
 
 	onClose := func() {
 		engine.unpinReaders(pinned)
@@ -1123,7 +1128,7 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 	}
 	mergingIteratorInstance.findNext()
 
-	return mergingIteratorInstance
+	return mergingIteratorInstance, nil
 }
 
 // isSafeBasename checks if a filename is a clean, simple basename without path separators or parent directory references.

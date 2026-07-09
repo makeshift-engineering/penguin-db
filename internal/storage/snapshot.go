@@ -164,7 +164,18 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 	}
 
 	onScan := func(prefix []byte, lvl0, lvl1 []*sstable.Reader, immMem []*memtable.SkipList) (Iterator, error) {
-		return engine.scanInternal(prefix, lvl0, lvl1, immMem), nil
+		engine.mu.RLock()
+		pinned := engine.pinReaders(lvl0, lvl1)
+		engine.iterWg.Add(1)
+		engine.mu.RUnlock()
+
+		iter, err := engine.scanInternal(prefix, lvl0, lvl1, immMem, pinned)
+		if err != nil {
+			engine.unpinReaders(pinned)
+			engine.iterWg.Done()
+			return nil, err
+		}
+		return iter, nil
 	}
 
 	return &dbSnapshot{
