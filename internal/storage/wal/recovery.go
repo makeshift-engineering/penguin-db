@@ -49,8 +49,12 @@ func Replay(directory string, minSegmentID int, recordConsumer RecordConsumer) (
 	// Sort WAL segments numerically based on segment ID
 	sort.Slice(walFiles, func(i, j int) bool {
 		var idI, idJ int
-		_, _ = fmt.Sscanf(walFiles[i], "%d.wal", &idI)
-		_, _ = fmt.Sscanf(walFiles[j], "%d.wal", &idJ)
+		if n, err := fmt.Sscanf(walFiles[i], "%d.wal", &idI); n != 1 || err != nil {
+			slog.Warn("failed to parse segment ID during sorting", "file", walFiles[i], "error", err)
+		}
+		if n, err := fmt.Sscanf(walFiles[j], "%d.wal", &idJ); n != 1 || err != nil {
+			slog.Warn("failed to parse segment ID during sorting", "file", walFiles[j], "error", err)
+		}
 		return idI < idJ
 	})
 

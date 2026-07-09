@@ -27,8 +27,6 @@ func (engine *dbEngine) nextFlushWork() (*memtable.SkipList, int, bool) {
 // Must be called with engine.mu held.
 func (engine *dbEngine) failFlush(err error) {
 	engine.bgErr = err
-	engine.immMemtables = engine.immMemtables[1:]
-	engine.immWALSegmentIDs = engine.immWALSegmentIDs[1:]
 	engine.flushCond.Broadcast()
 }
 
@@ -98,11 +96,13 @@ func (engine *dbEngine) flushWorker() {
 			return
 		}
 
+		engine.manifestMu.Lock()
 		engine.mu.Lock()
 		manifest := engine.registerFlushedSSTable(sstableReader, segmentID)
 		engine.mu.Unlock()
 
-		writeErr := engine.writeManifestDurable(manifest)
+		writeErr := writeManifest(engine.dir, manifest)
+		engine.manifestMu.Unlock()
 
 		engine.mu.Lock()
 		if writeErr != nil {
@@ -266,6 +266,12 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 		newL1Readers = append(newL1Readers, sstableReader)
 	}
 
+	engine.mu.Unlock()
+
+	engine.manifestMu.Lock()
+	defer engine.manifestMu.Unlock()
+
+	engine.mu.Lock()
 	// Build prospective level slices without mutating engine.levels yet.
 	// Filter out the compacted files from Level 0 (preserving any concurrent flushes).
 	var newL0Readers []*sstable.Reader
@@ -301,7 +307,7 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	}
 	engine.mu.Unlock()
 
-	writeErr := engine.writeManifestDurable(manifest)
+	writeErr := writeManifest(engine.dir, manifest)
 
 	engine.mu.Lock()
 	if writeErr != nil {

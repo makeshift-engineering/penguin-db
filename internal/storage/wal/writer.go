@@ -359,10 +359,7 @@ func (writer *LogWriter) batchWorker() {
 						leftoverTicket = nil
 					} else {
 						select {
-						case ticket, ok := <-writer.ingestionChannel:
-							if ok {
-								t = ticket
-							}
+						case t = <-writer.ingestionChannel:
 						default:
 						}
 					}

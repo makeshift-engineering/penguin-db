@@ -493,15 +493,15 @@ func validateOperations(operations []Op) (int64, error) {
 // freezeActiveMemTable freezes the current active memtable and active WAL.
 // It swaps them in memory and returns the old WAL writer and the new segment ID to be committed.
 // Must be called with engine.mu held.
-func (engine *dbEngine) freezeActiveMemTable() (*wal.LogWriter, int) {
+func (engine *dbEngine) freezeActiveMemTable() (oldWAL *wal.LogWriter, newSegmentID int) {
 	// Freeze the active memtable and append it to the queue.
 	engine.immMemtables = append(engine.immMemtables, engine.memtable)
 	engine.immWALSegmentIDs = append(engine.immWALSegmentIDs, engine.activeWALSegmentID)
 
-	oldWAL := engine.wal
+	oldWAL = engine.wal
 	engine.wal = nil
 
-	newSegmentID := engine.nextSegmentID
+	newSegmentID = engine.nextSegmentID
 	engine.nextSegmentID++
 
 	// Initialize a fresh active memtable and update active WAL segment ID.
@@ -538,6 +538,7 @@ func (engine *dbEngine) commitRotation(oldWAL *wal.LogWriter, newSegmentID int) 
 		return err
 	}
 
+	engine.manifestMu.Lock()
 	engine.mu.Lock()
 	engine.wal = newWAL
 	manifest := &Manifest{
@@ -546,7 +547,8 @@ func (engine *dbEngine) commitRotation(oldWAL *wal.LogWriter, newSegmentID int) 
 	}
 	engine.mu.Unlock()
 
-	writeErr := engine.writeManifestDurable(manifest)
+	writeErr := writeManifest(engine.dir, manifest)
+	engine.manifestMu.Unlock()
 
 	engine.mu.Lock()
 	if writeErr != nil {

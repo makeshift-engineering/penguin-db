@@ -124,6 +124,15 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 			return nil, err
 		}
 		engine.mu.Lock()
+
+		if engine.bgErr != nil {
+			engine.mu.Unlock()
+			return nil, engine.bgErr
+		}
+		if engine.isClosing {
+			engine.mu.Unlock()
+			return nil, ErrEngineClosed
+		}
 	}
 
 	level0 := make([]*sstable.Reader, 0, len(engine.levels[levelZero]))
