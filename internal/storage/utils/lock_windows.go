@@ -1,6 +1,6 @@
 //go:build windows
 
-package storage
+package utils
 
 import (
 	"fmt"
@@ -17,7 +17,7 @@ func (l *windowsLock) Close() error {
 	return syscall.CloseHandle(l.handle)
 }
 
-func lockDirectory(dir string) (interface{ Close() error }, error) {
+func LockDirectory(dir string) (interface{ Close() error }, error) {
 	lockPath := filepath.Join(dir, "LOCK")
 	pathPtr, err := syscall.UTF16PtrFromString(lockPath)
 	if err != nil {

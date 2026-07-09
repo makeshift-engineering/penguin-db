@@ -1,6 +1,6 @@
 //go:build !windows
 
-package storage
+package utils
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ func (l *unixLock) Close() error {
 	return l.file.Close()
 }
 
-func lockDirectory(dir string) (interface{ Close() error }, error) {
+func LockDirectory(dir string) (interface{ Close() error }, error) {
 	lockPath := filepath.Join(dir, "LOCK")
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {

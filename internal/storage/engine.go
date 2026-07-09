@@ -14,6 +14,7 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
+	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/wal"
 )
 
@@ -205,7 +206,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 	}
 
 	// Acquire exclusive lock on base directory to prevent dual-open corruption.
-	lock, err := lockDirectory(dir)
+	lock, err := utils.LockDirectory(dir)
 	if err != nil {
 		return nil, err
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/storage/compactor"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
+	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/wal"
 )
 
@@ -1766,10 +1767,10 @@ func TestEngine_WriteManifest_FailOpenFile(t *testing.T) {
 	}
 }
 
-// TestEngine_LockDirectory_NullByte covers error path of lockDirectory
+// TestEngine_LockDirectory_NullByte covers error path of LockDirectory
 // when key contains a null byte.
 func TestEngine_LockDirectory_NullByte(t *testing.T) {
-	_, err := lockDirectory("dir\x00with\x00null")
+	_, err := utils.LockDirectory("dir\x00with\x00null")
 	if err == nil {
 		t.Error("expected error locking directory with null byte, got nil")
 	}
