@@ -7,8 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 )
 
 const (
@@ -176,18 +177,8 @@ func (writer *LogWriter) rotateActiveFile() error {
 	writer.activeFile = file
 	writer.currentSizeBytes = info.Size()
 
-	if runtime.GOOS != "windows" {
-		d, err := os.Open(writer.directory)
-		if err != nil {
-			slog.Warn("failed to open WAL directory for sync", "directory", writer.directory, "error", err)
-		} else {
-			if err := d.Sync(); err != nil {
-				slog.Warn("failed to sync WAL directory", "directory", writer.directory, "error", err)
-			}
-			if err := d.Close(); err != nil {
-				slog.Warn("failed to close WAL directory after sync", "directory", writer.directory, "error", err)
-			}
-		}
+	if err := utils.SyncDir(writer.directory); err != nil {
+		slog.Warn("failed to sync WAL directory", "directory", writer.directory, "error", err)
 	}
 
 	return nil

@@ -7,7 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 )
 
 // Manifest represents the persistent database state metadata.
@@ -120,17 +121,7 @@ func writeManifest(dir string, m *Manifest) error {
 		return err
 	}
 
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-
-	return d.Sync()
+	return utils.SyncDir(dir)
 }
 
 // copyFile copies a file from src to dst.
