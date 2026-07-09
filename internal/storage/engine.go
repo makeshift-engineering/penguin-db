@@ -473,49 +473,56 @@ func validateOperations(operations []Op) (int64, error) {
 	return size, nil
 }
 
-// rotateActiveMemTableAndWAL rotates full active components and kicks off a flush.
-// Must be called with lock held.
-//
-// Manual Lock/Unlock Invariants:
-//
-//	To avoid holding a heavy engine write lock during blocking disk I/O, engine.mu is released
-//	and re-acquired around WAL.Close() and writeManifestDurable(). Since engine.writeMu remains
-//	held for the duration of the calling WriteBatch execution, concurrent writes cannot enter
-//	the pipeline, ensuring matching WAL/memtable serialization.
-func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
+// freezeActiveMemTable freezes the current active memtable and active WAL.
+// It swaps them in memory and returns the old WAL writer and the new segment ID to be committed.
+// Must be called with engine.mu held.
+func (engine *dbEngine) freezeActiveMemTable() (*wal.LogWriter, int) {
 	// Freeze the active memtable and append it to the queue.
 	engine.immMemtables = append(engine.immMemtables, engine.memtable)
 	engine.immWALSegmentIDs = append(engine.immWALSegmentIDs, engine.activeWALSegmentID)
 
-	// Close the active WAL segment.
-	activeWAL := engine.wal
+	oldWAL := engine.wal
 	engine.wal = nil
-	engine.mu.Unlock()
 
-	if err := activeWAL.Close(); err != nil {
+	newSegmentID := engine.nextSegmentID
+	engine.nextSegmentID++
+
+	// Initialize a fresh active memtable and update active WAL segment ID.
+	engine.memtable = memtable.NewSkipList(engine.opts.MaxMemTableSize, engine.opts.MemTableMaxLevel)
+	engine.activeWALSegmentID = newSegmentID
+
+	return oldWAL, newSegmentID
+}
+
+// commitRotation closes the old WAL segment, initializes the new WAL segment,
+// and writes the updated manifest to disk.
+// Must be called WITHOUT holding engine.mu.
+func (engine *dbEngine) commitRotation(oldWAL *wal.LogWriter, newSegmentID int) error {
+	// Close the old WAL segment.
+	if err := oldWAL.Close(); err != nil {
 		engine.mu.Lock()
 		engine.bgErr = err
 		// Restore activeWAL so it is not permanently nil and can be closed on shutdown
-		engine.wal = activeWAL
+		if engine.wal == nil {
+			engine.wal = oldWAL
+		}
 		engine.flushCond.Broadcast()
+		engine.mu.Unlock()
+		return err
+	}
+
+	// Initialize the new WAL segment.
+	newWAL, err := createWALWriter(engine.walDir, newSegmentID, engine.opts.WALOptions)
+	if err != nil {
+		engine.mu.Lock()
+		engine.bgErr = err
+		engine.flushCond.Broadcast()
+		engine.mu.Unlock()
 		return err
 	}
 
 	engine.mu.Lock()
-
-	// Initialize a fresh active memtable and a new WAL segment.
-	engine.memtable = memtable.NewSkipList(engine.opts.MaxMemTableSize, engine.opts.MemTableMaxLevel)
-	engine.activeWALSegmentID = engine.nextSegmentID
-	engine.nextSegmentID++
-
-	newWAL, err := createWALWriter(engine.walDir, engine.activeWALSegmentID, engine.opts.WALOptions)
-	if err != nil {
-		engine.bgErr = err
-		engine.flushCond.Broadcast()
-		return err
-	}
 	engine.wal = newWAL
-
 	manifest := &Manifest{
 		NextSegmentID: engine.nextSegmentID,
 		Levels:        engine.manifestLevels(),
@@ -528,6 +535,7 @@ func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 	if writeErr != nil {
 		engine.bgErr = writeErr
 		engine.flushCond.Broadcast()
+		engine.mu.Unlock()
 		return writeErr
 	}
 
@@ -536,6 +544,7 @@ func (engine *dbEngine) rotateActiveMemTableAndWAL() error {
 	case engine.flushChan <- struct{}{}:
 	default:
 	}
+	engine.mu.Unlock()
 
 	return nil
 }
@@ -598,10 +607,13 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 				continue
 			}
 
-			if err := engine.rotateActiveMemTableAndWAL(); err != nil {
-				engine.mu.Unlock()
+			oldWAL, newSegmentID := engine.freezeActiveMemTable()
+			engine.mu.Unlock()
+
+			if err := engine.commitRotation(oldWAL, newSegmentID); err != nil {
 				return err
 			}
+			engine.mu.Lock()
 			continue
 		}
 		break
@@ -1061,11 +1073,15 @@ func (engine *dbEngine) scanInternal(prefix []byte, level0, level1 []*sstable.Re
 
 	engine.iterWg.Add(1)
 
+	onClose := func() {
+		engine.unpinReaders(pinned)
+		engine.iterWg.Done()
+	}
+
 	mergingIteratorInstance := &mergingIterator{
-		engine: engine,
-		pinned: pinned,
-		iters:  iterators,
-		prefix: prefix,
+		iters:   iterators,
+		prefix:  prefix,
+		onClose: onClose,
 	}
 	mergingIteratorInstance.findNext()
 

@@ -20,12 +20,13 @@ type Snapshot interface {
 
 // dbSnapshot implements the Snapshot interface.
 type dbSnapshot struct {
-	engine *dbEngine
-	levels map[int][]*sstable.Reader
-	pinned []*sstable.Reader
-	imm    []*memtable.SkipList
-	mu     sync.Mutex
-	closed bool
+	levels  map[int][]*sstable.Reader
+	pinned  []*sstable.Reader
+	imm     []*memtable.SkipList
+	mu      sync.Mutex
+	closed  bool
+	onClose func()
+	onScan  func(prefix []byte, level0, level1 []*sstable.Reader, imm []*memtable.SkipList) (Iterator, error)
 }
 
 func (s *dbSnapshot) Get(key []byte) ([]byte, error) {
@@ -79,16 +80,10 @@ func (s *dbSnapshot) Scan(prefix []byte) (Iterator, error) {
 	}
 	s.mu.Unlock()
 
-	s.engine.mu.RLock()
-	if s.engine.isClosing {
-		s.engine.mu.RUnlock()
-		return nil, fmt.Errorf("engine is closing")
+	if s.onScan == nil {
+		return nil, fmt.Errorf("snapshot scan uninitialized")
 	}
-	s.engine.mu.RUnlock()
-
-	level0 := s.levels[levelZero]
-	level1 := s.levels[levelOne]
-	return s.engine.scanInternal(prefix, level0, level1, s.imm), nil
+	return s.onScan(prefix, s.levels[levelZero], s.levels[levelOne], s.imm)
 }
 
 func (s *dbSnapshot) Close() {
@@ -100,8 +95,9 @@ func (s *dbSnapshot) Close() {
 	s.closed = true
 	s.mu.Unlock()
 
-	s.engine.unpinReaders(s.pinned)
-	s.engine.iterWg.Done()
+	if s.onClose != nil {
+		s.onClose()
+	}
 }
 
 // Snapshot returns a point-in-time Snapshot of the database.
@@ -121,10 +117,13 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 
 	// Rotate active memtable if it contains any data to freeze its state for snapshot isolation
 	if engine.memtable.Size() > 0 {
-		if err := engine.rotateActiveMemTableAndWAL(); err != nil {
-			engine.mu.Unlock()
+		oldWAL, newSegmentID := engine.freezeActiveMemTable()
+		engine.mu.Unlock()
+
+		if err := engine.commitRotation(oldWAL, newSegmentID); err != nil {
 			return nil, err
 		}
+		engine.mu.Lock()
 	}
 
 	level0 := make([]*sstable.Reader, 0, len(engine.levels[levelZero]))
@@ -150,10 +149,26 @@ func (engine *dbEngine) Snapshot() (Snapshot, error) {
 	levels[levelZero] = level0
 	levels[levelOne] = level1
 
+	onClose := func() {
+		engine.unpinReaders(pinned)
+		engine.iterWg.Done()
+	}
+
+	onScan := func(prefix []byte, lvl0, lvl1 []*sstable.Reader, immMem []*memtable.SkipList) (Iterator, error) {
+		engine.mu.RLock()
+		if engine.isClosing {
+			engine.mu.RUnlock()
+			return nil, fmt.Errorf("engine is closing")
+		}
+		engine.mu.RUnlock()
+		return engine.scanInternal(prefix, lvl0, lvl1, immMem), nil
+	}
+
 	return &dbSnapshot{
-		engine: engine,
-		levels: levels,
-		pinned: pinned,
-		imm:    imm,
+		levels:  levels,
+		pinned:  pinned,
+		imm:     imm,
+		onClose: onClose,
+		onScan:  onScan,
 	}, nil
 }

@@ -2,8 +2,6 @@ package storage
 
 import (
 	"bytes"
-
-	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 )
 
 // Iterator defines the interface for scanning range queries.
@@ -31,14 +29,13 @@ type internalIterator interface {
 
 // mergingIterator merges multiple internalIterators into a single sorted cursor.
 type mergingIterator struct {
-	engine  *dbEngine
-	pinned  []*sstable.Reader
 	iters   []internalIterator
 	prefix  []byte
 	currKey []byte
 	currVal []byte
 	valid   bool
 	closed  bool
+	onClose func()
 }
 
 // Valid returns true if the merging iterator is currently holding a valid entry.
@@ -69,12 +66,9 @@ func (iterator *mergingIterator) Close() {
 	for _, subIterator := range iterator.iters {
 		subIterator.Close()
 	}
-	iterator.engine.sstRefsMu.Lock()
-	for _, sstableReader := range iterator.pinned {
-		iterator.engine.unpinSSTable(sstableReader)
+	if iterator.onClose != nil {
+		iterator.onClose()
 	}
-	iterator.engine.sstRefsMu.Unlock()
-	iterator.engine.iterWg.Done()
 }
 
 // findNext advances the merging iterator to the next live, non-tombstone entry.
