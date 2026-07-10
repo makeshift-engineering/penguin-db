@@ -140,10 +140,14 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	if _, err = io.Copy(out, in); err != nil {
+		_ = out.Close()
 		return err
 	}
-	return out.Sync()
+	if err = out.Sync(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
