@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,7 +117,7 @@ func TestAppend_MultipleRecords_AllWritten(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if _, ok := mem.puts["k2"]; !ok {
@@ -148,7 +149,7 @@ func TestAppend_RecordRoundtrip_ViaReplay(t *testing.T) {
 	w.Close()
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["penguindb"]) != "rocks" {
@@ -472,7 +473,7 @@ func TestAppend_ConcurrentWrites_AllRecordsRecoverable(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	for i, k := range keys {
@@ -538,7 +539,7 @@ func TestClose_SyncsDataToDisk(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["durable"]) != "yes" {
@@ -719,6 +720,9 @@ func TestClose_ConcurrentCalls_NoPanic(t *testing.T) {
 
 // TestClose_DrainsInFlightTickets ensures that records already in the ingestion
 // channel at the time of Close are still flushed and recoverable.
+//
+// The test guarantees at least one record has been durably written before
+// triggering the Close race, so successCount == 0 is never a valid outcome.
 func TestClose_DrainsInFlightTickets(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewLogWriter(dir, 1)
@@ -726,11 +730,18 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 		t.Fatalf("NewLogWriter: %v", err)
 	}
 
+	anchor := &Record{Opcode: OpcodePut, Key: []byte("anchor-key"), Value: []byte("v")}
+	if err := w.Append(anchor); err != nil {
+		t.Fatalf("synchronous Append (anchor): %v", err)
+	}
+
 	const numRecords = 100
 	var wg sync.WaitGroup
 	errs := make([]error, numRecords)
+	firstSuccess := make(chan struct{})
+	var once sync.Once
 
-	// Spawn multiple concurrent appends to saturate the worker and ingestion channel.
+	// Spawn concurrent appends to race with Close.
 	for i := 0; i < numRecords; i++ {
 		wg.Add(1)
 		go func(idx int) {
@@ -740,8 +751,22 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 				Key:    []byte(fmt.Sprintf("drain-%04d", idx)),
 				Value:  []byte("v"),
 			}
-			errs[idx] = w.Append(r)
+			err := w.Append(r)
+			errs[idx] = err
+			if err == nil {
+				once.Do(func() {
+					close(firstSuccess)
+				})
+			}
 		}(i)
+	}
+
+	// Wait for at least one concurrent append to succeed before calling Close.
+	// This ensures Close has to drain already-queued/active tickets.
+	select {
+	case <-firstSuccess:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent Appends failed to make any progress before Close")
 	}
 
 	closeErrChan := make(chan error, 1)
@@ -770,21 +795,28 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 		t.Fatal("Close hung for more than 5 seconds")
 	}
 
-	// Count how many succeeded.
 	var successCount int
 	for _, e := range errs {
 		if e == nil {
 			successCount++
+		} else if !errors.Is(e, ErrWriterClosed) {
+			t.Errorf("Append returned unexpected error: %v (expected nil or ErrWriterClosed)", e)
 		}
 	}
-	if successCount == 0 {
-		t.Fatal("no records were successfully appended")
+	if successCount < 1 {
+		t.Fatal("expected at least one concurrent append to succeed")
+	}
+	t.Logf("concurrent appends: %d/%d succeeded before/during Close", successCount, numRecords)
+
+	// Verify that all successfully appended concurrent records are recoverable.
+	mem := newMockRecordConsumer()
+	if _, err := Replay(dir, 0, mem); err != nil {
+		t.Fatalf("Replay: %v", err)
 	}
 
-	// Verify that all successfully appended records are recoverable.
-	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
-		t.Fatalf("Replay: %v", err)
+	// Anchor record must always be present.
+	if _, ok := mem.puts["anchor-key"]; !ok {
+		t.Error("synchronous anchor record was not recovered by Replay")
 	}
 
 	for i, e := range errs {
@@ -793,8 +825,6 @@ func TestClose_DrainsInFlightTickets(t *testing.T) {
 			if _, ok := mem.puts[key]; !ok {
 				t.Errorf("record %q was accepted by Append but not recovered by Replay", key)
 			}
-		} else if !errors.Is(e, ErrWriterClosed) {
-			t.Errorf("Append[%d] returned unexpected error: %v (expected nil or ErrWriterClosed)", i, e)
 		}
 	}
 }
@@ -830,7 +860,7 @@ func TestBatchWorker_ExitsCleanly_WhenChannelClosed(t *testing.T) {
 
 	// Confirm the data is durable.
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
 	if string(mem.puts["alive"]) != "yes" {
@@ -987,5 +1017,215 @@ func TestLogWriter_TerminalError(t *testing.T) {
 	// Verify that the error wraps or matches our terminal I/O error pattern.
 	if !strings.Contains(err3.Error(), "terminal WAL I/O error") {
 		t.Errorf("expected error containing 'terminal WAL I/O error', got: %v", err3)
+	}
+}
+
+// TestAppendBatch validates the AppendBatch implementation, including atomic
+// writing of multiple records, validation rules, post-close behavior, and
+// terminal error handling.
+func TestAppendBatch(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	// Empty batch
+	if err := w.AppendBatch(nil); err != nil {
+		t.Errorf("empty batch: expected nil, got %v", err)
+	}
+
+	// Valid batch
+	records := []*Record{
+		{Opcode: OpcodePut, Key: []byte("bk1"), Value: []byte("bv1")},
+		{Opcode: OpcodeDelete, Key: []byte("bk2"), Value: nil},
+	}
+	if err := w.AppendBatch(records); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	// Verify durability with Replay
+	mem := newMockRecordConsumer()
+	if _, err := Replay(dir, 0, mem); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if string(mem.puts["bk1"]) != "bv1" {
+		t.Errorf("expected bk1=bv1, got %q", mem.puts["bk1"])
+	}
+	foundBk2 := false
+	for _, d := range mem.deletes {
+		if d == "bk2" {
+			foundBk2 = true
+			break
+		}
+	}
+	if !foundBk2 {
+		t.Error("expected bk2 to be deleted")
+	}
+
+	// Validation - empty/nil key
+	badRecordsKey := []*Record{
+		{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("v")},
+		{Opcode: OpcodePut, Key: nil, Value: []byte("v")},
+	}
+	if err := w.AppendBatch(badRecordsKey); err == nil || !strings.Contains(err.Error(), ErrEmptyKey.Error()) {
+		t.Errorf("expected ErrEmptyKey, got %v", err)
+	}
+
+	// Validation - invalid opcode
+	badRecordsOp := []*Record{
+		{Opcode: OpcodePut, Key: []byte("good"), Value: []byte("v")},
+		{Opcode: 99, Key: []byte("bad-op"), Value: []byte("v")},
+	}
+	if err := w.AppendBatch(badRecordsOp); err == nil || !strings.Contains(err.Error(), ErrInvalidOpcode.Error()) {
+		t.Errorf("expected ErrInvalidOpcode, got %v", err)
+	}
+
+	// AppendBatch after Close
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := w.AppendBatch(records); !errors.Is(err, ErrWriterClosed) {
+		t.Errorf("expected ErrWriterClosed after Close, got %v", err)
+	}
+
+	// Terminal error on AppendBatch
+	w2, err := NewLogWriter(t.TempDir(), 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter 2: %v", err)
+	}
+	defer w2.Close()
+	_ = w2.activeFile.Close() // force-close active file
+	r := &Record{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("v")}
+	_ = w2.Append(r) // transition to terminal error
+	if err := w2.AppendBatch(records); err == nil || !strings.Contains(err.Error(), "terminal WAL I/O error") {
+		t.Errorf("expected terminal error, got %v", err)
+	}
+}
+
+// TestLogWriter_RotationFailure verifies error handling when segment file rotation
+// fails (e.g., because a directory blocks the creation of the next WAL segment).
+func TestLogWriter_RotationFailure(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1, WithSegmentSizeBytes(1))
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+	defer w.Close()
+
+	// Pre-create the next segment file path as a directory to block OpenFile during rotation
+	nextPath := filepath.Join(dir, "000002.wal")
+	if err := os.Mkdir(nextPath, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	// Trigger rotation by appending a record (since size is 1)
+	r := &Record{Opcode: OpcodePut, Key: []byte("k"), Value: []byte("v")}
+	err = w.Append(r)
+	if err == nil {
+		t.Fatal("expected rotation to fail, but it succeeded")
+	}
+	if !strings.Contains(err.Error(), "failed to open new WAL segment") {
+		t.Errorf("expected failed to open new WAL segment error, got %v", err)
+	}
+}
+
+// TestClose_DrainsInFlightBatches_Concurrent ensures that records already in
+// AppendBatch calls racing with Close are either committed and recovered, or
+// return ErrWriterClosed / terminal WAL I/O error, but are never silent loss.
+func TestClose_DrainsInFlightBatches_Concurrent(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewLogWriter(dir, 1)
+	if err != nil {
+		t.Fatalf("NewLogWriter: %v", err)
+	}
+
+	anchor := &Record{Opcode: OpcodePut, Key: []byte("anchor-key"), Value: []byte("v")}
+	if err := w.Append(anchor); err != nil {
+		t.Fatalf("synchronous Append (anchor): %v", err)
+	}
+
+	const numBatches = 50
+	var wg sync.WaitGroup
+	errs := make([]error, numBatches)
+	firstSuccess := make(chan struct{})
+	var once sync.Once
+
+	for i := 0; i < numBatches; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			records := []*Record{
+				{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("batch-drain-%04d-1", idx)), Value: []byte("v1")},
+				{Opcode: OpcodePut, Key: []byte(fmt.Sprintf("batch-drain-%04d-2", idx)), Value: []byte("v2")},
+			}
+			err := w.AppendBatch(records)
+			errs[idx] = err
+			if err == nil {
+				once.Do(func() {
+					close(firstSuccess)
+				})
+			}
+		}(i)
+	}
+
+	// Wait for at least one batch to succeed to ensure ingestion is active.
+	select {
+	case <-firstSuccess:
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent AppendBatches failed to make any progress before Close")
+	}
+
+	closeErrChan := make(chan error, 1)
+	go func() {
+		closeErrChan <- w.Close()
+	}()
+
+	allAppendsDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allAppendsDone)
+	}()
+
+	select {
+	case <-allAppendsDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("AppendBatch goroutines hung for more than 5 seconds")
+	}
+
+	select {
+	case closeErr := <-closeErrChan:
+		if closeErr != nil {
+			t.Fatalf("Close: %v", closeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung for more than 5 seconds")
+	}
+
+	mem := newMockRecordConsumer()
+	if _, err := Replay(dir, 0, mem); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	// Anchor record must always be present.
+	if _, ok := mem.puts["anchor-key"]; !ok {
+		t.Error("synchronous anchor record was not recovered by Replay")
+	}
+
+	// Verify that every batch that returned nil error was successfully recovered,
+	// and non-nil errors are only expected shutdown errors.
+	for i, e := range errs {
+		if e == nil {
+			key1 := fmt.Sprintf("batch-drain-%04d-1", i)
+			key2 := fmt.Sprintf("batch-drain-%04d-2", i)
+			if _, ok := mem.puts[key1]; !ok {
+				t.Errorf("batch key %s returned success but was lost", key1)
+			}
+			if _, ok := mem.puts[key2]; !ok {
+				t.Errorf("batch key %s returned success but was lost", key2)
+			}
+		} else if !errors.Is(e, ErrWriterClosed) && !strings.Contains(e.Error(), "terminal WAL I/O error") {
+			t.Errorf("AppendBatch[%d] returned unexpected error: %v (expected nil, ErrWriterClosed, or terminal WAL I/O error)", i, e)
+		}
 	}
 }

@@ -67,7 +67,7 @@ func TestReplay_NonExistentDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "no-such-wal")
 	mem := newMockRecordConsumer()
 
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -84,7 +84,7 @@ func TestReplay_EmptyDirectory_ReturnsFreshSegmentID(t *testing.T) {
 	dir := t.TempDir()
 	mem := newMockRecordConsumer()
 
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -102,7 +102,7 @@ func TestReplay_NonWALFilesIgnored(t *testing.T) {
 		}
 	}
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -122,7 +122,7 @@ func TestReplay_SingleSegment_AllPuts(t *testing.T) {
 	writeRecordsToFile(t, segmentPath(dir, 1), records)
 
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestReplay_SingleSegment_Deletes(t *testing.T) {
 	})
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(mem.deletes) != 1 || mem.deletes[0] != "x" {
@@ -168,7 +168,7 @@ func TestReplay_MultipleSegments_ReplayedInOrder(t *testing.T) {
 	})
 
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestReplay_ReturnsHighestSegmentID(t *testing.T) {
 		})
 	}
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestReplay_UnknownOpcode_Ignored(t *testing.T) {
 	})
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Errorf("unexpected error for unknown opcode: %v", err)
 	}
 	if _, ok := mem.puts["k"]; ok {
@@ -237,7 +237,7 @@ func TestReplay_CorruptedCRC_TruncatesFile(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -278,7 +278,7 @@ func TestReplay_TruncatedHeader_TruncatesFile(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := mem.puts["ok"]; !ok {
@@ -324,7 +324,7 @@ func TestReplay_TruncatedPayload_TruncatesFile(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := mem.puts["safe"]; !ok {
@@ -348,7 +348,7 @@ func TestReplay_EmptySegmentFile_NoError(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error for empty WAL file: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestReplay_MemTablePutError_PropagatesError(t *testing.T) {
 	mem := newMockRecordConsumer()
 	mem.putErr = fmt.Errorf("memtable full")
 
-	if _, err := Replay(dir, mem); err == nil {
+	if _, err := Replay(dir, 0, mem); err == nil {
 		t.Fatal("expected error when memtable.Put fails, got nil")
 	}
 }
@@ -382,7 +382,7 @@ func TestReplay_MemTableDeleteError_PropagatesError(t *testing.T) {
 	mem := newMockRecordConsumer()
 	mem.delErr = fmt.Errorf("read-only memtable")
 
-	if _, err := Replay(dir, mem); err == nil {
+	if _, err := Replay(dir, 0, mem); err == nil {
 		t.Fatal("expected error when memtable.Delete fails, got nil")
 	}
 }
@@ -399,7 +399,7 @@ func TestReplay_MixedPutsAndDeletes_CorrectOrder(t *testing.T) {
 		{Opcode: OpcodePut, Key: []byte("a"), Value: []byte("3")},
 	})
 
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -432,7 +432,7 @@ func TestReplay_SegmentsSortedNumerically(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestReplay_SubdirectoriesAreIgnored(t *testing.T) {
 	})
 
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestReplay_InvalidFrameSize_TooSmall_TruncatesFile(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := mem.puts["good"]; !ok {
@@ -532,7 +532,7 @@ func TestReplay_InvalidFrameSize_TooLarge_TruncatesFile(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, mem); err != nil {
+	if _, err := Replay(dir, 0, mem); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := mem.puts["good"]; !ok {
@@ -570,7 +570,7 @@ func TestReplay_MalformedWALFilename_Skipped(t *testing.T) {
 	}
 
 	mem := newMockRecordConsumer()
-	nextID, err := Replay(dir, mem)
+	nextID, err := Replay(dir, 0, mem)
 	if err != nil {
 		t.Fatalf("unexpected error replaying: %v", err)
 	}

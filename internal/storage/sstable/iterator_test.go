@@ -55,8 +55,9 @@ func TestIterator_OptionsCapping(t *testing.T) {
 // return safe zero-values and do not trigger nil-pointer dereference panics.
 func TestIterator_NilGuards(t *testing.T) {
 	var iter *Iterator
-	if iter.Next() {
-		t.Error("Next should return false on nil receiver")
+	iter.Next()
+	if iter.Valid() {
+		t.Error("Valid should return false on nil receiver")
 	}
 	if iter.Key() != nil {
 		t.Error("Key should return nil on nil receiver")
@@ -64,15 +65,16 @@ func TestIterator_NilGuards(t *testing.T) {
 	if iter.Value() != nil {
 		t.Error("Value should return nil on nil receiver")
 	}
+	if iter.IsDeleted() {
+		t.Error("IsDeleted should return false on nil receiver")
+	}
 	if iter.Opcode() != 0 {
 		t.Error("Opcode should return 0 on nil receiver")
 	}
 	if iter.Error() != nil {
 		t.Error("Error should return nil on nil receiver")
 	}
-	if err := iter.Close(); err != nil {
-		t.Errorf("Close should return nil on nil receiver, got %v", err)
-	}
+	iter.Close() // must not panic
 }
 
 // TestIterator_LifecycleAndBounds performs a standard full-lifecycle iteration
@@ -98,40 +100,46 @@ func TestIterator_LifecycleAndBounds(t *testing.T) {
 		t.Fatalf("NewIterator: %v", err)
 	}
 
-	if !iter.Next() {
+	iter.Next()
+	if !iter.Valid() {
 		t.Fatal("expected first entry")
 	}
 	if !bytes.Equal(iter.Key(), []byte("a")) || !bytes.Equal(iter.Value(), []byte("value-a")) || iter.Opcode() != OpcodePut {
 		t.Errorf("first entry mismatch: key=%s val=%s op=%d", iter.Key(), iter.Value(), iter.Opcode())
 	}
 
-	if !iter.Next() {
+	iter.Next()
+	if !iter.Valid() {
 		t.Fatal("expected second entry")
 	}
 	if !bytes.Equal(iter.Key(), []byte("b")) || !bytes.Equal(iter.Value(), []byte("value-b")) {
 		t.Errorf("second entry mismatch")
 	}
 
-	if !iter.Next() {
+	iter.Next()
+	if !iter.Valid() {
 		t.Fatal("expected third entry")
 	}
 	if !bytes.Equal(iter.Key(), []byte("c")) || len(iter.Value()) != 0 || iter.Opcode() != OpcodeDelete {
 		t.Errorf("third entry mismatch")
 	}
+	if !iter.IsDeleted() {
+		t.Error("IsDeleted() should be true for a Delete record")
+	}
 
-	if iter.Next() {
+	iter.Next()
+	if iter.Valid() {
 		t.Fatal("expected no more entries")
 	}
 	if err := iter.Error(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	if err := iter.Close(); err != nil {
-		t.Errorf("expected clean close, got %v", err)
-	}
+	iter.Close()
 
-	if iter.Next() {
-		t.Fatal("Next should return false after close")
+	iter.Next()
+	if iter.Valid() {
+		t.Fatal("Valid should return false after close")
 	}
 }
 
@@ -167,8 +175,9 @@ func TestIterator_CorruptedBoundary(t *testing.T) {
 	}
 	defer iter.Close()
 
-	if iter.Next() {
-		t.Fatal("Next should fail on corrupted boundary")
+	iter.Next()
+	if iter.Valid() {
+		t.Fatal("should not be valid on corrupted boundary")
 	}
 	if !errors.Is(iter.Error(), ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got %v", iter.Error())
@@ -184,7 +193,7 @@ func TestIterator_FileOpenFailure(t *testing.T) {
 }
 
 // TestIterator_NextErrorPaths constructs mock iterator structures and asserts that Next()
-// returns false and flags ErrUnexpectedEOF on truncated entry headers, keys, or values.
+// results in Valid() == false and flags ErrUnexpectedEOF on truncated entry headers, keys, or values.
 func TestIterator_NextErrorPaths(t *testing.T) {
 	dir := t.TempDir()
 
@@ -202,8 +211,9 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 		reader:      bufio.NewReaderSize(f1, 100),
 		limitOffset: 7,
 	}
-	if iter1.Next() {
-		t.Error("expected Next to return false")
+	iter1.Next()
+	if iter1.Valid() {
+		t.Error("expected Valid to return false")
 	}
 	if iter1.Error() == nil || !errors.Is(iter1.Error(), io.ErrUnexpectedEOF) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter1.Error())
@@ -227,8 +237,9 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 		reader:      bufio.NewReaderSize(f2, 100),
 		limitOffset: 17,
 	}
-	if iter2.Next() {
-		t.Error("expected Next to return false")
+	iter2.Next()
+	if iter2.Valid() {
+		t.Error("expected Valid to return false")
 	}
 	if iter2.Error() == nil || !errors.Is(iter2.Error(), io.ErrUnexpectedEOF) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter2.Error())
@@ -252,8 +263,9 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 		reader:      bufio.NewReaderSize(f3, 100),
 		limitOffset: 17,
 	}
-	if iter3.Next() {
-		t.Error("expected Next to return false")
+	iter3.Next()
+	if iter3.Valid() {
+		t.Error("expected Valid to return false")
 	}
 	if iter3.Error() == nil || !errors.Is(iter3.Error(), io.ErrUnexpectedEOF) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter3.Error())
@@ -277,8 +289,9 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 		reader:      bufio.NewReaderSize(f4, 100),
 		limitOffset: 7,
 	}
-	if iter4.Next() {
-		t.Error("expected Next to return false")
+	iter4.Next()
+	if iter4.Valid() {
+		t.Error("expected Valid to return false")
 	}
 	if iter4.Error() == nil || !errors.Is(iter4.Error(), ErrCorrupted) {
 		t.Errorf("expected ErrCorrupted, got %v", iter4.Error())
@@ -303,8 +316,9 @@ func TestIterator_HeaderEOF(t *testing.T) {
 		reader:      bufio.NewReader(f),
 		limitOffset: 7,
 	}
-	if iter.Next() {
-		t.Error("expected Next to return false")
+	iter.Next()
+	if iter.Valid() {
+		t.Error("expected Valid to return false")
 	}
 	if !errors.Is(iter.Error(), io.ErrUnexpectedEOF) {
 		t.Errorf("expected ErrUnexpectedEOF, got %v", iter.Error())
