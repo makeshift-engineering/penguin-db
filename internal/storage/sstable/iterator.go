@@ -53,6 +53,11 @@ func WithInitialCapacities(keyCap, valueCap int) IteratorOption {
 }
 
 // Iterator reads sequential data entries from an immutable SSTable file.
+//
+// Iterator uses a peek-based API: call Next() to advance, then check Valid()
+// before accessing Key(), Value(), IsDeleted(), or Opcode(). This design allows
+// Iterator to structurally satisfy the internalIterator interface in the storage
+// package without requiring an adapter wrapper.
 type Iterator struct {
 	file        *os.File
 	reader      *bufio.Reader
@@ -63,6 +68,7 @@ type Iterator struct {
 	opcode      uint8
 	err         error
 	closed      bool
+	hasCurrent  bool
 }
 
 // NewIterator creates a new Iterator starting from the beginning of the SSTable file.
@@ -155,25 +161,30 @@ func NewIterator(filePath string, opts ...IteratorOption) (*Iterator, error) {
 }
 
 // Next advances the iterator to the next entry in the SSTable file.
-// It returns true if an entry was successfully read, and false if either the end of the data block
-// was reached or an I/O/corruption error occurred. Use Error() to distinguish between the two.
-func (iterator *Iterator) Next() bool {
+// After calling Next, check Valid() before accessing Key/Value/IsDeleted/Opcode.
+// If Valid() returns false after Next(), use Error() to distinguish between normal
+// exhaustion (nil) and an I/O/corruption error.
+func (iterator *Iterator) Next() {
 	if iterator == nil || iterator.closed || iterator.err != nil {
-		return false
+		iterator.setInvalid()
+		return
 	}
 
 	if iterator.currOffset >= iterator.limitOffset {
-		return false
+		iterator.setInvalid()
+		return
 	}
 
 	var header [entryHeaderSize]byte
 	if _, err := io.ReadFull(iterator.reader, header[:]); err != nil {
 		if errors.Is(err, io.EOF) {
 			iterator.err = io.ErrUnexpectedEOF
-			return false
+			iterator.hasCurrent = false
+			return
 		}
 		iterator.err = fmt.Errorf("failed to read entry header at offset %d: %w", iterator.currOffset, err)
-		return false
+		iterator.hasCurrent = false
+		return
 	}
 
 	keyLen := binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset])
@@ -184,12 +195,14 @@ func (iterator *Iterator) Next() bool {
 	case OpcodePut, OpcodeDelete:
 	default:
 		iterator.err = fmt.Errorf("%w: invalid opcode %d at offset %d", ErrCorrupted, iterator.opcode, iterator.currOffset)
-		return false
+		iterator.hasCurrent = false
+		return
 	}
 
 	if iterator.currOffset+uint64(entryHeaderSize)+uint64(keyLen)+uint64(valLen) > iterator.limitOffset {
 		iterator.err = fmt.Errorf("%w: entry sizes exceed data block boundary", ErrCorrupted)
-		return false
+		iterator.hasCurrent = false
+		return
 	}
 
 	if cap(iterator.key) < int(keyLen) {
@@ -205,19 +218,35 @@ func (iterator *Iterator) Next() bool {
 	if keyLen > 0 {
 		if _, err := io.ReadFull(iterator.reader, iterator.key); err != nil {
 			iterator.err = fmt.Errorf("failed to read key at offset %d: %w", iterator.currOffset, err)
-			return false
+			iterator.hasCurrent = false
+			return
 		}
 	}
 
 	if valLen > 0 {
 		if _, err := io.ReadFull(iterator.reader, iterator.value); err != nil {
 			iterator.err = fmt.Errorf("failed to read value at offset %d: %w", iterator.currOffset, err)
-			return false
+			iterator.hasCurrent = false
+			return
 		}
 	}
 
 	iterator.currOffset += uint64(entryHeaderSize) + uint64(keyLen) + uint64(valLen)
-	return true
+	iterator.hasCurrent = true
+}
+
+// setInvalid marks the iterator as having no current entry.
+// Safe to call on nil receivers.
+func (iterator *Iterator) setInvalid() {
+	if iterator != nil {
+		iterator.hasCurrent = false
+	}
+}
+
+// Valid reports whether the iterator is positioned on a valid entry.
+// Returns false when the iterator has been exhausted, encountered an error, or is nil.
+func (iterator *Iterator) Valid() bool {
+	return iterator != nil && iterator.hasCurrent && iterator.err == nil
 }
 
 // Key returns the key of the current entry. The returned slice is valid until the next call to Next() or Close().
@@ -234,6 +263,14 @@ func (iterator *Iterator) Value() []byte {
 		return nil
 	}
 	return iterator.value
+}
+
+// IsDeleted reports whether the current entry is a tombstone (logically deleted).
+func (iterator *Iterator) IsDeleted() bool {
+	if iterator == nil {
+		return false
+	}
+	return iterator.opcode == OpcodeDelete
 }
 
 // Opcode returns the operation code (Put/Delete) of the current entry.
@@ -253,10 +290,10 @@ func (iterator *Iterator) Error() error {
 }
 
 // Close releases any system resources associated with the iterator.
-func (iterator *Iterator) Close() error {
+func (iterator *Iterator) Close() {
 	if iterator == nil || iterator.closed || iterator.file == nil {
-		return nil
+		return
 	}
 	iterator.closed = true
-	return iterator.file.Close()
+	_ = iterator.file.Close()
 }

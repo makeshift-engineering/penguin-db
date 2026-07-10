@@ -22,6 +22,7 @@ type Result struct {
 	ObsoleteFiles   []string
 	BytesWritten    uint64
 	KeysWritten     uint32
+	NextSegmentID   int
 }
 
 // Validate checks the task configuration parameters for structural invariants and constraints.

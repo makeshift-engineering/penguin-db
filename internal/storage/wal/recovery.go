@@ -25,8 +25,8 @@ type RecordConsumer interface {
 // The returned integer is the highest segment ID replayed. Pass this value
 // directly to NewLogWriter as nextSegmentID to resume appending to that
 // segment. If no segments exist, 1 is returned so the caller creates 000001.wal.
-func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
-	slog.Debug("starting WAL recovery sequence", "directory", directory)
+func Replay(directory string, minSegmentID int, recordConsumer RecordConsumer) (int, error) {
+	slog.Debug("starting WAL recovery sequence", "directory", directory, "minSegmentID", minSegmentID)
 
 	entries, err := os.ReadDir(directory)
 	if err != nil {
@@ -45,7 +45,18 @@ func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
 	}
 
 	slog.Debug("found WAL segments for replay", "count", len(walFiles))
-	sort.Strings(walFiles)
+
+	// Sort WAL segments numerically based on segment ID
+	sort.Slice(walFiles, func(i, j int) bool {
+		var idI, idJ int
+		if n, err := fmt.Sscanf(walFiles[i], "%d.wal", &idI); n != 1 || err != nil {
+			slog.Warn("failed to parse segment ID during sorting", "file", walFiles[i], "error", err)
+		}
+		if n, err := fmt.Sscanf(walFiles[j], "%d.wal", &idJ); n != 1 || err != nil {
+			slog.Warn("failed to parse segment ID during sorting", "file", walFiles[j], "error", err)
+		}
+		return idI < idJ
+	})
 
 	highestSegmentID := 0
 
@@ -59,6 +70,11 @@ func Replay(directory string, recordConsumer RecordConsumer) (int, error) {
 		}
 		if segmentID > highestSegmentID {
 			highestSegmentID = segmentID
+		}
+
+		if segmentID <= minSegmentID {
+			slog.Debug("skipping already flushed WAL segment", "segment_id", segmentID, "file", fileName)
+			continue
 		}
 
 		filePath := filepath.Join(directory, fileName)

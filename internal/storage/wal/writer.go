@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 )
 
 const (
@@ -24,10 +26,10 @@ const (
 	// group-commit batch before writing to disk.
 	MaxBatchSizeBytes int64 = 4 * 1024 * 1024
 
-	// ingestChannelCapacity is the number of in-flight uncommitted tickets that
+	// IngestChannelCapacity is the number of in-flight uncommitted tickets that
 	// can queue in the ingestion channel before callers block. Sized to absorb
 	// burst writes at typical database workloads (~10k concurrent operations).
-	ingestChannelCapacity = 10_000
+	IngestChannelCapacity = 10_000
 )
 
 // commitTicket represents an ingestion task containing serialized record data
@@ -48,6 +50,7 @@ type LogWriter struct {
 	options          Options
 
 	ingestionChannel chan *commitTicket
+	closedChan       chan struct{}
 	stateMutex       sync.RWMutex
 	isClosed         bool
 	terminalErr      error
@@ -76,7 +79,7 @@ func DefaultOptions() Options {
 	return Options{
 		SegmentSizeBytes:      MaxSegmentSizeBytes,
 		BatchSizeBytes:        MaxBatchSizeBytes,
-		IngestChannelCapacity: ingestChannelCapacity,
+		IngestChannelCapacity: IngestChannelCapacity,
 	}
 }
 
@@ -132,6 +135,7 @@ func NewLogWriter(directory string, nextSegmentID int, opts ...Option) (*LogWrit
 		currentSegmentID: nextSegmentID,
 		options:          options,
 		ingestionChannel: make(chan *commitTicket, options.IngestChannelCapacity),
+		closedChan:       make(chan struct{}),
 	}
 
 	if err := writer.rotateActiveFile(); err != nil {
@@ -154,6 +158,7 @@ func (writer *LogWriter) rotateActiveFile() error {
 		if err := writer.activeFile.Close(); err != nil {
 			return fmt.Errorf("failed to close WAL segment %d during rotation: %w", writer.currentSegmentID, err)
 		}
+		writer.activeFile = nil
 		writer.currentSegmentID++
 	}
 
@@ -171,7 +176,83 @@ func (writer *LogWriter) rotateActiveFile() error {
 
 	writer.activeFile = file
 	writer.currentSizeBytes = info.Size()
+
+	if err := utils.SyncDir(writer.directory); err != nil {
+		slog.Warn("failed to sync WAL directory", "directory", writer.directory, "error", err)
+	}
+
 	return nil
+}
+
+// AppendBatch writes a slice of Records into the Write-Ahead Log as a single
+// atomic unit. All records are pre-marshalled into one contiguous byte buffer
+// and submitted to the batch worker as a single commit ticket. This guarantees
+// that either all records are durably written and synced, or none are — making
+// it safe to use for atomic multi-operation batches (e.g., WriteBatch).
+//
+// AppendBatch blocks until the combined write is durably persisted or the log
+// is closed. An error is returned if any record fails to marshal, or if the
+// combined write fails.
+func (writer *LogWriter) AppendBatch(records []*Record) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	// Pre-validate and marshal all records into a single contiguous buffer.
+	// This happens before acquiring any lock so that marshalling errors are
+	// returned before any I/O is attempted.
+	var combinedFrameBuffer []byte
+	for i, record := range records {
+		if record == nil {
+			return fmt.Errorf("record at index %d: nil record", i)
+		}
+		if len(record.Key) == 0 {
+			return fmt.Errorf("record at index %d: %w", i, ErrEmptyKey)
+		}
+		if record.Opcode != OpcodePut && record.Opcode != OpcodeDelete {
+			return fmt.Errorf("record at index %d: %w", i, ErrInvalidOpcode)
+		}
+		frame, err := record.Marshal()
+		if err != nil {
+			return fmt.Errorf("record at index %d: failed to marshal: %w", i, err)
+		}
+		combinedFrameBuffer = append(combinedFrameBuffer, frame...)
+	}
+
+	// Submit the entire pre-marshalled buffer as one atomic commit ticket.
+	// The batch worker will write and fsync it in a single I/O pass.
+	ticket := &commitTicket{
+		frameData:  combinedFrameBuffer,
+		resultChan: make(chan error, 1),
+	}
+
+	// Hold RLock through the enqueue to prevent Close() from signaling
+	// shutdown before this ticket is visible to the worker.
+	writer.stateMutex.RLock()
+	if writer.isClosed {
+		writer.stateMutex.RUnlock()
+		return ErrWriterClosed
+	}
+	if writer.terminalErr != nil {
+		writer.stateMutex.RUnlock()
+		return writer.terminalErr
+	}
+
+	select {
+	case writer.ingestionChannel <- ticket:
+		writer.stateMutex.RUnlock()
+		return <-ticket.resultChan
+	default:
+		// Channel is full; release lock and block with closedChan fallback.
+		closedChan := writer.closedChan
+		writer.stateMutex.RUnlock()
+		select {
+		case writer.ingestionChannel <- ticket:
+			return <-ticket.resultChan
+		case <-closedChan:
+			return ErrWriterClosed
+		}
+	}
 }
 
 // Append writes a single Record into the Write-Ahead Log. It blocks until the
@@ -195,6 +276,8 @@ func (writer *LogWriter) Append(record *Record) error {
 		resultChan: make(chan error, 1),
 	}
 
+	// Hold RLock through the enqueue to prevent Close() from signaling
+	// shutdown before this ticket is visible to the worker.
 	writer.stateMutex.RLock()
 	if writer.isClosed {
 		writer.stateMutex.RUnlock()
@@ -205,11 +288,21 @@ func (writer *LogWriter) Append(record *Record) error {
 		return writer.terminalErr
 	}
 
-	slog.Debug("caller: enqueuing record into ingestion channel", "frame_size", len(frame))
-	writer.ingestionChannel <- ticket
-	writer.stateMutex.RUnlock()
-
-	return <-ticket.resultChan
+	select {
+	case writer.ingestionChannel <- ticket:
+		writer.stateMutex.RUnlock()
+		return <-ticket.resultChan
+	default:
+		// Channel is full; release lock and block with closedChan fallback.
+		closedChan := writer.closedChan
+		writer.stateMutex.RUnlock()
+		select {
+		case writer.ingestionChannel <- ticket:
+			return <-ticket.resultChan
+		case <-closedChan:
+			return ErrWriterClosed
+		}
+	}
 }
 
 // batchWorker runs in a background goroutine, receiving commit tickets from the
@@ -229,8 +322,19 @@ func (writer *LogWriter) batchWorker() {
 			if leftoverTicket != nil {
 				leftoverTicket.resultChan <- tErr
 			}
-			for ticket := range writer.ingestionChannel {
-				ticket.resultChan <- tErr
+			// Drain any pending tickets without blocking
+			draining := true
+			for draining {
+				select {
+				case ticket, ok := <-writer.ingestionChannel:
+					if !ok {
+						draining = false
+					} else {
+						ticket.resultChan <- tErr
+					}
+				default:
+					draining = false
+				}
 			}
 			break
 		}
@@ -241,7 +345,34 @@ func (writer *LogWriter) batchWorker() {
 			leftoverTicket = nil
 		} else {
 			var ok bool
-			ticket, ok = <-writer.ingestionChannel
+			select {
+			case ticket, ok = <-writer.ingestionChannel:
+				if !ok {
+					break
+				}
+			case <-writer.closedChan:
+				// closedChan was closed, drain remaining non-blockingly and process them
+				for {
+					var t *commitTicket
+					if leftoverTicket != nil {
+						t = leftoverTicket
+						leftoverTicket = nil
+					} else {
+						select {
+						case t = <-writer.ingestionChannel:
+						default:
+						}
+					}
+
+					if t == nil {
+						break
+					}
+
+					commitBatch, writeBuffer, leftoverTicket = writer.gatherBatch(t, commitBatch, writeBuffer)
+					writer.writeAndSyncBatch(commitBatch, writeBuffer)
+				}
+				ok = false
+			}
 			if !ok {
 				break
 			}
@@ -264,7 +395,7 @@ func (writer *LogWriter) Close() error {
 	writer.closeOnce.Do(func() {
 		writer.stateMutex.Lock()
 		writer.isClosed = true
-		close(writer.ingestionChannel)
+		close(writer.closedChan)
 		writer.stateMutex.Unlock()
 
 		writer.workerWaitGroup.Wait()
@@ -330,21 +461,20 @@ func (writer *LogWriter) gatherBatch(firstTicket *commitTicket, inBatch []*commi
 	outBatch = append(outBatch, firstTicket)
 	outBuffer = append(outBuffer, firstTicket.frameData...)
 
-	pendingWrites := len(writer.ingestionChannel)
-	for range pendingWrites {
-		ticket, ok := <-writer.ingestionChannel
-		if !ok {
-			break
+	for {
+		select {
+		case ticket, ok := <-writer.ingestionChannel:
+			if !ok {
+				return outBatch, outBuffer, nil
+			}
+			if int64(len(outBuffer)+len(ticket.frameData)) > writer.options.BatchSizeBytes {
+				leftover = ticket
+				return outBatch, outBuffer, leftover
+			}
+			outBatch = append(outBatch, ticket)
+			outBuffer = append(outBuffer, ticket.frameData...)
+		default:
+			return outBatch, outBuffer, nil
 		}
-
-		if int64(len(outBuffer)+len(ticket.frameData)) > writer.options.BatchSizeBytes {
-			leftover = ticket
-			break
-		}
-
-		outBatch = append(outBatch, ticket)
-		outBuffer = append(outBuffer, ticket.frameData...)
 	}
-
-	return outBatch, outBuffer, leftover
 }
