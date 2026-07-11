@@ -181,7 +181,7 @@ func (pc *planContext) walkTableRef(ref *ast.TableRef, scope *Scope) {
 	for _, join := range ref.Joins {
 		switch join.Type {
 		case ast.JoinLeft, ast.JoinRight, ast.JoinFull:
-			pc.errorf(
+			_ = pc.errorf(
 				join.Span(), CodeUnsupportedJoinType,
 				"join type not supported yet: only INNER and CROSS JOIN are implemented",
 			)
@@ -206,7 +206,7 @@ func (pc *planContext) addTablePrimary(primary *ast.TablePrimary, scope *Scope) 
 
 	rt := newResolvedTable(meta, binding)
 	if err := scope.addTable(rt); err != nil {
-		pc.errorf(
+		_ = pc.errorf(
 			primary.Span(), CodeDuplicateTableBinding,
 			"table or alias %q is already used in this FROM clause", binding,
 		)
