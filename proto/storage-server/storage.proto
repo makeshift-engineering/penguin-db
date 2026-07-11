@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package storage.v1;
+
+option go_package = "github.com/makeshift-engineering/penguin-db/gen/go/storage/v1;storagepb";
+
+enum OpType {
+  OP_UNSPECIFIED = 0;
+  OP_PUT = 1;
+  OP_DELETE = 2;
+}
+
+message Op {
+  OpType type = 1;
+  bytes key = 2;
+  bytes value = 3; // nil/empty for OP_DELETE
+}
+
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+message PutResponse {}
+
+message GetRequest {
+  bytes key = 1;
+  string snapshot_id = 2; // Optional: read from a snapshot
+}
+
+message GetResponse {
+  bytes value = 1;
+}
+
+message DeleteRequest {
+  bytes key = 1;
+}
+
+message DeleteResponse {}
+
+message ScanRequest {
+  bytes prefix = 1;
+  string snapshot_id = 2; // Optional: scan from a snapshot
+}
+
+message ScanResponse {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+message WriteBatchRequest {
+  repeated Op operations = 1;
+}
+
+message WriteBatchResponse {}
+
+message CreateSnapshotRequest {}
+
+message CreateSnapshotResponse {
+  string snapshot_id = 1;
+}
+
+message ReleaseSnapshotRequest {
+  string snapshot_id = 1;
+}
+
+message ReleaseSnapshotResponse {}
+
+service StorageService {
+  // Put writes a single key-value pair to the database.
+  rpc Put(PutRequest) returns (PutResponse);
+
+  // Get retrieves a value for a given key. Supports optional snapshot reads.
+  rpc Get(GetRequest) returns (GetResponse);
+
+  // Delete writes a tombstone for a key, marking it as logically deleted.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Scan returns a prefix-filtered stream of sorted key-value pairs.
+  rpc Scan(ScanRequest) returns (stream ScanResponse);
+
+  // WriteBatch writes multiple operations atomically.
+  rpc WriteBatch(WriteBatchRequest) returns (WriteBatchResponse);
+
+  // CreateSnapshot establishes a point-in-time read-only view of the database.
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+
+  // ReleaseSnapshot closes/disposes of a point-in-time snapshot.
+  rpc ReleaseSnapshot(ReleaseSnapshotRequest) returns (ReleaseSnapshotResponse);
+}

@@ -1,0 +1,27 @@
+{
+  "server": {
+    "port": 50051,
+    "dir": "./data"
+  },
+  "storage": {
+    "memtable": {
+      "max_size_bytes": 4194304,
+      "max_level": 12,
+      "max_imm": 2
+    },
+    "wal": {
+      "segment_size_bytes": 33554432,
+      "batch_size_bytes": 4194304,
+      "ingest_channel_capacity": 10000
+    },
+    "flush": {
+      "estimated_keys": 10000
+    },
+    "compaction": {
+      "threshold": 4,
+      "read_buffer_size": 1048576,
+      "estimated_keys": 100000,
+      "max_sstable_size": 2097152
+    }
+  }
+}

@@ -84,7 +84,7 @@ func (engine *dbEngine) flushWorker() {
 		sstablePath := filepath.Join(engine.dir, sstableFilename)
 
 		startTime := time.Now()
-		sstableReader, flushErr := writeMemTableToSSTable(sstablePath, immutable)
+		sstableReader, flushErr := engine.writeMemTableToSSTable(sstablePath, immutable)
 
 		if flushErr != nil {
 			if err := os.Remove(sstablePath); err != nil && !os.IsNotExist(err) {
@@ -237,7 +237,11 @@ func (engine *dbEngine) runAndRegisterCompaction(inputFiles []string, fileIDs []
 	}
 
 	startTime := time.Now()
-	res, err := compactor.Run(task)
+	res, err := compactor.Run(task,
+		compactor.WithReadBufferSize(engine.opts.CompactionReadBufferSize),
+		compactor.WithEstimatedKeys(engine.opts.CompactionEstimatedKeys),
+		compactor.WithMaxSSTableSize(engine.opts.CompactionMaxSSTableSize),
+	)
 
 	engine.mu.Lock()
 	if err != nil {

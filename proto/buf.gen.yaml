@@ -1,0 +1,14 @@
+version: v2
+
+plugins:
+  # protoc-gen-go: generates message types and serialization code
+  - local: protoc-gen-go
+    out: ../gen/go
+    opt:
+      - module=github.com/makeshift-engineering/penguin-db/gen/go
+
+  # protoc-gen-go-grpc: generates gRPC service stubs and interfaces
+  - local: protoc-gen-go-grpc
+    out: ../gen/go
+    opt:
+      - module=github.com/makeshift-engineering/penguin-db/gen/go

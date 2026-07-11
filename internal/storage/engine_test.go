@@ -863,7 +863,7 @@ func TestEngine_WriteMemTableToSSTable_Success(t *testing.T) {
 	_ = mem.Put([]byte("wk2"), []byte("wv2"))
 
 	path := filepath.Join(dir, "000001.sst")
-	reader, err := writeMemTableToSSTable(path, mem)
+	reader, err := writeMemTableToSSTableWithKeys(path, mem, 10000)
 	if err != nil {
 		t.Fatalf("writeMemTableToSSTable: %v", err)
 	}
@@ -881,7 +881,7 @@ func TestEngine_WriteMemTableToSSTable_InvalidPath(t *testing.T) {
 	mem := newTestSkipList(t)
 	_ = mem.Put([]byte("k"), []byte("v"))
 
-	_, err := writeMemTableToSSTable("/nonexistent/dir/file.sst", mem)
+	_, err := writeMemTableToSSTableWithKeys("/nonexistent/dir/file.sst", mem, 10000)
 	if err == nil {
 		t.Error("expected error writing to invalid path, got nil")
 	}
@@ -918,7 +918,7 @@ func TestEngine_SstIteratorInternalInterface(t *testing.T) {
 	_ = mem.Put([]byte("sk1"), []byte("sv1"))
 
 	path := filepath.Join(dir, "000001.sst")
-	reader, err := writeMemTableToSSTable(path, mem)
+	reader, err := writeMemTableToSSTableWithKeys(path, mem, 10000)
 	if err != nil {
 		t.Fatalf("writeMemTableToSSTable: %v", err)
 	}
@@ -1196,7 +1196,7 @@ func TestEngine_OpenManifestLevels_PartialFailure(t *testing.T) {
 	mem := newTestSkipList(t)
 	_ = mem.Put([]byte("pk1"), []byte("pv1"))
 	sstPath := filepath.Join(dir, "000001.sst")
-	reader, err := writeMemTableToSSTable(sstPath, mem)
+	reader, err := writeMemTableToSSTableWithKeys(sstPath, mem, 10000)
 	if err != nil {
 		t.Fatalf("writeMemTableToSSTable: %v", err)
 	}
@@ -1322,7 +1322,7 @@ func TestEngine_WriteMemTableToSSTable_AddFailure(t *testing.T) {
 	_ = mem.Put(largeKey, []byte("val"))
 
 	path := filepath.Join(dir, "000001.sst")
-	_, err := writeMemTableToSSTable(path, mem)
+	_, err := writeMemTableToSSTableWithKeys(path, mem, 10000)
 	if err == nil {
 		t.Error("expected error writing memtable with key too large, got nil")
 	}
@@ -1393,7 +1393,7 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 	_ = mem1.Put([]byte("key1"), []byte("val1"))
 	_ = mem1.Put([]byte("key2"), []byte("val2"))
 	path1 := filepath.Join(dir, "000001.sst")
-	r1, err := writeMemTableToSSTable(path1, mem1)
+	r1, err := writeMemTableToSSTableWithKeys(path1, mem1, 10000)
 	if err != nil {
 		t.Fatalf("writeMemTableToSSTable: %v", err)
 	}
@@ -1403,7 +1403,7 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 	mem2 := newTestSkipList(t)
 	_ = mem2.Delete([]byte("key1"))
 	path2 := filepath.Join(dir, "000002.sst")
-	r2, err := writeMemTableToSSTable(path2, mem2)
+	r2, err := writeMemTableToSSTableWithKeys(path2, mem2, 10000)
 	if err != nil {
 		t.Fatalf("writeMemTableToSSTable: %v", err)
 	}
@@ -1691,7 +1691,7 @@ func TestEngine_Get_TombstonesAndErrors(t *testing.T) {
 	memL0 := memtable.NewSkipList(1000, 12)
 	_ = memL0.Delete([]byte("l0-tombstone-key"))
 	pathL0 := filepath.Join(dir, "000002.sst")
-	rL0, _ := writeMemTableToSSTable(pathL0, memL0)
+	rL0, _ := writeMemTableToSSTableWithKeys(pathL0, memL0, 10000)
 
 	de.mu.Lock()
 	de.levels[0] = []*sstable.Reader{rL0}
@@ -1706,7 +1706,7 @@ func TestEngine_Get_TombstonesAndErrors(t *testing.T) {
 	memL1 := memtable.NewSkipList(1000, 12)
 	_ = memL1.Delete([]byte("l1-tombstone-key"))
 	pathL1 := filepath.Join(dir, "000003.sst")
-	rL1, _ := writeMemTableToSSTable(pathL1, memL1)
+	rL1, _ := writeMemTableToSSTableWithKeys(pathL1, memL1, 10000)
 
 	de.mu.Lock()
 	de.levels[0] = nil
@@ -1722,7 +1722,7 @@ func TestEngine_Get_TombstonesAndErrors(t *testing.T) {
 	memErr := memtable.NewSkipList(1000, 12)
 	_ = memErr.Put([]byte("err-key"), []byte("v"))
 	pathErr := filepath.Join(dir, "000004.sst")
-	rErr, _ := writeMemTableToSSTable(pathErr, memErr)
+	rErr, _ := writeMemTableToSSTableWithKeys(pathErr, memErr, 10000)
 	rErr.Close()
 
 	de.mu.Lock()

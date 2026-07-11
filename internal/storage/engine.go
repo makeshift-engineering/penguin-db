@@ -96,17 +96,29 @@ type Options struct {
 	Metrics Metrics
 	// MaxImmMemtables is the maximum allowed immutable memtables in the queue before write stall triggers.
 	MaxImmMemtables int
+	// FlushEstimatedKeys is the expected key count pre-allocated for bloom filters and indexes during flush.
+	FlushEstimatedKeys int
+	// CompactionReadBufferSize is the read buffer size used when merging files during compaction.
+	CompactionReadBufferSize int
+	// CompactionEstimatedKeys is the expected key count pre-allocated for bloom filters and indexes during compaction.
+	CompactionEstimatedKeys int
+	// CompactionMaxSSTableSize is the size threshold after which compacted SSTables roll over to a new file.
+	CompactionMaxSSTableSize uint64
 }
 
 // DefaultOptions returns the standard parameters.
 func DefaultOptions() Options {
 	return Options{
-		MaxMemTableSize:     4 * 1024 * 1024,
-		MemTableMaxLevel:    12,
-		CompactionThreshold: 4,
-		WALOptions:          wal.DefaultOptions(),
-		Metrics:             nopMetrics{},
-		MaxImmMemtables:     2,
+		MaxMemTableSize:          4 * 1024 * 1024,
+		MemTableMaxLevel:         12,
+		CompactionThreshold:      4,
+		WALOptions:               wal.DefaultOptions(),
+		Metrics:                  nopMetrics{},
+		MaxImmMemtables:          2,
+		FlushEstimatedKeys:       10000,
+		CompactionReadBufferSize: 1024 * 1024,
+		CompactionEstimatedKeys:  100000,
+		CompactionMaxSSTableSize: 2 * 1024 * 1024,
 	}
 }
 
@@ -374,7 +386,7 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 		sstableFilename := fmt.Sprintf("%06d.sst", engine.nextSegmentID)
 		sstablePath := filepath.Join(engine.dir, sstableFilename)
 
-		sstableReader, err := writeMemTableToSSTable(sstablePath, recoveryMem)
+		sstableReader, err := engine.writeMemTableToSSTable(sstablePath, recoveryMem)
 		if err != nil {
 			return fmt.Errorf("failed to flush recovery memtable: %w", err)
 		}
@@ -424,9 +436,9 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 	return nil
 }
 
-// writeMemTableToSSTable dumps the contents of a MemTable SkipList to a new SSTable file.
-func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reader, error) {
-	sstableWriter, err := sstable.NewWriter(path, 10000)
+// writeMemTableToSSTableWithKeys dumps the contents of a MemTable SkipList to a new SSTable file with the given expected keys pre-allocation.
+func writeMemTableToSSTableWithKeys(path string, mem *memtable.SkipList, expectedKeys int) (*sstable.Reader, error) {
+	sstableWriter, err := sstable.NewWriter(path, expectedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +467,15 @@ func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reade
 	}
 
 	return sstable.Open(path)
+}
+
+// writeMemTableToSSTable dumps the contents of a MemTable SkipList to a new SSTable file using engine options.
+func (engine *dbEngine) writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reader, error) {
+	expectedKeys := engine.opts.FlushEstimatedKeys
+	if expectedKeys <= 0 {
+		expectedKeys = 10000
+	}
+	return writeMemTableToSSTableWithKeys(path, mem, expectedKeys)
 }
 
 // Put writes a single key-value record to the engine.

@@ -21,6 +21,9 @@ profile.cov
 go.work
 go.work.sum
 
+# generated files
+gen
+
 # env file
 .env
 
