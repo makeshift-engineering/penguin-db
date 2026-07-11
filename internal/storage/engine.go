@@ -218,6 +218,8 @@ type dbEngine struct {
 }
 
 // NewEngine opens or creates a new storage engine instance in the specified directory.
+//
+//nolint:gocritic // opts is passed by value to avoid external mutation of options
 func NewEngine(dir string, opts Options) (Engine, error) {
 	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {

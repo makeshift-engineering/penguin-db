@@ -4,6 +4,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 )
 
@@ -45,7 +48,7 @@ func DefaultConfig() *Config {
 			},
 			Compaction: CompactionConfig{
 				Threshold:      4,
-				ReadBufferSize:  1024 * 1024,
+				ReadBufferSize: 1024 * 1024,
 				EstimatedKeys:  100000,
 				MaxSSTableSize: 2 * 1024 * 1024,
 			},
@@ -68,5 +71,15 @@ func LoadConfig(path string) (*Config, error) {
 	if err := dec.Decode(cfg); err != nil {
 		return nil, err
 	}
+
+	// Ensure no trailing garbage data exists after the config document
+	var dummy json.RawMessage
+	if err := dec.Decode(&dummy); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("config file contains extra data after the configuration object")
+		}
+		return nil, fmt.Errorf("config file contains invalid trailing data: %w", err)
+	}
+
 	return cfg, nil
 }

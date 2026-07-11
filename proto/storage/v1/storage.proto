@@ -5,9 +5,9 @@ package storage.v1;
 option go_package = "github.com/makeshift-engineering/penguin-db/gen/go/storage/v1;storagepb";
 
 enum OpType {
-  OP_UNSPECIFIED = 0;
-  OP_PUT = 1;
-  OP_DELETE = 2;
+  OP_TYPE_UNSPECIFIED = 0;
+  OP_TYPE_PUT = 1;
+  OP_TYPE_DELETE = 2;
 }
 
 message Op {

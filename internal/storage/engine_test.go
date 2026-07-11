@@ -865,7 +865,7 @@ func TestEngine_WriteMemTableToSSTable_Success(t *testing.T) {
 	path := filepath.Join(dir, "000001.sst")
 	reader, err := writeMemTableToSSTableWithKeys(path, mem, 10000)
 	if err != nil {
-		t.Fatalf("writeMemTableToSSTable: %v", err)
+		t.Fatalf("writeMemTableToSSTableWithKeys: %v", err)
 	}
 	defer reader.Close()
 
@@ -920,7 +920,7 @@ func TestEngine_SstIteratorInternalInterface(t *testing.T) {
 	path := filepath.Join(dir, "000001.sst")
 	reader, err := writeMemTableToSSTableWithKeys(path, mem, 10000)
 	if err != nil {
-		t.Fatalf("writeMemTableToSSTable: %v", err)
+		t.Fatalf("writeMemTableToSSTableWithKeys: %v", err)
 	}
 	defer reader.Close()
 
@@ -1198,7 +1198,7 @@ func TestEngine_OpenManifestLevels_PartialFailure(t *testing.T) {
 	sstPath := filepath.Join(dir, "000001.sst")
 	reader, err := writeMemTableToSSTableWithKeys(sstPath, mem, 10000)
 	if err != nil {
-		t.Fatalf("writeMemTableToSSTable: %v", err)
+		t.Fatalf("writeMemTableToSSTableWithKeys: %v", err)
 	}
 	reader.Close() // release our handle; openManifestLevels will re-open it
 
@@ -1395,7 +1395,7 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 	path1 := filepath.Join(dir, "000001.sst")
 	r1, err := writeMemTableToSSTableWithKeys(path1, mem1, 10000)
 	if err != nil {
-		t.Fatalf("writeMemTableToSSTable: %v", err)
+		t.Fatalf("writeMemTableToSSTableWithKeys: %v", err)
 	}
 	r1.Close()
 
@@ -1405,7 +1405,7 @@ func TestCompactor_BottomLevelTombstoneElision(t *testing.T) {
 	path2 := filepath.Join(dir, "000002.sst")
 	r2, err := writeMemTableToSSTableWithKeys(path2, mem2, 10000)
 	if err != nil {
-		t.Fatalf("writeMemTableToSSTable: %v", err)
+		t.Fatalf("writeMemTableToSSTableWithKeys: %v", err)
 	}
 	r2.Close()
 

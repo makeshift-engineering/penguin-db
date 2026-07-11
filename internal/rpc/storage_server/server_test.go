@@ -179,19 +179,24 @@ func TestWriteBatch(t *testing.T) {
 		t.Fatalf("failed to Put: %v", err)
 	}
 
+	_, err = client.Put(ctx, &storagepb.PutRequest{Key: []byte("k2"), Value: []byte("to-delete")})
+	if err != nil {
+		t.Fatalf("failed to Put: %v", err)
+	}
+
 	req := &storagepb.WriteBatchRequest{
 		Operations: []*storagepb.Op{
 			{
-				Type:  storagepb.OpType_OP_PUT,
+				Type:  storagepb.OpType_OP_TYPE_PUT,
 				Key:   []byte("k1"),
 				Value: []byte("new"),
 			},
 			{
-				Type: storagepb.OpType_OP_DELETE,
+				Type: storagepb.OpType_OP_TYPE_DELETE,
 				Key:  []byte("k2"),
 			},
 			{
-				Type:  storagepb.OpType_OP_PUT,
+				Type:  storagepb.OpType_OP_TYPE_PUT,
 				Key:   []byte("k3"),
 				Value: []byte("v3"),
 			},
@@ -211,6 +216,11 @@ func TestWriteBatch(t *testing.T) {
 	res3, err := client.Get(ctx, &storagepb.GetRequest{Key: []byte("k3")})
 	if err != nil || string(res3.Value) != "v3" {
 		t.Fatalf("k3 was not written correctly: %v, val: %s", err, string(res3.Value))
+	}
+
+	_, err = client.Get(ctx, &storagepb.GetRequest{Key: []byte("k2")})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected k2 to be deleted by batch, got: %v", err)
 	}
 }
 

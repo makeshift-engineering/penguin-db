@@ -155,9 +155,9 @@ func (s *StorageServer) WriteBatch(ctx context.Context, req *storagepb.WriteBatc
 	for i, op := range req.Operations {
 		var opType storage.OpType
 		switch op.Type {
-		case storagepb.OpType_OP_PUT:
+		case storagepb.OpType_OP_TYPE_PUT:
 			opType = storage.OpPut
-		case storagepb.OpType_OP_DELETE:
+		case storagepb.OpType_OP_TYPE_DELETE:
 			opType = storage.OpDelete
 		default:
 			return nil, status.Errorf(codes.InvalidArgument, "unsupported operation type: %v", op.Type)

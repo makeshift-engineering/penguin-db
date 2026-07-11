@@ -39,7 +39,7 @@ type StorageConfig struct {
 
 // ToStorageOptions converts this config to a storage.Options struct,
 // falling back to storage.DefaultOptions() for any zero-value field.
-func (c StorageConfig) ToStorageOptions() storage.Options {
+func (c *StorageConfig) ToStorageOptions() storage.Options {
 	base := storage.DefaultOptions()
 	if c.MemTable.MaxSizeBytes > 0 {
 		base.MaxMemTableSize = c.MemTable.MaxSizeBytes

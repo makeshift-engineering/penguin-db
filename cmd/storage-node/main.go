@@ -56,7 +56,7 @@ func main() {
 	slog.Info("Starting Penguin-DB Storage Node...", "port", cfg.Server.Port, "dir", cfg.Server.Dir)
 
 	// Create storage directory
-	if err := os.MkdirAll(cfg.Server.Dir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Server.Dir, 0o755); err != nil {
 		slog.Error("Failed to create storage directory", "dir", cfg.Server.Dir, "error", err)
 		os.Exit(1)
 	}
@@ -91,22 +91,24 @@ func main() {
 	go func() {
 		sig := <-sigChan
 		slog.Info("Shutdown signal received, shutting down gracefully...", "signal", sig)
-
 		grpcServer.GracefulStop()
-		storageServer.ReleaseAllSnapshots()
-
-		if err := engine.Close(); err != nil {
-			slog.Error("Error closing storage engine", "error", err)
-		} else {
-			slog.Info("Storage engine closed successfully")
-		}
-
-		os.Exit(0)
 	}()
 
 	slog.Info("gRPC Storage Server is listening", "address", lis.Addr().String())
+	var serveErr error
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("gRPC server run failed", "error", err)
+		serveErr = err
+	}
+
+	storageServer.ReleaseAllSnapshots()
+	if err := engine.Close(); err != nil {
+		slog.Error("Error closing storage engine", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Storage engine closed successfully")
+
+	if serveErr != nil {
 		os.Exit(1)
 	}
 }
