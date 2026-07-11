@@ -1729,3 +1729,35 @@ func TestWriter_CurrentSize(t *testing.T) {
 		t.Errorf("expected final size %d, got estimated %d", fi.Size(), est)
 	}
 }
+
+// TestWriter_DataSizeAndEntryCount verifies the basic query API functions of
+// sstable.Writer.
+func TestWriter_DataSizeAndEntryCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "datasize_count.sst")
+
+	w, err := NewWriter(path, 2)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	if w.EntryCount() != 0 {
+		t.Errorf("expected 0 entries initially, got %d", w.EntryCount())
+	}
+	if w.DataSize() != 0 {
+		t.Errorf("expected 0 data size initially, got %d", w.DataSize())
+	}
+
+	_ = w.Add([]byte("k1"), []byte("v1"), OpcodePut)
+	_ = w.Add([]byte("k2"), []byte("v2"), OpcodePut)
+
+	if w.EntryCount() != 2 {
+		t.Errorf("expected 2 entries, got %d", w.EntryCount())
+	}
+	expectedDataSize := uint64(entryHeaderSize*2 + 4 + 4) // two entry headers + keys/values lengths
+	if w.DataSize() != expectedDataSize {
+		t.Errorf("expected data size %d, got %d", expectedDataSize, w.DataSize())
+	}
+
+	_ = w.Close()
+}

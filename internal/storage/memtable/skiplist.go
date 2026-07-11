@@ -45,31 +45,23 @@ func NewSkipList(maxSize int64, maxLevel int) *SkipList {
 	}
 }
 
-// Get returns the value associated with key. It returns ErrKeyNotFound if the key
-// is absent or if the key is present but marked as deleted by a tombstone. Get
-// acquires a shared read lock and is safe to call concurrently with other Gets.
-func (skipList *SkipList) Get(key []byte) ([]byte, error) {
+// Get searches the skip list for the given key and returns its value,
+// whether it was found, and whether it has a tombstone marker (isDeleted).
+//
+// Callers must inspect the found and deleted flags to distinguish between
+// "key not present", "key present and live", and "key present but tombstoned".
+// Get acquires a shared read lock and is safe to call concurrently.
+func (skipList *SkipList) Get(key []byte) (value []byte, found, deleted bool, err error) {
 	if len(key) == 0 {
-		slog.Debug("get failed: empty key provided")
-		return nil, ErrEmptyKey
+		return nil, false, false, ErrEmptyKey
 	}
-
 	skipList.mutex.RLock()
 	defer skipList.mutex.RUnlock()
-
 	_, targetNode := skipList.findPredecessors(key)
-
 	if targetNode != nil && bytes.Equal(targetNode.key, key) {
-		if targetNode.isDeleted {
-			slog.Debug("get: key has tombstone marker (logically deleted)", "key", string(key))
-			return nil, ErrKeyNotFound
-		}
-		slog.Debug("get: key found", "key", string(key), "valueLength", len(targetNode.value))
-		return targetNode.value, nil
+		return targetNode.value, true, targetNode.isDeleted, nil
 	}
-
-	slog.Debug("get: key not found", "key", string(key))
-	return nil, ErrKeyNotFound
+	return nil, false, false, nil
 }
 
 // Put inserts or updates the key-value pair in the skip list.
@@ -263,4 +255,30 @@ func (skipList *SkipList) randomLevel() int {
 		level++
 	}
 	return level
+}
+
+// Size returns the current size in bytes of the skip list.
+func (skipList *SkipList) Size() int64 {
+	skipList.mutex.RLock()
+	defer skipList.mutex.RUnlock()
+	return skipList.currentSizeBytes
+}
+
+// NewIteratorAt returns a new Iterator positioned at the first node of the skip list
+// whose key is greater than or equal to startKey. If no such key exists, it returns
+// an iterator positioned at nil (Valid() returns false).
+func (skipList *SkipList) NewIteratorAt(startKey []byte) *Iterator {
+	if len(startKey) == 0 {
+		return skipList.NewIterator()
+	}
+	skipList.mutex.RLock()
+	defer skipList.mutex.RUnlock()
+	_, startNode := skipList.findPredecessors(startKey)
+	slog.Debug("created new iterator starting at sought node", "foundKey", startNode != nil)
+	iter := &Iterator{
+		skipList:    skipList,
+		currentNode: startNode,
+	}
+	iter.bufferCurrent()
+	return iter
 }

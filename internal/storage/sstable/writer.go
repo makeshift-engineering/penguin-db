@@ -65,10 +65,11 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 // in the in-memory index, and inserts the key into the Bloom Filter.
 //
 // Data Entry Layout:
-// +------------+--------------+----------+-----------+-----------+
-// | Key Length | Value Length | Opcode   | Key       | Value     |
-// | (2 bytes)  | (4 bytes)    | (1 byte) | (n bytes) | (m bytes) |
-// +------------+--------------+----------+-----------+-----------+
+//
+//	+------------+--------------+----------+-----------+-----------+
+//	| Key Length | Value Length | Opcode   | Key       | Value     |
+//	| (2 bytes)  | (4 bytes)    | (1 byte) | (n bytes) | (m bytes) |
+//	+------------+--------------+----------+-----------+-----------+
 func (w *Writer) Add(key, value []byte, opcode uint8) error {
 	if len(key) > math.MaxUint16 {
 		return ErrKeyTooLarge
@@ -125,16 +126,18 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 // file to durable storage, and closes the file descriptor.
 //
 // Index Entry Layout:
-// +------------+--------------+-----------+
-// | Key Length | Data Offset  | Key       |
-// | (2 bytes)  | (8 bytes)    | (n bytes) |
-// +------------+--------------+-----------+
+//
+//	+------------+--------------+-----------+
+//	| Key Length | Data Offset  | Key       |
+//	| (2 bytes)  | (8 bytes)    | (n bytes) |
+//	+------------+--------------+-----------+
 //
 // Footer Layout (25 bytes):
-// +--------------+--------------+-----------------+-------------+-----------+
-// | Index Offset | Bloom Offset | Bloom NumHashes | Entry Count | Magic     |
-// | (8 bytes)    | (8 bytes)    | (1 byte)        | (4 bytes)   | (4 bytes) |
-// +--------------+--------------+-----------------+-------------+-----------+
+//
+//	+--------------+--------------+-----------------+-------------+-----------+
+//	| Index Offset | Bloom Offset | Bloom NumHashes | Entry Count | Magic     |
+//	| (8 bytes)    | (8 bytes)    | (1 byte)        | (4 bytes)   | (4 bytes) |
+//	+--------------+--------------+-----------------+-------------+-----------+
 func (w *Writer) Close() (closeErr error) {
 	defer func() {
 		if err := w.file.Close(); closeErr == nil {
