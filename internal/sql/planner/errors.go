@@ -43,6 +43,43 @@ const (
 	// CodeUnsupportedJoinType is emitted for LEFT, RIGHT, and FULL joins,
 	// which the grammar accepts but the planner does not support in v1.
 	CodeUnsupportedJoinType diagnostic.Code = 3008
+
+	// CodeUnknownFunction is emitted when a function call names anything
+	// other than the v1 aggregate set (COUNT, SUM, AVG, MIN, MAX).
+	CodeUnknownFunction diagnostic.Code = 3009
+
+	// CodeInvalidFunctionArgs is emitted for a function call with the
+	// wrong number of arguments, a star argument on a non-COUNT function,
+	// or an argument type an aggregate cannot operate on.
+	CodeInvalidFunctionArgs diagnostic.Code = 3010
+
+	// CodeTypeMismatch is emitted when two expressions being compared
+	// (via =, !=, <, IN, BETWEEN, ...) have incompatible types.
+	CodeTypeMismatch diagnostic.Code = 3011
+
+	// CodeNonNumericOperand is emitted when a unary or binary arithmetic
+	// operator is applied to a non-numeric, non-NULL operand.
+	CodeNonNumericOperand diagnostic.Code = 3012
+
+	// CodeNonBooleanCondition is emitted when a bare expression used
+	// directly as a condition (e.g. in WHERE) is not boolean-typed.
+	CodeNonBooleanCondition diagnostic.Code = 3013
+
+	// CodeLiteralOverflow is emitted when an integer or float literal
+	// cannot be represented in 64 bits.
+	CodeLiteralOverflow diagnostic.Code = 3014
+
+	// CodeNonStringOperand is emitted when LIKE is applied to a
+	// non-string, non-NULL operand or pattern.
+	CodeNonStringOperand diagnostic.Code = 3015
+
+	// CodeUnsupportedExpression is emitted for an ast.Expression concrete
+	// type resolveExpr does not recognise.
+	CodeUnsupportedExpression diagnostic.Code = 3016
+
+	// CodeUnsupportedCondition is emitted for an ast.Condition concrete
+	// type resolveCond does not recognise.
+	CodeUnsupportedCondition diagnostic.Code = 3017
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding
