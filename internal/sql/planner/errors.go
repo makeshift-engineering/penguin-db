@@ -80,6 +80,52 @@ const (
 	// CodeUnsupportedCondition is emitted for an ast.Condition concrete
 	// type resolveCond does not recognise.
 	CodeUnsupportedCondition diagnostic.Code = 3017
+
+	// CodeDuplicateColumn is emitted when a CREATE TABLE or ALTER TABLE
+	// ADD/RENAME would introduce two columns with the same name.
+	CodeDuplicateColumn diagnostic.Code = 3018
+
+	// CodeInvalidDefaultValue is emitted when a DEFAULT literal's type is
+	// incompatible with its column's declared type, or a sign is applied
+	// to a non-numeric DEFAULT value.
+	CodeInvalidDefaultValue diagnostic.Code = 3019
+
+	// CodeColumnNotFound is emitted when an ALTER TABLE MODIFY, RENAME
+	// COLUMN, or DROP COLUMN names a column that does not exist on the
+	// table.
+	CodeColumnNotFound diagnostic.Code = 3020
+
+	// CodeCannotDropPKColumn is emitted when ALTER TABLE DROP COLUMN
+	// targets a column that is part of the table's primary key.
+	CodeCannotDropPKColumn diagnostic.Code = 3021
+
+	// CodeDatabaseExists is emitted for CREATE DATABASE without IF NOT
+	// EXISTS when the database already exists.
+	CodeDatabaseExists diagnostic.Code = 3022
+
+	// CodeTableExists is emitted for CREATE TABLE without IF NOT EXISTS
+	// when the table already exists, and for ALTER TABLE RENAME TO when
+	// the target name is already taken.
+	CodeTableExists diagnostic.Code = 3023
+
+	// CodeUnsupportedDataType is emitted for a data type the catalog
+	// schema cannot yet represent — currently DECIMAL with an explicit
+	// precision or scale, since catalog.ColumnMeta has no fields for them.
+	CodeUnsupportedDataType diagnostic.Code = 3024
+
+	// CodeUnsupportedConstraint is emitted for a column constraint clause
+	// buildColumnMeta does not recognise.
+	CodeUnsupportedConstraint diagnostic.Code = 3025
+
+	// CodeUnsupportedAlter is emitted for an ALTER TABLE change that the
+	// catalog's validateAlter is known to reject in v1: a new NOT NULL
+	// column with no DEFAULT, a new UNIQUE or PRIMARY KEY column, or a
+	// MODIFY that changes a column's data type.
+	CodeUnsupportedAlter diagnostic.Code = 3026
+
+	// CodeInvalidAlterAction is emitted for an ast.AlterActionKind
+	// planAlterSchema does not recognise.
+	CodeInvalidAlterAction diagnostic.Code = 3027
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding
