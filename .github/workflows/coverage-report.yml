@@ -74,12 +74,9 @@ jobs:
         working-directory: pr-code
         run: go mod download
 
-      - name: Install Protobuf Plugins
+      - name: Install Buf
         working-directory: pr-code
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-          go install github.com/bufbuild/buf/cmd/buf@latest
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
 
       - name: Generate Protobuf Code
         working-directory: pr-code/proto

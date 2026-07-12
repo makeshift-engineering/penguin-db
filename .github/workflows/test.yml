@@ -22,11 +22,8 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Install Protobuf Plugins
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-          go install github.com/bufbuild/buf/cmd/buf@latest
+      - name: Install Buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
 
       - name: Generate Protobuf Code
         run: buf generate
