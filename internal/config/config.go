@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage"
 )
 
 // ServerConfig stores the configurations related to the server network port
@@ -27,6 +29,7 @@ type Config struct {
 // DefaultConfig returns a new Config populated with sensible production-ready
 // default values for all server and storage parameters.
 func DefaultConfig() *Config {
+	baseOpts := storage.DefaultOptions()
 	return &Config{
 		Server: ServerConfig{
 			Port: 50051,
@@ -34,23 +37,23 @@ func DefaultConfig() *Config {
 		},
 		Storage: StorageConfig{
 			MemTable: MemTableConfig{
-				MaxSizeBytes: 4 * 1024 * 1024,
-				MaxLevel:     12,
-				MaxImm:       2,
+				MaxSizeBytes: baseOpts.MaxMemTableSize,
+				MaxLevel:     baseOpts.MemTableMaxLevel,
+				MaxImm:       baseOpts.MaxImmMemtables,
 			},
 			WAL: WALConfig{
-				SegmentSizeBytes:      32 * 1024 * 1024,
-				BatchSizeBytes:        4 * 1024 * 1024,
-				IngestChannelCapacity: 10000,
+				SegmentSizeBytes:      baseOpts.WALOptions.SegmentSizeBytes,
+				BatchSizeBytes:        baseOpts.WALOptions.BatchSizeBytes,
+				IngestChannelCapacity: baseOpts.WALOptions.IngestChannelCapacity,
 			},
 			Flush: FlushConfig{
-				EstimatedKeys: 10000,
+				EstimatedKeys: baseOpts.FlushEstimatedKeys,
 			},
 			Compaction: CompactionConfig{
-				Threshold:      4,
-				ReadBufferSize: 1024 * 1024,
-				EstimatedKeys:  100000,
-				MaxSSTableSize: 2 * 1024 * 1024,
+				Threshold:      baseOpts.CompactionThreshold,
+				ReadBufferSize: baseOpts.CompactionReadBufferSize,
+				EstimatedKeys:  baseOpts.CompactionEstimatedKeys,
+				MaxSSTableSize: baseOpts.CompactionMaxSSTableSize,
 			},
 		},
 	}

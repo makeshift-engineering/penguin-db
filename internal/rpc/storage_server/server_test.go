@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -271,4 +272,225 @@ func TestSnapshotIsolation(t *testing.T) {
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected snapshot read to fail with NotFound after release, got: %v", err)
 	}
+}
+
+// TestScanShutdownInterrupt verifies that calling Stop() on StorageServer
+// interrupts active streaming Scan calls.
+func TestScanShutdownInterrupt(t *testing.T) {
+	dir := t.TempDir()
+	opts := storage.DefaultOptions()
+	engine, err := storage.NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	// Put some data
+	keys := []string{"prefix_k1", "prefix_k2", "prefix_k3", "prefix_k4", "prefix_k5"}
+	for _, k := range keys {
+		if err := engine.Put(context.Background(), []byte(k), []byte("val")); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+	}
+
+	server := NewStorageServer(engine)
+	defer server.Stop()
+
+	mockStream := &mockScanServer{ctx: context.Background()}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Scan(&storagepb.ScanRequest{Prefix: []byte("prefix_")}, mockStream)
+	}()
+
+	// Wait a moment and then call Stop()
+	time.Sleep(50 * time.Millisecond)
+	server.Stop()
+
+	select {
+	case scanErr := <-errCh:
+		if status.Code(scanErr) != codes.Aborted {
+			t.Errorf("expected codes.Aborted on scan interrupt, got: %v", scanErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Scan to abort on Stop()")
+	}
+}
+
+type mockScanServer struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (m *mockScanServer) Context() context.Context {
+	return m.ctx
+}
+
+func (m *mockScanServer) Send(res *storagepb.ScanResponse) error {
+	// Simulate slow reading to allow cancellation to trigger
+	time.Sleep(50 * time.Millisecond)
+	return nil
+}
+
+// TestSnapshotExpiration verifies that inactive snapshots are automatically evicted by the janitor.
+func TestSnapshotExpiration(t *testing.T) {
+	dir := t.TempDir()
+	opts := storage.DefaultOptions()
+	engine, err := storage.NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	server := &StorageServer{
+		engine:    engine,
+		snapshots: make(map[string]*snapshotEntry),
+		stopChan:  make(chan struct{}),
+	}
+	defer server.Stop()
+
+	// We start the janitor with a very short check interval and expiry threshold for testing
+	go server.startSnapshotJanitor(10*time.Millisecond, 20*time.Millisecond)
+
+	// Create snapshot
+	snap, err := engine.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	server.mu.Lock()
+	server.snapshots["snap1"] = &snapshotEntry{
+		snap:      snap,
+		createdAt: time.Now(),
+	}
+	server.mu.Unlock()
+
+	// Wait for eviction
+	time.Sleep(100 * time.Millisecond)
+
+	server.mu.Lock()
+	_, found := server.snapshots["snap1"]
+	server.mu.Unlock()
+
+	if found {
+		t.Error("expected snapshot to be evicted by janitor, but it was found")
+	}
+}
+
+// TestReleaseSnapshot_NotFound verifies that releasing a non-existent or
+// already released snapshot returns codes.NotFound.
+func TestReleaseSnapshot_NotFound(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	_, err := client.ReleaseSnapshot(ctx, &storagepb.ReleaseSnapshotRequest{
+		SnapshotId: "nonexistent-id",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("expected codes.NotFound, got: %v", err)
+	}
+}
+
+// TestWriteBatch_UnsupportedOpType verifies that WriteBatch fails with codes.InvalidArgument
+// when an operation with an unsupported type is requested.
+func TestWriteBatch_UnsupportedOpType(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	req := &storagepb.WriteBatchRequest{
+		Operations: []*storagepb.Op{
+			{
+				Type: storagepb.OpType_OP_TYPE_UNSPECIFIED,
+				Key:  []byte("k"),
+			},
+		},
+	}
+	_, err := client.WriteBatch(ctx, req)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected codes.InvalidArgument, got: %v", err)
+	}
+}
+
+// TestScan_ContextCancel verifies that Scan handler returns immediately
+// if the stream context is cancelled.
+func TestScan_ContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	opts := storage.DefaultOptions()
+	engine, err := storage.NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	if err := engine.Put(context.Background(), []byte("prefix_k1"), []byte("v1")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	server := NewStorageServer(engine)
+	defer server.Stop()
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	mockStream := &mockScanServer{ctx: ctx}
+	err = server.Scan(&storagepb.ScanRequest{Prefix: []byte("prefix_")}, mockStream)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled error, got: %v", err)
+	}
+}
+
+// TestConcurrentSnapshotReadRelease exercises concurrent snapshot creation,
+// reading (Get), and releasing under the race detector.
+func TestConcurrentSnapshotReadRelease(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a snapshot to read concurrently
+	res, err := client.CreateSnapshot(ctx, &storagepb.CreateSnapshotRequest{})
+	if err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+	snapID := res.SnapshotId
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	// Goroutine 1: Concurrently read from the snapshot
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			_, _ = client.Get(ctx, &storagepb.GetRequest{
+				Key:        []byte("nonexistent"),
+				SnapshotId: snapID,
+			})
+		}
+	}()
+
+	// Goroutine 2: Concurrently read from the snapshot
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			_, _ = client.Get(ctx, &storagepb.GetRequest{
+				Key:        []byte("nonexistent"),
+				SnapshotId: snapID,
+			})
+		}
+	}()
+
+	// Goroutine 3: Concurrently call ReleaseSnapshot
+	go func() {
+		defer wg.Done()
+		// Sleep slightly to let reads start
+		time.Sleep(10 * time.Millisecond)
+		_, _ = client.ReleaseSnapshot(ctx, &storagepb.ReleaseSnapshotRequest{
+			SnapshotId: snapID,
+		})
+	}()
+
+	wg.Wait()
 }

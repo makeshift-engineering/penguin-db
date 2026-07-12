@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -60,20 +61,20 @@ type Op struct {
 // Engine defines the top-level interface for the storage engine.
 type Engine interface {
 	// Put writes a single key-value pair to the database.
-	Put(key, value []byte) error
+	Put(ctx context.Context, key, value []byte) error
 
 	// Get retrieves a value for a given key. Returns ErrKeyNotFound if absent or logically deleted.
 	Get(key []byte) ([]byte, error)
 
 	// Delete writes a tombstone for a key, marking it as logically deleted.
-	Delete(key []byte) error
+	Delete(ctx context.Context, key []byte) error
 
 	// Scan returns a prefix-filtered sorted iterator starting at the first key >= prefix.
 	// Returns an error if the engine is closing or has a background error.
 	Scan(prefix []byte) (Iterator, error)
 
 	// WriteBatch writes multiple operations atomically to the database.
-	WriteBatch(operations []Op) error
+	WriteBatch(ctx context.Context, operations []Op) error
 
 	// Snapshot returns a point-in-time Snapshot of the database.
 	Snapshot() (Snapshot, error)
@@ -104,6 +105,8 @@ type Options struct {
 	CompactionEstimatedKeys int
 	// CompactionMaxSSTableSize is the size threshold after which compacted SSTables roll over to a new file.
 	CompactionMaxSSTableSize uint64
+	// AllowZeroMaxImmMemtables is a test-only flag to allow MaxImmMemtables to be 0.
+	AllowZeroMaxImmMemtables bool
 }
 
 // DefaultOptions returns the standard parameters.
@@ -274,7 +277,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 	if opts.Metrics == nil {
 		opts.Metrics = nopMetrics{}
 	}
-	if opts.MaxImmMemtables <= 0 {
+	if opts.MaxImmMemtables <= 0 && !opts.AllowZeroMaxImmMemtables {
 		opts.MaxImmMemtables = 2
 	}
 
@@ -481,15 +484,15 @@ func (engine *dbEngine) writeMemTableToSSTable(path string, mem *memtable.SkipLi
 }
 
 // Put writes a single key-value record to the engine.
-func (engine *dbEngine) Put(key, value []byte) error {
-	return engine.WriteBatch([]Op{
+func (engine *dbEngine) Put(ctx context.Context, key, value []byte) error {
+	return engine.WriteBatch(ctx, []Op{
 		{Type: OpPut, Key: key, Value: value},
 	})
 }
 
 // Delete logically deletes a key by appending a tombstone record.
-func (engine *dbEngine) Delete(key []byte) error {
-	return engine.WriteBatch([]Op{
+func (engine *dbEngine) Delete(ctx context.Context, key []byte) error {
+	return engine.WriteBatch(ctx, []Op{
 		{Type: OpDelete, Key: key, Value: nil},
 	})
 }
@@ -592,9 +595,13 @@ func (engine *dbEngine) commitRotation(oldWAL *wal.LogWriter, newSegmentID int) 
 }
 
 // WriteBatch writes multiple operations atomically to the WAL and memtable.
-func (engine *dbEngine) WriteBatch(operations []Op) error {
+func (engine *dbEngine) WriteBatch(ctx context.Context, operations []Op) error {
 	if len(operations) == 0 {
 		return nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	batchRawSize, err := validateOperations(operations)
@@ -628,9 +635,27 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	engine.writeMu.Lock()
 	defer engine.writeMu.Unlock()
 
+	// Spawn a context watcher goroutine that wakes up the condition variable
+	// if the context gets cancelled or hits its deadline while we are stalled.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			engine.mu.Lock()
+			engine.flushCond.Broadcast()
+			engine.mu.Unlock()
+		case <-done:
+		}
+	}()
+
 	engine.mu.Lock()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			engine.mu.Unlock()
+			return err
+		}
 		if engine.bgErr != nil {
 			engine.mu.Unlock()
 			return engine.bgErr
@@ -857,7 +882,7 @@ func (engine *dbEngine) Close() error {
 	// Trigger a final flush of the active memtable if it holds any data.
 	engine.mu.Lock()
 	if engine.memtable.Size() > 0 && engine.bgErr == nil {
-		for len(engine.immMemtables) >= engine.opts.MaxImmMemtables {
+		for len(engine.immMemtables) >= engine.opts.MaxImmMemtables && engine.opts.MaxImmMemtables > 0 {
 			engine.flushCond.Wait()
 		}
 

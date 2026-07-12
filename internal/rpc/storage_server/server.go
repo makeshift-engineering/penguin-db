@@ -3,7 +3,9 @@ package storage_server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -14,6 +16,19 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/storage"
 )
 
+const (
+	defaultSnapshotExpiry        = 10 * time.Minute
+	defaultSnapshotCheckInterval = 1 * time.Minute
+)
+
+type snapshotEntry struct {
+	snap      storage.Snapshot
+	createdAt time.Time
+	mu        sync.Mutex
+	refCount  int
+	released  bool
+}
+
 // StorageServer implements the storagepb.StorageServiceServer gRPC interface,
 // bridging incoming network requests to the underlying LSM-tree storage engine.
 // It also manages point-in-time snapshots to provide read isolation.
@@ -22,15 +37,19 @@ type StorageServer struct {
 	engine storage.Engine
 
 	mu        sync.RWMutex
-	snapshots map[string]storage.Snapshot
+	snapshots map[string]*snapshotEntry
+	stopChan  chan struct{}
 }
 
 // NewStorageServer instantiates a new StorageServer backed by the given storage engine.
 func NewStorageServer(engine storage.Engine) *StorageServer {
-	return &StorageServer{
+	s := &StorageServer{
 		engine:    engine,
-		snapshots: make(map[string]storage.Snapshot),
+		snapshots: make(map[string]*snapshotEntry),
+		stopChan:  make(chan struct{}),
 	}
+	go s.startSnapshotJanitor(defaultSnapshotCheckInterval, defaultSnapshotExpiry)
+	return s
 }
 
 // Register binds this StorageServer implementation to the provided gRPC Server.
@@ -38,18 +57,112 @@ func (s *StorageServer) Register(server *grpc.Server) {
 	storagepb.RegisterStorageServiceServer(server, s)
 }
 
-// ReleaseAllSnapshots iterates over all registered snapshots, closes them to release
-// pinned SSTable file resources, and clears them from memory.
+// acquireSnapshot increments the refcount of the snapshot if it exists and is not released.
+func (s *StorageServer) acquireSnapshot(id string) (*snapshotEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entry, ok := s.snapshots[id]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "snapshot %s not found", id)
+	}
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.released {
+		return nil, status.Errorf(codes.FailedPrecondition, "snapshot %s is closed", id)
+	}
+	entry.refCount++
+	return entry, nil
+}
+
+// releaseSnapshotRef decrements the refcount and closes the snapshot if released and refcount reaches 0.
+func (s *StorageServer) releaseSnapshotRef(entry *snapshotEntry) {
+	entry.mu.Lock()
+	entry.refCount--
+	shouldClose := entry.released && entry.refCount == 0
+	entry.mu.Unlock()
+
+	if shouldClose {
+		entry.snap.Close()
+	}
+}
+
+// Stop signals the server is shutting down, closes stopChan to abort active scans,
+// and releases all snapshots.
+func (s *StorageServer) Stop() {
+	s.mu.Lock()
+	select {
+	case <-s.stopChan:
+		s.mu.Unlock()
+		return
+	default:
+		close(s.stopChan)
+	}
+	s.mu.Unlock()
+	s.ReleaseAllSnapshots()
+}
+
+// ReleaseAllSnapshots iterates over all registered snapshots, marks them as released,
+// and closes them if there are no active readers.
 func (s *StorageServer) ReleaseAllSnapshots() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, snap := range s.snapshots {
-		snap.Close()
+	entries := make([]*snapshotEntry, 0, len(s.snapshots))
+	for id, entry := range s.snapshots {
+		entries = append(entries, entry)
 		delete(s.snapshots, id)
+	}
+	s.mu.Unlock()
+
+	for _, entry := range entries {
+		entry.mu.Lock()
+		entry.released = true
+		shouldClose := entry.refCount == 0
+		entry.mu.Unlock()
+
+		if shouldClose {
+			entry.snap.Close()
+		}
+	}
+}
+
+// startSnapshotJanitor periodically removes expired snapshots to prevent unbounded resource pinning.
+func (s *StorageServer) startSnapshotJanitor(interval, expiry time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			now := time.Now()
+			var expired []*snapshotEntry
+			for id, entry := range s.snapshots {
+				if now.Sub(entry.createdAt) > expiry {
+					expired = append(expired, entry)
+					delete(s.snapshots, id)
+					slog.Warn("Evicted expired snapshot due to inactivity", "snapshot_id", id, "age", now.Sub(entry.createdAt))
+				}
+			}
+			s.mu.Unlock()
+
+			for _, entry := range expired {
+				entry.mu.Lock()
+				entry.released = true
+				shouldClose := entry.refCount == 0
+				entry.mu.Unlock()
+
+				if shouldClose {
+					entry.snap.Close()
+				}
+			}
+		}
 	}
 }
 
 // mapError translates engine-specific error sentinel types into standard gRPC status codes.
+// It sanitizes internal storage errors to prevent leaking internal detail traces to clients.
 func mapError(err error) error {
 	if err == nil {
 		return nil
@@ -64,7 +177,8 @@ func mapError(err error) error {
 	case errors.Is(err, storage.ErrSnapshotClosed):
 		return status.Error(codes.FailedPrecondition, "snapshot is closed")
 	default:
-		return status.Errorf(codes.Internal, "storage internal error: %v", err)
+		slog.Error("Storage internal error", "error", err)
+		return status.Error(codes.Internal, "internal server error")
 	}
 }
 
@@ -73,7 +187,7 @@ func (s *StorageServer) Put(ctx context.Context, req *storagepb.PutRequest) (*st
 	if len(req.Key) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "key cannot be empty")
 	}
-	if err := s.engine.Put(req.Key, req.Value); err != nil {
+	if err := s.engine.Put(ctx, req.Key, req.Value); err != nil {
 		return nil, mapError(err)
 	}
 	return &storagepb.PutResponse{}, nil
@@ -87,13 +201,13 @@ func (s *StorageServer) Get(ctx context.Context, req *storagepb.GetRequest) (*st
 	var val []byte
 	var err error
 	if req.SnapshotId != "" {
-		s.mu.RLock()
-		snap, ok := s.snapshots[req.SnapshotId]
-		s.mu.RUnlock()
-		if !ok {
-			return nil, status.Errorf(codes.NotFound, "snapshot %s not found", req.SnapshotId)
+		var entry *snapshotEntry
+		entry, err = s.acquireSnapshot(req.SnapshotId)
+		if err != nil {
+			return nil, err
 		}
-		val, err = snap.Get(req.Key)
+		defer s.releaseSnapshotRef(entry)
+		val, err = entry.snap.Get(req.Key)
 	} else {
 		val, err = s.engine.Get(req.Key)
 	}
@@ -108,7 +222,7 @@ func (s *StorageServer) Delete(ctx context.Context, req *storagepb.DeleteRequest
 	if len(req.Key) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "key cannot be empty")
 	}
-	if err := s.engine.Delete(req.Key); err != nil {
+	if err := s.engine.Delete(ctx, req.Key); err != nil {
 		return nil, mapError(err)
 	}
 	return &storagepb.DeleteResponse{}, nil
@@ -119,13 +233,13 @@ func (s *StorageServer) Scan(req *storagepb.ScanRequest, stream storagepb.Storag
 	var iter storage.Iterator
 	var err error
 	if req.SnapshotId != "" {
-		s.mu.RLock()
-		snap, ok := s.snapshots[req.SnapshotId]
-		s.mu.RUnlock()
-		if !ok {
-			return status.Errorf(codes.NotFound, "snapshot %s not found", req.SnapshotId)
+		var entry *snapshotEntry
+		entry, err = s.acquireSnapshot(req.SnapshotId)
+		if err != nil {
+			return err
 		}
-		iter, err = snap.Scan(req.Prefix)
+		defer s.releaseSnapshotRef(entry)
+		iter, err = entry.snap.Scan(req.Prefix)
 	} else {
 		iter, err = s.engine.Scan(req.Prefix)
 	}
@@ -135,8 +249,12 @@ func (s *StorageServer) Scan(req *storagepb.ScanRequest, stream storagepb.Storag
 	defer iter.Close()
 
 	for iter.Valid() {
-		if err := stream.Context().Err(); err != nil {
-			return err
+		select {
+		case <-s.stopChan:
+			return status.Error(codes.Aborted, "server is shutting down")
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		default:
 		}
 		key, val := iter.Next()
 		if err := stream.Send(&storagepb.ScanResponse{Key: key, Value: val}); err != nil {
@@ -168,7 +286,7 @@ func (s *StorageServer) WriteBatch(ctx context.Context, req *storagepb.WriteBatc
 			Value: op.Value,
 		}
 	}
-	if err := s.engine.WriteBatch(ops); err != nil {
+	if err := s.engine.WriteBatch(ctx, ops); err != nil {
 		return nil, mapError(err)
 	}
 	return &storagepb.WriteBatchResponse{}, nil
@@ -182,7 +300,10 @@ func (s *StorageServer) CreateSnapshot(ctx context.Context, req *storagepb.Creat
 	}
 	id := uuid.New().String()
 	s.mu.Lock()
-	s.snapshots[id] = snap
+	s.snapshots[id] = &snapshotEntry{
+		snap:      snap,
+		createdAt: time.Now(),
+	}
 	s.mu.Unlock()
 	return &storagepb.CreateSnapshotResponse{SnapshotId: id}, nil
 }
@@ -193,7 +314,7 @@ func (s *StorageServer) ReleaseSnapshot(ctx context.Context, req *storagepb.Rele
 		return nil, status.Error(codes.InvalidArgument, "snapshot_id cannot be empty")
 	}
 	s.mu.Lock()
-	snap, ok := s.snapshots[req.SnapshotId]
+	entry, ok := s.snapshots[req.SnapshotId]
 	if ok {
 		delete(s.snapshots, req.SnapshotId)
 	}
@@ -202,6 +323,14 @@ func (s *StorageServer) ReleaseSnapshot(ctx context.Context, req *storagepb.Rele
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "snapshot %s not found", req.SnapshotId)
 	}
-	snap.Close()
+
+	entry.mu.Lock()
+	entry.released = true
+	shouldClose := entry.refCount == 0
+	entry.mu.Unlock()
+
+	if shouldClose {
+		entry.snap.Close()
+	}
 	return &storagepb.ReleaseSnapshotResponse{}, nil
 }

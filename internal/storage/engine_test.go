@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,7 +68,7 @@ func triggerFlush(t *testing.T, eng Engine, prefix string, startVal int) {
 	for valID := startVal; ; valID++ {
 		key := []byte(fmt.Sprintf("%s%05d", prefix, valID))
 		val := make([]byte, 10)
-		if err := eng.Put(key, val); err != nil {
+		if err := eng.Put(context.Background(), key, val); err != nil {
 			t.Fatalf("triggerFlush Put failed: %v", err)
 		}
 
@@ -97,10 +98,10 @@ func TestEngine_BasicCRUD(t *testing.T) {
 	engine := mustNewEngine(t, dir, opts)
 
 	// Put
-	if err := engine.Put([]byte("key1"), []byte("value1")); err != nil {
+	if err := engine.Put(context.Background(), []byte("key1"), []byte("value1")); err != nil {
 		t.Errorf("Put failed: %v", err)
 	}
-	if err := engine.Put([]byte("key2"), []byte("value2")); err != nil {
+	if err := engine.Put(context.Background(), []byte("key2"), []byte("value2")); err != nil {
 		t.Errorf("Put failed: %v", err)
 	}
 
@@ -114,7 +115,7 @@ func TestEngine_BasicCRUD(t *testing.T) {
 	}
 
 	// Update
-	if err := engine.Put([]byte("key1"), []byte("value1-updated")); err != nil {
+	if err := engine.Put(context.Background(), []byte("key1"), []byte("value1-updated")); err != nil {
 		t.Errorf("Put update failed: %v", err)
 	}
 	val, err = engine.Get([]byte("key1"))
@@ -126,7 +127,7 @@ func TestEngine_BasicCRUD(t *testing.T) {
 	}
 
 	// Delete + tombstone check
-	if err := engine.Delete([]byte("key2")); err != nil {
+	if err := engine.Delete(context.Background(), []byte("key2")); err != nil {
 		t.Errorf("Delete failed: %v", err)
 	}
 	_, err = engine.Get([]byte("key2"))
@@ -151,9 +152,9 @@ func TestEngine_WALRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open engine: %v", err)
 	}
-	_ = engine.Put([]byte("recovered1"), []byte("val1"))
-	_ = engine.Put([]byte("recovered2"), []byte("val2"))
-	_ = engine.Delete([]byte("recovered2"))
+	_ = engine.Put(context.Background(), []byte("recovered1"), []byte("val1"))
+	_ = engine.Put(context.Background(), []byte("recovered2"), []byte("val2"))
+	_ = engine.Delete(context.Background(), []byte("recovered2"))
 	if err := engine.Close(); err != nil {
 		t.Fatalf("failed to close engine: %v", err)
 	}
@@ -178,14 +179,14 @@ func TestEngine_WriteBatch(t *testing.T) {
 	opts := DefaultOptions()
 	engine := mustNewEngine(t, dir, opts)
 
-	_ = engine.Put([]byte("b3"), []byte("val3"))
+	_ = engine.Put(context.Background(), []byte("b3"), []byte("val3"))
 
 	batch := []Op{
 		{Type: OpPut, Key: []byte("b1"), Value: []byte("val1")},
 		{Type: OpPut, Key: []byte("b2"), Value: []byte("val2")},
 		{Type: OpDelete, Key: []byte("b3")},
 	}
-	if err := engine.WriteBatch(batch); err != nil {
+	if err := engine.WriteBatch(context.Background(), batch); err != nil {
 		t.Fatalf("WriteBatch failed: %v", err)
 	}
 
@@ -203,10 +204,10 @@ func TestEngine_WriteBatch(t *testing.T) {
 func TestEngine_WriteBatch_Empty(t *testing.T) {
 	dir := t.TempDir()
 	engine := mustNewEngine(t, dir, DefaultOptions())
-	if err := engine.WriteBatch(nil); err != nil {
+	if err := engine.WriteBatch(context.Background(), nil); err != nil {
 		t.Errorf("empty WriteBatch should return nil, got %v", err)
 	}
-	if err := engine.WriteBatch([]Op{}); err != nil {
+	if err := engine.WriteBatch(context.Background(), []Op{}); err != nil {
 		t.Errorf("empty WriteBatch slice should return nil, got %v", err)
 	}
 }
@@ -215,13 +216,13 @@ func TestEngine_ValidationErrors(t *testing.T) {
 	engine := mustNewEngine(t, dir, DefaultOptions())
 
 	// Empty-key guards.
-	if err := engine.Put(nil, []byte("v")); err == nil {
+	if err := engine.Put(context.Background(), nil, []byte("v")); err == nil {
 		t.Error("Put with nil key: expected error, got nil")
 	}
-	if err := engine.Put([]byte{}, []byte("v")); err == nil {
+	if err := engine.Put(context.Background(), []byte{}, []byte("v")); err == nil {
 		t.Error("Put with empty key: expected error, got nil")
 	}
-	if err := engine.Delete(nil); err == nil {
+	if err := engine.Delete(context.Background(), nil); err == nil {
 		t.Error("Delete with nil key: expected error, got nil")
 	}
 	if _, err := engine.Get(nil); err == nil {
@@ -232,12 +233,12 @@ func TestEngine_ValidationErrors(t *testing.T) {
 	}
 
 	// Invalid OpType in WriteBatch.
-	if err := engine.WriteBatch([]Op{{Type: 0x99, Key: []byte("k"), Value: []byte("v")}}); err == nil {
+	if err := engine.WriteBatch(context.Background(), []Op{{Type: 0x99, Key: []byte("k"), Value: []byte("v")}}); err == nil {
 		t.Error("WriteBatch with invalid OpType: expected error, got nil")
 	}
 
 	// Empty key inside WriteBatch.
-	if err := engine.WriteBatch([]Op{{Type: OpPut, Key: nil, Value: []byte("v")}}); err == nil {
+	if err := engine.WriteBatch(context.Background(), []Op{{Type: OpPut, Key: nil, Value: []byte("v")}}); err == nil {
 		t.Error("WriteBatch with nil key: expected error, got nil")
 	}
 }
@@ -251,7 +252,7 @@ func TestEngine_MemTableFlush(t *testing.T) {
 	for i := range 10 {
 		key := []byte(fmt.Sprintf("key-%03d", i))
 		val := []byte(fmt.Sprintf("val-%03d", i))
-		if err := engine.Put(key, val); err != nil {
+		if err := engine.Put(context.Background(), key, val); err != nil {
 			t.Fatalf("Put key %d: %v", i, err)
 		}
 	}
@@ -280,7 +281,7 @@ func TestEngine_Compaction(t *testing.T) {
 	for i := range 12 {
 		key := []byte(fmt.Sprintf("ckey-%03d", i))
 		val := []byte(fmt.Sprintf("cval-%03d", i))
-		if err := engine.Put(key, val); err != nil {
+		if err := engine.Put(context.Background(), key, val); err != nil {
 			t.Fatalf("Put: %v", err)
 		}
 		time.Sleep(25 * time.Millisecond) // let each flush produce a distinct L0 file
@@ -311,13 +312,13 @@ func TestEngine_CompactionWithDeletes(t *testing.T) {
 	de := eng.(*dbEngine)
 
 	// Write k1 and k2, flush.
-	_ = eng.Put([]byte("k1"), []byte("v1"))
-	_ = eng.Put([]byte("k2"), []byte("v2"))
+	_ = eng.Put(context.Background(), []byte("k1"), []byte("v1"))
+	_ = eng.Put(context.Background(), []byte("k2"), []byte("v2"))
 	time.Sleep(50 * time.Millisecond)
 
 	// Delete k1, update k2, flush again → triggers compaction.
-	_ = eng.Delete([]byte("k1"))
-	_ = eng.Put([]byte("k2"), []byte("v2-new"))
+	_ = eng.Delete(context.Background(), []byte("k1"))
+	_ = eng.Put(context.Background(), []byte("k2"), []byte("v2-new"))
 	time.Sleep(50 * time.Millisecond)
 
 	waitForCompaction(de, 500*time.Millisecond)
@@ -340,17 +341,17 @@ func TestEngine_Scan(t *testing.T) {
 	opts.CompactionThreshold = 10 // prevent compaction during setup
 	engine := mustNewEngine(t, dir, opts)
 
-	_ = engine.Put([]byte("aa1"), []byte("val_aa1"))
-	_ = engine.Put([]byte("aa2"), []byte("val_aa2"))
+	_ = engine.Put(context.Background(), []byte("aa1"), []byte("val_aa1"))
+	_ = engine.Put(context.Background(), []byte("aa2"), []byte("val_aa2"))
 	time.Sleep(30 * time.Millisecond)
 
-	_ = engine.Put([]byte("ab1"), []byte("val_ab1"))
-	_ = engine.Put([]byte("ab2"), []byte("val_ab2"))
-	_ = engine.Put([]byte("ab3-del"), []byte("val_del"))
-	_ = engine.Delete([]byte("ab3-del"))
+	_ = engine.Put(context.Background(), []byte("ab1"), []byte("val_ab1"))
+	_ = engine.Put(context.Background(), []byte("ab2"), []byte("val_ab2"))
+	_ = engine.Put(context.Background(), []byte("ab3-del"), []byte("val_del"))
+	_ = engine.Delete(context.Background(), []byte("ab3-del"))
 	time.Sleep(30 * time.Millisecond)
 
-	_ = engine.Put([]byte("bb1"), []byte("val_bb1")) // active memtable
+	_ = engine.Put(context.Background(), []byte("bb1"), []byte("val_bb1")) // active memtable
 
 	iter, err := engine.Scan([]byte("ab"))
 	if err != nil {
@@ -379,7 +380,7 @@ func TestEngine_ScanFullNoPrefix(t *testing.T) {
 
 	keys := []string{"a1", "b2", "c3", "d4"}
 	for _, k := range keys {
-		_ = engine.Put([]byte(k), []byte("v-"+k))
+		_ = engine.Put(context.Background(), []byte(k), []byte("v-"+k))
 	}
 
 	iter, err := engine.Scan(nil) // nil prefix = full scan
@@ -405,12 +406,12 @@ func TestEngine_ScanAcrossL0AndL1(t *testing.T) {
 	de := eng.(*dbEngine)
 
 	// Two flushes → compaction kicks in → data lands in L1.
-	_ = eng.Put([]byte("m1"), []byte("v1"))
-	_ = eng.Put([]byte("m2"), []byte("v2"))
+	_ = eng.Put(context.Background(), []byte("m1"), []byte("v1"))
+	_ = eng.Put(context.Background(), []byte("m2"), []byte("v2"))
 	triggerFlush(t, eng, "dummy1", 1000)
 
-	_ = eng.Put([]byte("m3"), []byte("v3"))
-	_ = eng.Put([]byte("m4"), []byte("v4"))
+	_ = eng.Put(context.Background(), []byte("m3"), []byte("v3"))
+	_ = eng.Put(context.Background(), []byte("m4"), []byte("v4"))
 	triggerFlush(t, eng, "dummy2", 2000)
 
 	waitForCompaction(de, 1*time.Second)
@@ -432,7 +433,7 @@ func TestEngine_ScanAcrossL0AndL1(t *testing.T) {
 func TestEngine_ScanDoubleClose(t *testing.T) {
 	dir := t.TempDir()
 	engine := mustNewEngine(t, dir, DefaultOptions())
-	_ = engine.Put([]byte("x"), []byte("y"))
+	_ = engine.Put(context.Background(), []byte("x"), []byte("y"))
 
 	iter, err := engine.Scan(nil)
 	if err != nil {
@@ -471,11 +472,11 @@ func TestEngine_ScanImmMemtable(t *testing.T) {
 	opts.CompactionThreshold = 100 // never compact during this test
 	engine := mustNewEngine(t, dir, opts)
 
-	_ = engine.Put([]byte("imm1"), []byte("v1"))
-	_ = engine.Put([]byte("imm2"), []byte("v2"))
+	_ = engine.Put(context.Background(), []byte("imm1"), []byte("v1"))
+	_ = engine.Put(context.Background(), []byte("imm2"), []byte("v2"))
 	time.Sleep(25 * time.Millisecond) // trigger immMemtable flush
 
-	_ = engine.Put([]byte("imm3"), []byte("v3")) // lands in fresh active memtable
+	_ = engine.Put(context.Background(), []byte("imm3"), []byte("v3")) // lands in fresh active memtable
 
 	iter, err := engine.Scan([]byte("imm"))
 	if err != nil {
@@ -497,7 +498,7 @@ func TestEngine_GetFromL0SSTable(t *testing.T) {
 	opts.CompactionThreshold = 100 // prevent compaction
 	engine := mustNewEngine(t, dir, opts)
 
-	_ = engine.Put([]byte("l0key"), []byte("l0val"))
+	_ = engine.Put(context.Background(), []byte("l0key"), []byte("l0val"))
 	time.Sleep(80 * time.Millisecond) // wait for flush
 
 	// The memtable is now empty; key must come from L0.
@@ -525,11 +526,11 @@ func TestEngine_GetFromL1SSTable(t *testing.T) {
 	eng := mustNewEngine(t, dir, opts)
 	de := eng.(*dbEngine)
 
-	_ = eng.Put([]byte("l1key"), []byte("l1val"))
-	_ = eng.Put([]byte("l1key2"), []byte("l1val2"))
+	_ = eng.Put(context.Background(), []byte("l1key"), []byte("l1val"))
+	_ = eng.Put(context.Background(), []byte("l1key2"), []byte("l1val2"))
 	triggerFlush(t, eng, "dummy1", 1000)
 
-	_ = eng.Put([]byte("l1key3"), []byte("l1val3"))
+	_ = eng.Put(context.Background(), []byte("l1key3"), []byte("l1val3"))
 	triggerFlush(t, eng, "dummy2", 2000)
 
 	waitForCompaction(de, 1*time.Second)
@@ -570,8 +571,8 @@ func TestEngine_GetTombstoneFromSSTable(t *testing.T) {
 	opts.CompactionThreshold = 100
 	engine := mustNewEngine(t, dir, opts)
 
-	_ = engine.Put([]byte("tkey"), []byte("tval"))
-	_ = engine.Delete([]byte("tkey"))
+	_ = engine.Put(context.Background(), []byte("tkey"), []byte("tval"))
+	_ = engine.Delete(context.Background(), []byte("tkey"))
 	time.Sleep(80 * time.Millisecond) // flush both put+tombstone to L0
 
 	_, err := engine.Get([]byte("tkey"))
@@ -587,9 +588,9 @@ func TestEngine_ConcurrentReadCompactionIsolation(t *testing.T) {
 	opts.CompactionThreshold = 2
 	engine := mustNewEngine(t, dir, opts)
 
-	_ = engine.Put([]byte("k1"), []byte("v1"))
+	_ = engine.Put(context.Background(), []byte("k1"), []byte("v1"))
 	time.Sleep(30 * time.Millisecond)
-	_ = engine.Put([]byte("k2"), []byte("v2"))
+	_ = engine.Put(context.Background(), []byte("k2"), []byte("v2"))
 	time.Sleep(30 * time.Millisecond)
 
 	iter, err := engine.Scan([]byte("k"))
@@ -598,9 +599,9 @@ func TestEngine_ConcurrentReadCompactionIsolation(t *testing.T) {
 	}
 
 	// Write more to trigger compaction that would otherwise delete L0 files.
-	_ = engine.Put([]byte("k3"), []byte("v3"))
+	_ = engine.Put(context.Background(), []byte("k3"), []byte("v3"))
 	time.Sleep(30 * time.Millisecond)
-	_ = engine.Put([]byte("k4"), []byte("v4"))
+	_ = engine.Put(context.Background(), []byte("k4"), []byte("v4"))
 	time.Sleep(200 * time.Millisecond) // let compaction attempt
 
 	expectedKeys := map[string]string{"k1": "v1", "k2": "v2"}
@@ -640,7 +641,7 @@ func TestEngine_ConcurrentWrites(t *testing.T) {
 			for i := range writes {
 				key := []byte(fmt.Sprintf("w%d-key%03d", workerID, i))
 				val := []byte(fmt.Sprintf("w%d-val%03d", workerID, i))
-				_ = engine.Put(key, val)
+				_ = engine.Put(context.Background(), key, val)
 			}
 		}(w)
 	}
@@ -667,7 +668,7 @@ func TestEngine_ConcurrentWritesOrdering(t *testing.T) {
 		go func(workerID int) {
 			defer func() { done <- struct{}{} }()
 			val := []byte(fmt.Sprintf("val-%d", workerID))
-			err := engine.Put(key, val)
+			err := engine.Put(context.Background(), key, val)
 			if err != nil {
 				t.Errorf("Put failed: %v", err)
 				return
@@ -747,8 +748,8 @@ func TestEngine_CloseWithDirtyMemTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	_ = engine.Put([]byte("dirty1"), []byte("dval1"))
-	_ = engine.Put([]byte("dirty2"), []byte("dval2"))
+	_ = engine.Put(context.Background(), []byte("dirty1"), []byte("dval1"))
+	_ = engine.Put(context.Background(), []byte("dirty2"), []byte("dval2"))
 	if err := engine.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -773,8 +774,8 @@ func TestEngine_RecoveryMemTableFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	_ = engine.Put([]byte("key1"), []byte("value1"))
-	_ = engine.Put([]byte("key2"), []byte("value2"))
+	_ = engine.Put(context.Background(), []byte("key1"), []byte("value1"))
+	_ = engine.Put(context.Background(), []byte("key2"), []byte("value2"))
 	if err := engine.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -808,7 +809,7 @@ func TestEngine_RecoveryResumeFromHighestWAL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	_ = engine.Put([]byte("rr1"), []byte("rv1"))
+	_ = engine.Put(context.Background(), []byte("rr1"), []byte("rv1"))
 	if err := engine.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -962,8 +963,8 @@ func TestEngine_UnpinSSTable_ObsoleteDeletion(t *testing.T) {
 	eng := mustNewEngine(t, dir, opts)
 	de := eng.(*dbEngine)
 
-	_ = eng.Put([]byte("u1"), []byte("v1"))
-	_ = eng.Put([]byte("u2"), []byte("v2"))
+	_ = eng.Put(context.Background(), []byte("u1"), []byte("v1"))
+	_ = eng.Put(context.Background(), []byte("u2"), []byte("v2"))
 	time.Sleep(40 * time.Millisecond) // flush to L0
 
 	// Open a scan to pin the L0 readers.
@@ -973,7 +974,7 @@ func TestEngine_UnpinSSTable_ObsoleteDeletion(t *testing.T) {
 	}
 
 	// Trigger compaction which will mark L0 readers as obsolete.
-	_ = eng.Put([]byte("u3"), []byte("v3"))
+	_ = eng.Put(context.Background(), []byte("u3"), []byte("v3"))
 	time.Sleep(40 * time.Millisecond)
 	waitForCompaction(de, 500*time.Millisecond)
 
@@ -998,7 +999,7 @@ func TestEngine_WriteBatchAfterClose(t *testing.T) {
 	}
 
 	// isClosing = true → WriteBatch must return an error, not panic.
-	err = engine.Put([]byte("afterclose"), []byte("v"))
+	err = engine.Put(context.Background(), []byte("afterclose"), []byte("v"))
 	if err == nil {
 		t.Error("expected error writing after Close, got nil")
 	}
@@ -1014,12 +1015,12 @@ func TestEngine_RotateMemtable(t *testing.T) {
 
 	// Fill up the memtable to trigger rotation on the next put.
 	for i := range 6 {
-		_ = engine.Put([]byte(fmt.Sprintf("rk%d", i)), []byte("val"))
+		_ = engine.Put(context.Background(), []byte(fmt.Sprintf("rk%d", i)), []byte("val"))
 	}
 	time.Sleep(80 * time.Millisecond)
 
 	// Write after rotation.
-	_ = engine.Put([]byte("after-rotate"), []byte("rotated"))
+	_ = engine.Put(context.Background(), []byte("after-rotate"), []byte("rotated"))
 	time.Sleep(50 * time.Millisecond)
 
 	v, err := engine.Get([]byte("after-rotate"))
@@ -1049,7 +1050,7 @@ func TestEngine_GetImmMemtable_Value(t *testing.T) {
 	de := engine.(*dbEngine)
 
 	// Write a value into the active memtable.
-	_ = engine.Put([]byte("imm-v-key"), []byte("imm-v-val"))
+	_ = engine.Put(context.Background(), []byte("imm-v-key"), []byte("imm-v-val"))
 
 	// Manually freeze the active memtable into the immutable slot so that the
 	// flush worker hasn't cleared it by the time Get runs.
@@ -1085,8 +1086,8 @@ func TestEngine_GetImmMemtable_Tombstone(t *testing.T) {
 	de := engine.(*dbEngine)
 
 	// Put then immediately delete – both records land in the active memtable.
-	_ = engine.Put([]byte("imm-t-key"), []byte("v"))
-	_ = engine.Delete([]byte("imm-t-key"))
+	_ = engine.Put(context.Background(), []byte("imm-t-key"), []byte("v"))
+	_ = engine.Delete(context.Background(), []byte("imm-t-key"))
 
 	// Freeze active memtable (which contains the tombstone) into the immutable slot.
 	de.mu.Lock()
@@ -1117,11 +1118,11 @@ func TestEngine_ScanL1RangeExclusion(t *testing.T) {
 	de := eng.(*dbEngine)
 
 	// Build L1 files whose keys are all in the "m*" range.
-	_ = eng.Put([]byte("m1"), []byte("v1"))
-	_ = eng.Put([]byte("m2"), []byte("v2"))
+	_ = eng.Put(context.Background(), []byte("m1"), []byte("v1"))
+	_ = eng.Put(context.Background(), []byte("m2"), []byte("v2"))
 	triggerFlush(t, eng, "dummy1", 1000)
 
-	_ = eng.Put([]byte("m3"), []byte("v3"))
+	_ = eng.Put(context.Background(), []byte("m3"), []byte("v3"))
 	triggerFlush(t, eng, "dummy2", 2000)
 
 	waitForCompaction(de, 1*time.Second)
@@ -1275,8 +1276,8 @@ func TestEngine_UnpinSSTable_DeletesObsoleteFile(t *testing.T) {
 	de := eng.(*dbEngine)
 
 	// Force 1st L0 flush using triggerFlush.
-	_ = eng.Put([]byte("del1a"), []byte("very-long-value-x"))
-	_ = eng.Put([]byte("del1b"), []byte("very-long-value-y"))
+	_ = eng.Put(context.Background(), []byte("del1a"), []byte("very-long-value-x"))
+	_ = eng.Put(context.Background(), []byte("del1b"), []byte("very-long-value-y"))
 	triggerFlush(t, eng, "dummy1", 1000)
 
 	// Pin L0 readers by opening a scan.
@@ -1287,8 +1288,8 @@ func TestEngine_UnpinSSTable_DeletesObsoleteFile(t *testing.T) {
 	defer iter.Close()
 
 	// Trigger second L0 flush to exceed CompactionThreshold=2 and kick off compaction.
-	_ = eng.Put([]byte("del2a"), []byte("very-long-value-z"))
-	_ = eng.Put([]byte("del2b"), []byte("very-long-value-w"))
+	_ = eng.Put(context.Background(), []byte("del2a"), []byte("very-long-value-z"))
+	_ = eng.Put(context.Background(), []byte("del2b"), []byte("very-long-value-w"))
 	triggerFlush(t, eng, "dummy2", 2000)
 
 	// Wait for the compaction worker to complete.
@@ -1347,7 +1348,7 @@ func TestEngine_RotateMemtable_WALWriterFailure(t *testing.T) {
 	}
 
 	// Trigger rotation
-	err = engine.Put([]byte("key"), make([]byte, 50))
+	err = engine.Put(context.Background(), []byte("key"), make([]byte, 50))
 	if err == nil {
 		t.Error("expected error during rotation due to WAL writer creation failure, got nil")
 	}
@@ -1375,7 +1376,7 @@ func TestEngine_RotateMemtable_WriteManifestFailure(t *testing.T) {
 	}
 
 	// Trigger rotation
-	err = engine.Put([]byte("key"), make([]byte, 50))
+	err = engine.Put(context.Background(), []byte("key"), make([]byte, 50))
 	if err == nil {
 		t.Error("expected error during rotation due to manifest write failure, got nil")
 	}
@@ -1569,11 +1570,11 @@ func TestEngine_Compaction_RunFailure(t *testing.T) {
 	de := engine.(*dbEngine)
 
 	// Flush 2 L0 files
-	_ = engine.Put([]byte("k1"), []byte("v1"))
-	_ = engine.Put([]byte("k2"), []byte("v2"))
+	_ = engine.Put(context.Background(), []byte("k1"), []byte("v1"))
+	_ = engine.Put(context.Background(), []byte("k2"), []byte("v2"))
 	triggerFlush(t, engine, "dummy1", 1000)
 
-	_ = engine.Put([]byte("k3"), []byte("k3"))
+	_ = engine.Put(context.Background(), []byte("k3"), []byte("k3"))
 	triggerFlush(t, engine, "dummy2", 2000)
 
 	// Verify L0 has 2 files
@@ -1628,7 +1629,7 @@ func TestEngine_Compaction_RunFailure(t *testing.T) {
 func TestEngine_ScanActiveMemtable(t *testing.T) {
 	dir := t.TempDir()
 	eng := mustNewEngine(t, dir, DefaultOptions())
-	_ = eng.Put([]byte("key1"), []byte("val1"))
+	_ = eng.Put(context.Background(), []byte("key1"), []byte("val1"))
 	iter, err := eng.Scan([]byte("k"))
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
@@ -1664,12 +1665,12 @@ func TestEngine_RotateActiveMemTableAndWAL_WALWriterFailure(t *testing.T) {
 	}
 
 	// Write a first key to take up some space
-	if err := engine.Put([]byte("k1"), make([]byte, 35)); err != nil {
+	if err := engine.Put(context.Background(), []byte("k1"), make([]byte, 35)); err != nil {
 		t.Fatalf("first Put failed: %v", err)
 	}
 
 	// Trigger rotation by writing a second key that makes cumulative size exceed MaxMemTableSize = 60
-	err = engine.Put([]byte("k2"), make([]byte, 25))
+	err = engine.Put(context.Background(), []byte("k2"), make([]byte, 25))
 	if err == nil {
 		t.Fatal("expected error during rotation due to WAL writer creation failure, got nil")
 	}
@@ -1787,7 +1788,7 @@ func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
 	de.mu.Lock()
 	de.isClosing = true
 	de.mu.Unlock()
-	err := eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("k"), Value: []byte("v")}})
+	err := eng.WriteBatch(context.Background(), []Op{{Type: OpPut, Key: []byte("k"), Value: []byte("v")}})
 	if err == nil || !strings.Contains(err.Error(), "engine is closing") {
 		t.Errorf("expected engine is closing error, got %v", err)
 	}
@@ -1797,7 +1798,7 @@ func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
 	de.isClosing = false
 	de.bgErr = fmt.Errorf("mock background error")
 	de.mu.Unlock()
-	err = eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("k"), Value: []byte("v")}})
+	err = eng.WriteBatch(context.Background(), []Op{{Type: OpPut, Key: []byte("k"), Value: []byte("v")}})
 	if err == nil || !strings.Contains(err.Error(), "mock background error") {
 		t.Errorf("expected mock background error, got %v", err)
 	}
@@ -1820,7 +1821,7 @@ func TestEngine_WriteBatch_ErrorPaths(t *testing.T) {
 
 	// WriteBatch with a large value exceeding remaining MaxMemTableSize (4MB by default)
 	largeVal := make([]byte, 2*1024*1024)
-	err = eng.WriteBatch([]Op{{Type: OpPut, Key: []byte("large"), Value: largeVal}})
+	err = eng.WriteBatch(context.Background(), []Op{{Type: OpPut, Key: []byte("large"), Value: largeVal}})
 	if err != nil {
 		t.Errorf("unexpected error on large WriteBatch: %v", err)
 	}
@@ -2055,10 +2056,10 @@ func TestEngine_FlushWorker_Failure(t *testing.T) {
 		t.Fatalf("Mkdir: %v", err)
 	}
 
-	if err := engine.Put([]byte("k1"), make([]byte, 35)); err != nil {
+	if err := engine.Put(context.Background(), []byte("k1"), make([]byte, 35)); err != nil {
 		t.Fatalf("first Put failed: %v", err)
 	}
-	_ = engine.Put([]byte("k2"), make([]byte, 25))
+	_ = engine.Put(context.Background(), []byte("k2"), make([]byte, 25))
 
 	deadline := time.Now().Add(3 * time.Second)
 	var bgErr error
@@ -2095,10 +2096,10 @@ func TestEngine_FlushWorker_ManifestFailure(t *testing.T) {
 		t.Fatalf("Mkdir: %v", err)
 	}
 
-	if err := engine.Put([]byte("k1"), make([]byte, 35)); err != nil {
+	if err := engine.Put(context.Background(), []byte("k1"), make([]byte, 35)); err != nil {
 		t.Fatalf("first Put failed: %v", err)
 	}
-	_ = engine.Put([]byte("k2"), make([]byte, 25))
+	_ = engine.Put(context.Background(), []byte("k2"), make([]byte, 25))
 
 	deadline := time.Now().Add(3 * time.Second)
 	var bgErr error
@@ -2131,7 +2132,7 @@ func TestEngine_ManifestBackupFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	_ = engine.Put([]byte("key1"), []byte("value1"))
+	_ = engine.Put(context.Background(), []byte("key1"), []byte("value1"))
 	triggerFlush(t, engine, "flush1-", 1000)
 
 	// Trigger a second flush to move key1's manifest entry to backup
@@ -2174,7 +2175,7 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 	}
 	defer engine.Close()
 
-	_ = engine.Put([]byte("key1"), []byte("initial"))
+	_ = engine.Put(context.Background(), []byte("key1"), []byte("initial"))
 
 	// Create snapshot
 	snap, err := engine.Snapshot()
@@ -2184,8 +2185,8 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 	defer snap.Close()
 
 	// Modify key after snapshot
-	_ = engine.Put([]byte("key1"), []byte("modified"))
-	_ = engine.Put([]byte("key2"), []byte("new-key"))
+	_ = engine.Put(context.Background(), []byte("key1"), []byte("modified"))
+	_ = engine.Put(context.Background(), []byte("key2"), []byte("new-key"))
 
 	// Query snapshot
 	val1, err := snap.Get([]byte("key1"))
@@ -2242,7 +2243,7 @@ func TestEngine_SnapshotIsolation(t *testing.T) {
 // runWriteBatchForTest is a helper to run WriteBatch concurrently.
 func runWriteBatchForTest(d *dbEngine, w *sync.WaitGroup, errCh chan error) {
 	defer w.Done()
-	errCh <- (*dbEngine).WriteBatch(d, []Op{
+	errCh <- (*dbEngine).WriteBatch(d, context.Background(), []Op{
 		{Type: OpPut, Key: []byte("concurrentKey"), Value: []byte("concurrentValue")},
 	})
 }
@@ -2351,5 +2352,57 @@ func TestEngine_CorruptManifest_PathTraversal(t *testing.T) {
 				t.Errorf("expected unsafe SSTable filename in manifest error, got %v", err)
 			}
 		})
+	}
+}
+
+// TestEngine_WriteBatch_ContextCancel verifies that if a write is attempted
+// with a canceled context, or if a write stalls and the context is canceled,
+// WriteBatch returns the context error.
+func TestEngine_WriteBatch_ContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+	opts.MaxMemTableSize = 64 // very small to trigger stall easily
+	opts.MaxImmMemtables = 0  // 0 means any overflow will stall immediately
+	opts.AllowZeroMaxImmMemtables = true
+
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	defer engine.Close()
+
+	// 1. Check fast-path cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = engine.Put(ctx, []byte("fastkey"), []byte("fastval"))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+
+	// 2. Trigger a stall and cancel during the stall.
+	// Fill active memtable (size > 64)
+	err = engine.Put(context.Background(), []byte("key1"), []byte(strings.Repeat("a", 50)))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	// Start a goroutine that will write and stall because MaxImmMemtables is 0.
+	ctxStall, cancelStall := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Put(ctxStall, []byte("key2"), []byte(strings.Repeat("b", 50)))
+	}()
+
+	// Wait a short duration to ensure it is stalled, then cancel.
+	time.Sleep(100 * time.Millisecond)
+	cancelStall()
+
+	select {
+	case writeErr := <-errCh:
+		if !errors.Is(writeErr, context.Canceled) {
+			t.Errorf("expected context.Canceled for stalled write, got %v", writeErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for stalled write to abort on context cancel")
 	}
 }
