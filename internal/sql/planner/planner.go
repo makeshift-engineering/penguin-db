@@ -6,7 +6,10 @@
 package planner
 
 import (
+	"fmt"
+
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
@@ -30,6 +33,17 @@ func New(cat *catalog.Catalog) *Planner {
 	return &Planner{catalog: cat}
 }
 
+// Plan produces a logical plan for a single parsed statement. session
+// supplies the active database for unqualified references; src is used to
+// attach source snippets to diagnostics and may be nil. Diagnostics
+// accumulated during planning are returned alongside any error, since a
+// single statement can surface more than one problem.
+func (p *Planner) Plan(stmt ast.Statement, session Session, src *diagnostic.Source) (Plan, diagnostic.List, error) {
+	pc := newPlanContext(p.catalog, session, src)
+	plan, err := pc.planStatement(stmt)
+	return plan, pc.diag, err
+}
+
 // planContext carries the mutable state for a single top-level planning
 // call: the diagnostics accumulated so far, the active session, the source
 // text (for diagnostic snippets), and a reference to the read-only catalog.
@@ -48,5 +62,26 @@ func newPlanContext(cat *catalog.Catalog, session Session, src *diagnostic.Sourc
 		catalog: cat,
 		session: session,
 		source:  src,
+	}
+}
+
+// planStatement dispatches to the planning method for stmt's concrete type.
+// Only DDL is implemented so far; DML and SELECT arrive in later phases.
+func (pc *planContext) planStatement(stmt ast.Statement) (Plan, error) {
+	switch s := stmt.(type) {
+	case *ast.CreateDatabaseStmt:
+		return pc.planCreateDatabase(s)
+	case *ast.UseDatabaseStmt:
+		return pc.planUseDatabase(s)
+	case *ast.DropDatabaseStmt:
+		return pc.planDropDatabase(s)
+	case *ast.CreateTableStmt:
+		return pc.planCreateTable(s)
+	case *ast.AlterTableStmt:
+		return pc.planAlterTable(s)
+	case *ast.DropTableStmt:
+		return pc.planDropTable(s)
+	default:
+		return nil, fmt.Errorf("planner: statement type %T is not yet supported", stmt)
 	}
 }
