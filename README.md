@@ -1,5 +1,7 @@
 <div align="center">
 
+<img width="90" height="90" alt="transparent-penguin-logo" src="https://github.com/user-attachments/assets/a959ecb1-9528-4ea6-b80a-45b1eb45ba78" />
+
 # Penguin DB
 
 **A fast, transactional LSM-tree-backed key-value store database node.**
