@@ -423,9 +423,21 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 			return fmt.Errorf("failed to initialize active WAL writer: %w", err)
 		}
 	} else {
-		// Recovery memtable fits in memory: resume from the highest replayed WAL segment.
+		// Recovery memtable fits in memory:
 		engine.memtable = recoveryMem
-		engine.activeWALSegmentID = highestWALSegmentID
+
+		if highestWALSegmentID <= manifest.FlushedSegmentID {
+			engine.activeWALSegmentID = engine.nextSegmentID
+			engine.nextSegmentID++
+			manifest.NextSegmentID = engine.nextSegmentID
+			if err := writeManifest(engine.dir, manifest); err != nil {
+				return fmt.Errorf("failed to initialize active WAL writer: failed to save manifest: %w", err)
+			}
+		} else {
+			// Resume from the highest replayed WAL segment.
+			engine.activeWALSegmentID = highestWALSegmentID
+		}
+
 		engine.wal, err = createWALWriter(engine.walDir, engine.activeWALSegmentID, engine.opts.WALOptions)
 		if err != nil {
 			return fmt.Errorf("failed to resume active WAL writer: %w", err)

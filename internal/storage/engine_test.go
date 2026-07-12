@@ -2406,3 +2406,55 @@ func TestEngine_WriteBatch_ContextCancel(t *testing.T) {
 		t.Fatal("timed out waiting for stalled write to abort on context cancel")
 	}
 }
+
+// TestEngine_ConsecutiveGracefulShutdowns verifies that starting the engine,
+// writing data, gracefully closing it, and repeating this sequence
+// correctly allocates separate SSTable file IDs and does not result in
+// duplicate entries of the same SSTable name inside the level lists.
+func TestEngine_ConsecutiveGracefulShutdowns(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultOptions()
+
+	// First run
+	engine, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("First run NewEngine: %v", err)
+	}
+	if err := engine.Put(context.Background(), []byte("key1"), []byte("val1")); err != nil {
+		t.Fatalf("First run Put: %v", err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("First run Close: %v", err)
+	}
+
+	// Second run
+	engine2, err := NewEngine(dir, opts)
+	if err != nil {
+		t.Fatalf("Second run NewEngine: %v", err)
+	}
+	if err := engine2.Put(context.Background(), []byte("key2"), []byte("val2")); err != nil {
+		t.Fatalf("Second run Put: %v", err)
+	}
+	if err := engine2.Close(); err != nil {
+		t.Fatalf("Second run Close: %v", err)
+	}
+
+	// Load manifest and assert no duplicates
+	m, err := loadManifest(dir)
+	if err != nil {
+		t.Fatalf("loadManifest: %v", err)
+	}
+
+	l0Files := m.Levels[0]
+	seen := make(map[string]bool)
+	for _, name := range l0Files {
+		if seen[name] {
+			t.Errorf("found duplicate file entry %q in L0 manifest list: %v", name, l0Files)
+		}
+		seen[name] = true
+	}
+
+	if len(seen) != 2 {
+		t.Errorf("expected 2 distinct L0 SSTable files, got: %v", l0Files)
+	}
+}
