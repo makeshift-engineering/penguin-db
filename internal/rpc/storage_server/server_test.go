@@ -3,6 +3,7 @@ package storage_server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -375,6 +376,10 @@ func TestSnapshotExpiration(t *testing.T) {
 	if found {
 		t.Error("expected snapshot to be evicted by janitor, but it was found")
 	}
+
+	if _, err := snap.Get([]byte("key")); !errors.Is(err, storage.ErrSnapshotClosed) {
+		t.Errorf("expected expired snapshot to be closed, got %v", err)
+	}
 }
 
 // TestReleaseSnapshot_NotFound verifies that releasing a non-existent or
@@ -493,4 +498,135 @@ func TestConcurrentSnapshotReadRelease(t *testing.T) {
 	}()
 
 	wg.Wait()
+}
+
+// collectScan executes a full Scan RPC and collects all streamed responses into a slice.
+func collectScan(t *testing.T, client storagepb.StorageServiceClient, req *storagepb.ScanRequest) []*storagepb.ScanResponse {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.Scan(ctx, req)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	var results []*storagepb.ScanResponse
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Scan Recv failed: %v", err)
+		}
+		results = append(results, resp)
+	}
+	return results
+}
+
+// TestScan_Limit verifies that a non-zero limit caps the number of keys returned.
+func TestScan_Limit(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for i := 1; i <= 10; i++ {
+		key := []byte(fmt.Sprintf("key-%02d", i))
+		_, err := client.Put(ctx, &storagepb.PutRequest{Key: key, Value: []byte("val")})
+		if err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+
+	results := collectScan(t, client, &storagepb.ScanRequest{Limit: 3})
+	if len(results) != 3 {
+		t.Errorf("expected 3 results with limit=3, got %d", len(results))
+	}
+}
+
+// TestScan_CursorKey verifies that cursor_key resumes the scan from the key strictly
+// after the provided cursor value, implementing exclusive-start pagination.
+func TestScan_CursorKey(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for i := 1; i <= 5; i++ {
+		key := []byte(fmt.Sprintf("key-%02d", i))
+		_, err := client.Put(ctx, &storagepb.PutRequest{Key: key, Value: []byte("val")})
+		if err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+
+	// Resume after "key-02"; expect key-03, key-04, key-05.
+	results := collectScan(t, client, &storagepb.ScanRequest{CursorKey: []byte("key-02")})
+	if len(results) != 3 {
+		t.Errorf("expected 3 results after cursor key-02, got %d", len(results))
+	}
+	if string(results[0].Key) != "key-03" {
+		t.Errorf("expected first result to be key-03, got %s", results[0].Key)
+	}
+}
+
+// TestScan_LimitAndCursor verifies that limit and cursor_key compose correctly,
+// returning at most limit results starting exclusively after cursor_key.
+func TestScan_LimitAndCursor(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for i := 1; i <= 10; i++ {
+		key := []byte(fmt.Sprintf("key-%02d", i))
+		_, err := client.Put(ctx, &storagepb.PutRequest{Key: key, Value: []byte("val")})
+		if err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+
+	// After key-05 with limit=3 -> expect key-06, key-07, key-08.
+	results := collectScan(t, client, &storagepb.ScanRequest{
+		CursorKey: []byte("key-05"),
+		Limit:     3,
+	})
+	if len(results) != 3 {
+		t.Errorf("expected 3 results, got %d", len(results))
+	}
+	if string(results[0].Key) != "key-06" {
+		t.Errorf("expected first result to be key-06, got %s", results[0].Key)
+	}
+	if string(results[2].Key) != "key-08" {
+		t.Errorf("expected last result to be key-08, got %s", results[2].Key)
+	}
+}
+
+// TestScan_LimitClamped verifies that a limit exceeding maxScanLimit is silently clamped
+// to the server ceiling and does not return more than maxScanLimit results.
+func TestScan_LimitClamped(t *testing.T) {
+	client, cleanup := startTestServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for i := 1; i <= 5; i++ {
+		key := []byte(fmt.Sprintf("key-%02d", i))
+		_, err := client.Put(ctx, &storagepb.PutRequest{Key: key, Value: []byte("val")})
+		if err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+
+	// Pass a limit far above maxScanLimit; all 5 rows should be returned since
+	// the dataset is smaller than the ceiling.
+	results := collectScan(t, client, &storagepb.ScanRequest{Limit: 999_999})
+	if len(results) != 5 {
+		t.Errorf("expected all 5 results when limit is above ceiling, got %d", len(results))
+	}
 }

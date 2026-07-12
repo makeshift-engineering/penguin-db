@@ -41,6 +41,8 @@ message DeleteResponse {}
 message ScanRequest {
   bytes prefix = 1;
   string snapshot_id = 2; // Optional: scan from a snapshot
+  uint32 limit = 3;      // Optional: maximum number of key-value pairs to return; 0 means unlimited
+  bytes cursor_key = 4;  // Optional: resume scan from the key strictly after this value (exclusive)
 }
 
 message ScanResponse {
@@ -76,7 +78,8 @@ service StorageService {
   // Delete writes a tombstone for a key, marking it as logically deleted.
   rpc Delete(DeleteRequest) returns (DeleteResponse);
 
-  // Scan returns a prefix-filtered stream of sorted key-value pairs.
+  // Scan returns a prefix-filtered, cursor-paginated stream of sorted key-value pairs.
+  // Set limit to cap the number of results; set cursor_key to resume from a prior scan.
   rpc Scan(ScanRequest) returns (stream ScanResponse);
 
   // WriteBatch writes multiple operations atomically.

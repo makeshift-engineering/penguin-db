@@ -30,3 +30,7 @@ gen
 # Editor/IDE
 .idea/
 .vscode/
+
+# Local databases and temporary data folders
+data/
+test_data/

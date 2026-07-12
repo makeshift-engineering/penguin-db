@@ -1,6 +1,7 @@
 package storage_server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -19,6 +20,10 @@ import (
 const (
 	defaultSnapshotExpiry        = 10 * time.Minute
 	defaultSnapshotCheckInterval = 1 * time.Minute
+	// maxScanLimit caps the number of keys returned in a single Scan call to prevent
+	// unbounded memory and network usage. Clients requesting 0 or a value above this
+	// threshold are silently clamped to this ceiling.
+	maxScanLimit = 10000
 )
 
 type snapshotEntry struct {
@@ -168,6 +173,10 @@ func mapError(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, "request was canceled")
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, "deadline exceeded")
 	case errors.Is(err, storage.ErrKeyNotFound):
 		return status.Error(codes.NotFound, "key not found")
 	case errors.Is(err, storage.ErrEmptyKey):
@@ -228,7 +237,10 @@ func (s *StorageServer) Delete(ctx context.Context, req *storagepb.DeleteRequest
 	return &storagepb.DeleteResponse{}, nil
 }
 
-// Scan returns a prefix-filtered stream of sorted key-value pairs from the engine or snapshot.
+// Scan returns a prefix-filtered, cursor-paginated stream of sorted key-value pairs from
+// the engine or a named snapshot. Pagination is controlled by the limit and cursor_key fields
+// of the request: limit caps the number of results streamed (0 defaults to maxScanLimit);
+// cursor_key, when set, skips all keys up to and including that value (exclusive start).
 func (s *StorageServer) Scan(req *storagepb.ScanRequest, stream storagepb.StorageService_ScanServer) error {
 	var iter storage.Iterator
 	var err error
@@ -248,6 +260,12 @@ func (s *StorageServer) Scan(req *storagepb.ScanRequest, stream storagepb.Storag
 	}
 	defer iter.Close()
 
+	limit := req.Limit
+	if limit == 0 || limit > maxScanLimit {
+		limit = maxScanLimit
+	}
+	var sent uint32
+
 	for iter.Valid() {
 		select {
 		case <-s.stopChan:
@@ -257,8 +275,15 @@ func (s *StorageServer) Scan(req *storagepb.ScanRequest, stream storagepb.Storag
 		default:
 		}
 		key, val := iter.Next()
+		if len(req.CursorKey) > 0 && bytes.Compare(key, req.CursorKey) <= 0 {
+			continue
+		}
 		if err := stream.Send(&storagepb.ScanResponse{Key: key, Value: val}); err != nil {
 			return err
+		}
+		sent++
+		if sent >= limit {
+			break
 		}
 	}
 	return nil
@@ -300,6 +325,13 @@ func (s *StorageServer) CreateSnapshot(ctx context.Context, req *storagepb.Creat
 	}
 	id := uuid.New().String()
 	s.mu.Lock()
+	select {
+	case <-s.stopChan:
+		s.mu.Unlock()
+		snap.Close()
+		return nil, status.Error(codes.Aborted, "server is shutting down")
+	default:
+	}
 	s.snapshots[id] = &snapshotEntry{
 		snap:      snap,
 		createdAt: time.Now(),
