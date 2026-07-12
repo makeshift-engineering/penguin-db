@@ -1,6 +1,8 @@
 name: Coverage Report
 
 on:
+  push:
+    branches: [main]
   issue_comment:
     types: [created]
 
@@ -262,3 +264,101 @@ jobs:
               issue_number: context.issue.number,
               body,
             });
+
+  main-coverage-badge:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Main Branch Coverage Badge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install Buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+      - name: Generate Protobuf Code
+        run: buf generate
+        working-directory: proto
+
+      - name: Run tests with coverage
+        run: go test -v -race -coverprofile=coverage.out -count=1 ./...
+
+      - name: Calculate Coverage
+        id: calc_coverage
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Coverage: $COVERAGE%"
+          echo "pct=$COVERAGE" >> $GITHUB_OUTPUT
+          
+          INT_COVERAGE=$(echo "$COVERAGE" | cut -d. -f1)
+          if [ -z "$INT_COVERAGE" ]; then INT_COVERAGE=0; fi
+          if [ "$INT_COVERAGE" -ge 90 ]; then
+            COLOR="brightgreen"
+          elif [ "$INT_COVERAGE" -ge 75 ]; then
+            COLOR="green"
+          elif [ "$INT_COVERAGE" -ge 60 ]; then
+            COLOR="yellowgreen"
+          elif [ "$INT_COVERAGE" -ge 45 ]; then
+            COLOR="yellow"
+          elif [ "$INT_COVERAGE" -ge 30 ]; then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+
+      - name: Update Coverage Badge in Gist
+        uses: actions/github-script@v7
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_PAT }}
+          GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
+          COVERAGE_PCT: ${{ steps.calc_coverage.outputs.pct }}
+          COVERAGE_COLOR: ${{ steps.calc_coverage.outputs.color }}
+        with:
+          script: |
+            const gistId = process.env.GIST_ID;
+            const gistToken = process.env.GIST_TOKEN;
+            if (!gistId || !gistToken) {
+              core.warning("GIST_ID or GIST_TOKEN not set, skipping badge update");
+              return;
+            }
+            
+            const coverageJson = JSON.stringify({
+              schemaVersion: 1,
+              label: "coverage",
+              message: `${process.env.COVERAGE_PCT}%`,
+              color: process.env.COVERAGE_COLOR
+            }, null, 2);
+            
+            const headers = {
+              authorization: `token ${gistToken}`,
+              accept: 'application/vnd.github+json',
+            };
+            
+            const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify({
+                files: {
+                  'coverage-badge.json': { content: coverageJson }
+                }
+              })
+            });
+            
+            if (!res.ok) {
+              throw new Error(`Gist badge update failed: ${res.status} ${await res.text()}`);
+            }
+            console.log("Successfully updated coverage-badge.json in Gist!");
+            
+            const owner = context.repo.owner;
+            const badgeUrl = `https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/${owner}/${gistId}/raw/coverage-badge.json`;
+            console.log(`Badge URL: ${badgeUrl}`);
+            console.log(`Markdown: [![Coverage](${badgeUrl})](https://github.com/${owner}/${context.repo.repo}/actions/workflows/test.yml)`);
