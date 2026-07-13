@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -60,20 +61,20 @@ type Op struct {
 // Engine defines the top-level interface for the storage engine.
 type Engine interface {
 	// Put writes a single key-value pair to the database.
-	Put(key, value []byte) error
+	Put(ctx context.Context, key, value []byte) error
 
 	// Get retrieves a value for a given key. Returns ErrKeyNotFound if absent or logically deleted.
 	Get(key []byte) ([]byte, error)
 
 	// Delete writes a tombstone for a key, marking it as logically deleted.
-	Delete(key []byte) error
+	Delete(ctx context.Context, key []byte) error
 
 	// Scan returns a prefix-filtered sorted iterator starting at the first key >= prefix.
 	// Returns an error if the engine is closing or has a background error.
 	Scan(prefix []byte) (Iterator, error)
 
 	// WriteBatch writes multiple operations atomically to the database.
-	WriteBatch(operations []Op) error
+	WriteBatch(ctx context.Context, operations []Op) error
 
 	// Snapshot returns a point-in-time Snapshot of the database.
 	Snapshot() (Snapshot, error)
@@ -96,17 +97,31 @@ type Options struct {
 	Metrics Metrics
 	// MaxImmMemtables is the maximum allowed immutable memtables in the queue before write stall triggers.
 	MaxImmMemtables int
+	// FlushEstimatedKeys is the expected key count pre-allocated for bloom filters and indexes during flush.
+	FlushEstimatedKeys int
+	// CompactionReadBufferSize is the read buffer size used when merging files during compaction.
+	CompactionReadBufferSize int
+	// CompactionEstimatedKeys is the expected key count pre-allocated for bloom filters and indexes during compaction.
+	CompactionEstimatedKeys int
+	// CompactionMaxSSTableSize is the size threshold after which compacted SSTables roll over to a new file.
+	CompactionMaxSSTableSize uint64
+	// AllowZeroMaxImmMemtables is a test-only flag to allow MaxImmMemtables to be 0.
+	AllowZeroMaxImmMemtables bool
 }
 
 // DefaultOptions returns the standard parameters.
 func DefaultOptions() Options {
 	return Options{
-		MaxMemTableSize:     4 * 1024 * 1024,
-		MemTableMaxLevel:    12,
-		CompactionThreshold: 4,
-		WALOptions:          wal.DefaultOptions(),
-		Metrics:             nopMetrics{},
-		MaxImmMemtables:     2,
+		MaxMemTableSize:          4 * 1024 * 1024,
+		MemTableMaxLevel:         12,
+		CompactionThreshold:      4,
+		WALOptions:               wal.DefaultOptions(),
+		Metrics:                  nopMetrics{},
+		MaxImmMemtables:          2,
+		FlushEstimatedKeys:       10000,
+		CompactionReadBufferSize: 1024 * 1024,
+		CompactionEstimatedKeys:  100000,
+		CompactionMaxSSTableSize: 2 * 1024 * 1024,
 	}
 }
 
@@ -206,6 +221,8 @@ type dbEngine struct {
 }
 
 // NewEngine opens or creates a new storage engine instance in the specified directory.
+//
+//nolint:gocritic // opts is passed by value to avoid external mutation of options
 func NewEngine(dir string, opts Options) (Engine, error) {
 	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -260,7 +277,7 @@ func NewEngine(dir string, opts Options) (Engine, error) {
 	if opts.Metrics == nil {
 		opts.Metrics = nopMetrics{}
 	}
-	if opts.MaxImmMemtables <= 0 {
+	if opts.MaxImmMemtables <= 0 && !opts.AllowZeroMaxImmMemtables {
 		opts.MaxImmMemtables = 2
 	}
 
@@ -374,7 +391,7 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 		sstableFilename := fmt.Sprintf("%06d.sst", engine.nextSegmentID)
 		sstablePath := filepath.Join(engine.dir, sstableFilename)
 
-		sstableReader, err := writeMemTableToSSTable(sstablePath, recoveryMem)
+		sstableReader, err := engine.writeMemTableToSSTable(sstablePath, recoveryMem)
 		if err != nil {
 			return fmt.Errorf("failed to flush recovery memtable: %w", err)
 		}
@@ -406,9 +423,21 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 			return fmt.Errorf("failed to initialize active WAL writer: %w", err)
 		}
 	} else {
-		// Recovery memtable fits in memory: resume from the highest replayed WAL segment.
+		// Recovery memtable fits in memory:
 		engine.memtable = recoveryMem
-		engine.activeWALSegmentID = highestWALSegmentID
+
+		if highestWALSegmentID <= manifest.FlushedSegmentID {
+			engine.activeWALSegmentID = engine.nextSegmentID
+			engine.nextSegmentID++
+			manifest.NextSegmentID = engine.nextSegmentID
+			if err := writeManifest(engine.dir, manifest); err != nil {
+				return fmt.Errorf("failed to initialize active WAL writer: failed to save manifest: %w", err)
+			}
+		} else {
+			// Resume from the highest replayed WAL segment.
+			engine.activeWALSegmentID = highestWALSegmentID
+		}
+
 		engine.wal, err = createWALWriter(engine.walDir, engine.activeWALSegmentID, engine.opts.WALOptions)
 		if err != nil {
 			return fmt.Errorf("failed to resume active WAL writer: %w", err)
@@ -424,9 +453,9 @@ func (engine *dbEngine) recoverActiveState(recoveryMem *memtable.SkipList, manif
 	return nil
 }
 
-// writeMemTableToSSTable dumps the contents of a MemTable SkipList to a new SSTable file.
-func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reader, error) {
-	sstableWriter, err := sstable.NewWriter(path, 10000)
+// writeMemTableToSSTableWithKeys dumps the contents of a MemTable SkipList to a new SSTable file with the given expected keys pre-allocation.
+func writeMemTableToSSTableWithKeys(path string, mem *memtable.SkipList, expectedKeys int) (*sstable.Reader, error) {
+	sstableWriter, err := sstable.NewWriter(path, expectedKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -457,16 +486,25 @@ func writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reade
 	return sstable.Open(path)
 }
 
+// writeMemTableToSSTable dumps the contents of a MemTable SkipList to a new SSTable file using engine options.
+func (engine *dbEngine) writeMemTableToSSTable(path string, mem *memtable.SkipList) (*sstable.Reader, error) {
+	expectedKeys := engine.opts.FlushEstimatedKeys
+	if expectedKeys <= 0 {
+		expectedKeys = 10000
+	}
+	return writeMemTableToSSTableWithKeys(path, mem, expectedKeys)
+}
+
 // Put writes a single key-value record to the engine.
-func (engine *dbEngine) Put(key, value []byte) error {
-	return engine.WriteBatch([]Op{
+func (engine *dbEngine) Put(ctx context.Context, key, value []byte) error {
+	return engine.WriteBatch(ctx, []Op{
 		{Type: OpPut, Key: key, Value: value},
 	})
 }
 
 // Delete logically deletes a key by appending a tombstone record.
-func (engine *dbEngine) Delete(key []byte) error {
-	return engine.WriteBatch([]Op{
+func (engine *dbEngine) Delete(ctx context.Context, key []byte) error {
+	return engine.WriteBatch(ctx, []Op{
 		{Type: OpDelete, Key: key, Value: nil},
 	})
 }
@@ -569,9 +607,13 @@ func (engine *dbEngine) commitRotation(oldWAL *wal.LogWriter, newSegmentID int) 
 }
 
 // WriteBatch writes multiple operations atomically to the WAL and memtable.
-func (engine *dbEngine) WriteBatch(operations []Op) error {
+func (engine *dbEngine) WriteBatch(ctx context.Context, operations []Op) error {
 	if len(operations) == 0 {
 		return nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	batchRawSize, err := validateOperations(operations)
@@ -605,9 +647,27 @@ func (engine *dbEngine) WriteBatch(operations []Op) error {
 	engine.writeMu.Lock()
 	defer engine.writeMu.Unlock()
 
+	// Spawn a context watcher goroutine that wakes up the condition variable
+	// if the context gets cancelled or hits its deadline while we are stalled.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			engine.mu.Lock()
+			engine.flushCond.Broadcast()
+			engine.mu.Unlock()
+		case <-done:
+		}
+	}()
+
 	engine.mu.Lock()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			engine.mu.Unlock()
+			return err
+		}
 		if engine.bgErr != nil {
 			engine.mu.Unlock()
 			return engine.bgErr
@@ -834,7 +894,7 @@ func (engine *dbEngine) Close() error {
 	// Trigger a final flush of the active memtable if it holds any data.
 	engine.mu.Lock()
 	if engine.memtable.Size() > 0 && engine.bgErr == nil {
-		for len(engine.immMemtables) >= engine.opts.MaxImmMemtables {
+		for len(engine.immMemtables) >= engine.opts.MaxImmMemtables && engine.opts.MaxImmMemtables > 0 {
 			engine.flushCond.Wait()
 		}
 

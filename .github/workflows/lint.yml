@@ -19,6 +19,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+      - name: Generate Protobuf Code
+        run: buf generate
+        working-directory: proto
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
