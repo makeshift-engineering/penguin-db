@@ -22,5 +22,25 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Install Buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+      - name: Generate Protobuf Code
+        run: buf generate
+        working-directory: proto
+
       - name: Run tests
-        run: go test -v -race -count=1 ./...
+        run: go test -v -race -count=1 ./... 2>&1 | tee test_output.txt
+
+      - name: List failed tests
+        if: failure()
+        run: |
+          echo "========================================="
+          echo "           FAILED TEST CASES             "
+          echo "========================================="
+          if [ -f test_output.txt ]; then
+            grep -E "--- FAIL:" test_output.txt || echo "No failed tests found in output (check compilation or panic errors)."
+          else
+            echo "test_output.txt not found."
+          fi
+          echo "========================================="

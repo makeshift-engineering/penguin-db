@@ -21,9 +21,16 @@ profile.cov
 go.work
 go.work.sum
 
+# generated files
+gen
+
 # env file
 .env
 
 # Editor/IDE
 .idea/
 .vscode/
+
+# Local databases and temporary data folders
+data/
+test_data/
