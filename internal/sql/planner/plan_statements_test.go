@@ -5,6 +5,7 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 func colDef(name string, kind ast.DataTypeKind, constraints ...ast.Clause) *ast.ColumnDef {
@@ -439,4 +440,250 @@ func TestFixtureSanityCheck(t *testing.T) {
 		t.Fatalf("expected shop.users PK [id], got %v", meta.PrimaryKey)
 	}
 	_ = catalog.NewEmptyCatalog() // keep the catalog import honest if fixtures change
+}
+
+func valuesRow(exprs ...ast.Expression) []*ast.SelectExpression {
+	row := make([]*ast.SelectExpression, len(exprs))
+	for i, e := range exprs {
+		row[i] = &ast.SelectExpression{Expr: e}
+	}
+	return row
+}
+
+func TestPlanInsert_ExplicitColumns_Success(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table:   ident("users"),
+		Columns: []string{"id", "name"},
+		Rows:    [][]*ast.SelectExpression{valuesRow(intLit("1"), strLit("Ada"))},
+	}
+	plan, err := pc.planInsert(stmt)
+	if err != nil {
+		t.Fatalf("planInsert: %v", err)
+	}
+	p := plan.(*InsertPlan)
+	if len(p.Columns) != 2 || len(p.Rows) != 1 || len(p.Rows[0]) != 2 {
+		t.Fatalf("unexpected plan: %+v", p)
+	}
+}
+
+func TestPlanInsert_NoColumnList_DefaultsToAllActiveColumns(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table: ident("users"),
+		Rows:  [][]*ast.SelectExpression{valuesRow(intLit("1"), strLit("Ada"))},
+	}
+	plan, err := pc.planInsert(stmt)
+	if err != nil {
+		t.Fatalf("planInsert: %v", err)
+	}
+	p := plan.(*InsertPlan)
+	if len(p.Columns) != 2 || p.Columns[0].Name != "id" || p.Columns[1].Name != "name" {
+		t.Errorf("expected default columns [id, name], got %+v", p.Columns)
+	}
+}
+
+func TestPlanInsert_MultipleRows(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table:   ident("users"),
+		Columns: []string{"id", "name"},
+		Rows: [][]*ast.SelectExpression{
+			valuesRow(intLit("1"), strLit("Ada")),
+			valuesRow(intLit("2"), strLit("Grace")),
+		},
+	}
+	plan, err := pc.planInsert(stmt)
+	if err != nil {
+		t.Fatalf("planInsert: %v", err)
+	}
+	if len(plan.(*InsertPlan).Rows) != 2 {
+		t.Errorf("expected 2 rows, got %d", len(plan.(*InsertPlan).Rows))
+	}
+}
+
+func TestPlanInsert_UnknownColumn_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table:   ident("users"),
+		Columns: []string{"nope"},
+		Rows:    [][]*ast.SelectExpression{valuesRow(intLit("1"))},
+	}
+	_, err := pc.planInsert(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeUnknownInsertColumn {
+		t.Errorf("expected CodeUnknownInsertColumn, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanInsert_DuplicateColumn_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table:   ident("users"),
+		Columns: []string{"id", "id"},
+		Rows:    [][]*ast.SelectExpression{valuesRow(intLit("1"), intLit("2"))},
+	}
+	_, err := pc.planInsert(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeDuplicateInsertColumn {
+		t.Errorf("expected CodeDuplicateInsertColumn, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanInsert_ColumnCountMismatch_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table:   ident("users"),
+		Columns: []string{"id", "name"},
+		Rows:    [][]*ast.SelectExpression{valuesRow(intLit("1"))},
+	}
+	_, err := pc.planInsert(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeColumnCountMismatch {
+		t.Errorf("expected CodeColumnCountMismatch, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanInsert_TypeMismatch_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.InsertStmt{
+		Table:   ident("users"),
+		Columns: []string{"id", "name"},
+		Rows:    [][]*ast.SelectExpression{valuesRow(strLit("not-an-id"), strLit("Ada"))},
+	}
+	_, err := pc.planInsert(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeTypeMismatch {
+		t.Errorf("expected CodeTypeMismatch, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanInsert_FromSelect_Success(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	// orders is (id INT, user_id INT NOT NULL) -- both target columns are
+	// INT, so a SELECT producing two INT columns lines up cleanly without
+	// needing a third fixture table.
+	source := &ast.SelectStmt{
+		Columns: []*ast.SelectColumn{exprCol(qualifiedIdent("o", "id"), ""), exprCol(qualifiedIdent("o", "user_id"), "")},
+		From:    []*ast.TableRef{tableRef(primary(ident("orders"), "o"))},
+	}
+	stmt := &ast.InsertStmt{Table: ident("orders"), Columns: []string{"id", "user_id"}, Source: source}
+	_, err := pc.planInsert(stmt)
+	if err != nil {
+		t.Fatalf("planInsert: %v", err)
+	}
+}
+
+func TestPlanInsert_FromSelect_ColumnCountMismatch_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	source := &ast.SelectStmt{
+		Columns: []*ast.SelectColumn{exprCol(qualifiedIdent("o", "id"), "")},
+		From:    []*ast.TableRef{tableRef(primary(ident("orders"), "o"))},
+	}
+	stmt := &ast.InsertStmt{Table: ident("users"), Columns: []string{"id", "name"}, Source: source}
+	_, err := pc.planInsert(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeColumnCountMismatch {
+		t.Errorf("expected CodeColumnCountMismatch, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanInsert_FromSelect_TypeMismatch_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	source := &ast.SelectStmt{
+		Columns: []*ast.SelectColumn{exprCol(qualifiedIdent("o", "id"), ""), exprCol(qualifiedIdent("o", "id"), "")},
+		From:    []*ast.TableRef{tableRef(primary(ident("orders"), "o"))},
+	}
+	// users is (id INT, name VARCHAR); source produces (INT, INT) -- second
+	// column mismatches name's VARCHAR type.
+	stmt := &ast.InsertStmt{Table: ident("users"), Columns: []string{"id", "name"}, Source: source}
+	_, err := pc.planInsert(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeTypeMismatch {
+		t.Errorf("expected CodeTypeMismatch, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanUpdate_Success(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.UpdateStmt{
+		Table: ident("users"),
+		Set:   []*ast.SetItem{{Column: ident("name"), Value: strLit("New Name")}},
+		Where: &ast.WhereClause{Cond: &ast.ComparisonPredicate{Left: ident("id"), Op: utils.TOKEN_EQ, Right: intLit("1")}},
+	}
+	plan, err := pc.planUpdate(stmt)
+	if err != nil {
+		t.Fatalf("planUpdate: %v", err)
+	}
+	p := plan.(*UpdatePlan)
+	if len(p.Assignments) != 1 || p.Where == nil {
+		t.Errorf("unexpected plan: %+v", p)
+	}
+}
+
+func TestPlanUpdate_NoWhere_UpdatesEveryRow(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.UpdateStmt{
+		Table: ident("users"),
+		Set:   []*ast.SetItem{{Column: ident("name"), Value: strLit("Everyone")}},
+	}
+	plan, err := pc.planUpdate(stmt)
+	if err != nil {
+		t.Fatalf("planUpdate: %v", err)
+	}
+	if plan.(*UpdatePlan).Where != nil {
+		t.Error("expected nil Where with no WHERE clause")
+	}
+}
+
+func TestPlanUpdate_UnknownColumn_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.UpdateStmt{
+		Table: ident("users"),
+		Set:   []*ast.SetItem{{Column: ident("nope"), Value: strLit("x")}},
+	}
+	_, err := pc.planUpdate(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeUnknownColumn {
+		t.Errorf("expected CodeUnknownColumn, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanUpdate_TypeMismatch_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.UpdateStmt{
+		Table: ident("users"),
+		Set:   []*ast.SetItem{{Column: ident("id"), Value: strLit("not-a-number")}},
+	}
+	_, err := pc.planUpdate(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeTypeMismatch {
+		t.Errorf("expected CodeTypeMismatch, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanDelete_Success(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.DeleteStmt{
+		Table: ident("users"),
+		Where: &ast.WhereClause{Cond: &ast.ComparisonPredicate{Left: ident("id"), Op: utils.TOKEN_EQ, Right: intLit("1")}},
+	}
+	plan, err := pc.planDelete(stmt)
+	if err != nil {
+		t.Fatalf("planDelete: %v", err)
+	}
+	if plan.(*DeletePlan).Where == nil {
+		t.Error("expected a non-nil Where")
+	}
+}
+
+func TestPlanDelete_NoWhere_DeletesEveryRow(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	plan, err := pc.planDelete(&ast.DeleteStmt{Table: ident("users")})
+	if err != nil {
+		t.Fatalf("planDelete: %v", err)
+	}
+	if plan.(*DeletePlan).Where != nil {
+		t.Error("expected nil Where with no WHERE clause")
+	}
+}
+
+func TestPlanDelete_UnknownTable_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	_, err := pc.planDelete(&ast.DeleteStmt{Table: ident("nope")})
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeUnknownTable {
+		t.Errorf("expected CodeUnknownTable, got err=%v diag=%+v", err, pc.diag)
+	}
 }

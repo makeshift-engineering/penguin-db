@@ -2,6 +2,7 @@ package planner
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -22,6 +23,12 @@ type ResolvedColumn struct {
 	Nullable   bool
 }
 
+// String returns a fully qualified "db.table.column" representation for
+// debugging and logging.
+func (c *ResolvedColumn) String() string {
+	return fmt.Sprintf("%s.%s.%s", c.Database, c.Table, c.Name)
+}
+
 // ResolvedTable snapshots a table's catalog schema at plan time, plus the
 // binding name (alias, or the table name itself) it is addressed by within
 // a single query's scope.
@@ -35,6 +42,23 @@ type ResolvedTable struct {
 	byName  map[string]*ResolvedColumn
 }
 
+// resolvedColumnFrom builds a ResolvedColumn for a single column at a known
+// index within meta. Factored out of newResolvedTable so any code that
+// needs a ResolvedColumn without going through a full Scope — INSERT's
+// column-list resolution, in particular — can build one the same way
+// instead of duplicating the field mapping.
+func resolvedColumnFrom(meta *catalog.TableMeta, col catalog.ColumnMeta, index int) *ResolvedColumn {
+	return &ResolvedColumn{
+		Database:   meta.Database,
+		Table:      meta.Name,
+		Name:       col.Name,
+		Index:      index,
+		Type:       col.Type,
+		VarcharLen: col.VarcharLen,
+		Nullable:   !col.NotNull,
+	}
+}
+
 // newResolvedTable builds a ResolvedTable from a catalog schema, computing
 // the column index and name lookup once so later lookups are O(1).
 func newResolvedTable(meta *catalog.TableMeta, binding string) *ResolvedTable {
@@ -43,15 +67,7 @@ func newResolvedTable(meta *catalog.TableMeta, binding string) *ResolvedTable {
 	byName := make(map[string]*ResolvedColumn, len(active))
 
 	for i, col := range active {
-		rc := &ResolvedColumn{
-			Database:   meta.Database,
-			Table:      meta.Name,
-			Name:       col.Name,
-			Index:      i,
-			Type:       col.Type,
-			VarcharLen: col.VarcharLen,
-			Nullable:   !col.NotNull,
-		}
+		rc := resolvedColumnFrom(meta, col, i)
 		columns[i] = rc
 		byName[col.Name] = rc
 	}
@@ -95,7 +111,7 @@ func newScope() *Scope {
 }
 
 // addTable registers a resolved table under its binding name. It returns
-// ErrDuplicateTableBinding if that name is already taken in this scope,
+// ErrDuplicateTableBinding if that name is already taken in this scope —
 // e.g. two unaliased references to the same table, or two tables sharing
 // an alias.
 func (s *Scope) addTable(rt *ResolvedTable) error {
@@ -131,8 +147,8 @@ func (pc *planContext) resolveDatabaseName(qualifier string, span ast.Node) (str
 	)
 }
 
-// resolveTableIdentifier resolves a table-position identifier, as used in
-// FROM, INSERT/UPDATE/DELETE targets, and CREATE/ALTER/DROP TABLE, against
+// resolveTableIdentifier resolves a table-position identifier — as used in
+// FROM, INSERT/UPDATE/DELETE targets, and CREATE/ALTER/DROP TABLE — against
 // the catalog. id.Qualifier, when present, names the database; when absent,
 // the session's active database is used.
 func (pc *planContext) resolveTableIdentifier(id *ast.Identifier) (*catalog.TableMeta, string, error) {
@@ -155,67 +171,9 @@ func (pc *planContext) resolveTableIdentifier(id *ast.Identifier) (*catalog.Tabl
 	return meta, db, nil
 }
 
-// buildScope resolves every table reference in a FROM clause and returns
-// the Scope used to resolve column identifiers against them. Resolution
-// errors are recorded as diagnostics on pc; buildScope keeps walking the
-// remaining references so a query with several unrelated FROM-clause
-// mistakes reports all of them in one pass rather than just the first.
-func (pc *planContext) buildScope(refs []*ast.TableRef) *Scope {
-	scope := newScope()
-	for _, ref := range refs {
-		pc.walkTableRef(ref, scope)
-	}
-	return scope
-}
-
-// walkTableRef registers every table reachable from a single FROM-clause
-// entry: the base table (possibly nested inside parentheses) followed by
-// each of its joins, left to right.
-func (pc *planContext) walkTableRef(ref *ast.TableRef, scope *Scope) {
-	if ref.Paren != nil {
-		pc.walkTableRef(ref.Paren, scope)
-	} else {
-		pc.addTablePrimary(ref.Primary, scope)
-	}
-
-	for _, join := range ref.Joins {
-		switch join.Type {
-		case ast.JoinLeft, ast.JoinRight, ast.JoinFull:
-			_ = pc.errorf(
-				join.Span(), CodeUnsupportedJoinType,
-				"join type not supported yet: only INNER and CROSS JOIN are implemented",
-			)
-			continue
-		}
-		pc.addTablePrimary(join.Right, scope)
-	}
-}
-
-// addTablePrimary resolves a single named table and registers it in scope
-// under its alias, or its own name when no alias was given.
-func (pc *planContext) addTablePrimary(primary *ast.TablePrimary, scope *Scope) {
-	meta, _, err := pc.resolveTableIdentifier(primary.Name)
-	if err != nil {
-		return // already recorded as a diagnostic
-	}
-
-	binding := primary.Alias
-	if binding == "" {
-		binding = primary.Name.Name
-	}
-
-	rt := newResolvedTable(meta, binding)
-	if err := scope.addTable(rt); err != nil {
-		_ = pc.errorf(
-			primary.Span(), CodeDuplicateTableBinding,
-			"table or alias %q is already used in this FROM clause", binding,
-		)
-	}
-}
-
 // resolveColumn resolves a column-position identifier against scope. The
 // grammar's QualifiedIdentifier is at most two parts (Identifier ['.'
-// Identifier]), so a column reference's qualifier, when present, always
+// Identifier]), so a column reference's qualifier — when present — always
 // names a table or alias in scope, never a database; database-qualified
 // names only occur in table position (see resolveTableIdentifier).
 func (pc *planContext) resolveColumn(scope *Scope, id *ast.Identifier) (*ResolvedColumn, error) {
