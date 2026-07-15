@@ -164,4 +164,3 @@ type DeletePlan struct {
 	Schema   *catalog.TableMeta
 	Where    ResolvedCond
 }
-
