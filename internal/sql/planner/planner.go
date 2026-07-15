@@ -66,7 +66,6 @@ func newPlanContext(cat *catalog.Catalog, session Session, src *diagnostic.Sourc
 }
 
 // planStatement dispatches to the planning method for stmt's concrete type.
-// Only DDL is implemented so far; DML and SELECT arrive in later phases.
 func (pc *planContext) planStatement(stmt ast.Statement) (Plan, error) {
 	switch s := stmt.(type) {
 	case *ast.CreateDatabaseStmt:
@@ -81,6 +80,14 @@ func (pc *planContext) planStatement(stmt ast.Statement) (Plan, error) {
 		return pc.planAlterTable(s)
 	case *ast.DropTableStmt:
 		return pc.planDropTable(s)
+	case *ast.SelectStmt:
+		return pc.planSelect(s)
+	case *ast.InsertStmt:
+		return pc.planInsert(s)
+	case *ast.UpdateStmt:
+		return pc.planUpdate(s)
+	case *ast.DeleteStmt:
+		return pc.planDelete(s)
 	default:
 		return nil, fmt.Errorf("planner: statement type %T is not yet supported", stmt)
 	}

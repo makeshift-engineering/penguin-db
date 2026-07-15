@@ -357,3 +357,217 @@ func (pc *planContext) resolveDefaultValue(lit *ast.SignedLiteral, colType ast.D
 	}
 	return &text, nil
 }
+
+func (pc *planContext) planInsert(stmt *ast.InsertStmt) (Plan, error) {
+	meta, db, err := pc.resolveTableIdentifier(stmt.Table)
+	if err != nil {
+		return nil, err
+	}
+
+	targetCols, err := pc.resolveInsertColumns(meta, stmt.Columns, stmt.Table)
+	if err != nil {
+		return nil, err
+	}
+
+	plan := &InsertPlan{Database: db, Table: meta.Name, Schema: meta, Columns: targetCols}
+
+	if stmt.Source != nil {
+		source, err := pc.planSelect(stmt.Source)
+		if err != nil {
+			return nil, err
+		}
+		if len(source.Columns) != len(targetCols) {
+			return nil, pc.errorf(
+				stmt.Source.Span(), CodeColumnCountMismatch,
+				"INSERT has %d target columns but SELECT produces %d", len(targetCols), len(source.Columns),
+			)
+		}
+		for i, col := range targetCols {
+			if !typesCompatible(source.Columns[i].Type, col.Type) {
+				return nil, pc.errorf(
+					stmt.Source.Span(), CodeTypeMismatch,
+					"column %d: SELECT produces %s, target column %q is %s",
+					i+1, typeName(source.Columns[i].Type), col.Name, typeName(col.Type),
+				)
+			}
+		}
+		plan.Source = source
+		return plan, nil
+	}
+
+	rows := make([][]ResolvedExpr, 0, len(stmt.Rows))
+	var firstErr error
+	for _, row := range stmt.Rows {
+		if len(row) != len(targetCols) {
+			err := pc.errorf(
+				stmt.Table.Span(), CodeColumnCountMismatch,
+				"INSERT has %d target columns but a VALUES row has %d", len(targetCols), len(row),
+			)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+
+		resolvedRow := make([]ResolvedExpr, len(row))
+		rowOK := true
+		for i, val := range row {
+			expr, err := pc.resolveSelectExpression(newScope(), val)
+			if err != nil {
+				rowOK = false
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if !exprsCompatible(expr, &ResolvedColumnRef{Column: targetCols[i]}) {
+				err := pc.errorf(
+					val.Span(), CodeTypeMismatch,
+					"value type %s is not compatible with column %q (%s)",
+					exprTypeName(expr), targetCols[i].Name, typeName(targetCols[i].Type),
+				)
+				rowOK = false
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			resolvedRow[i] = expr
+		}
+		if rowOK {
+			rows = append(rows, resolvedRow)
+		}
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	plan.Rows = rows
+	return plan, nil
+}
+
+// resolveInsertColumns determines the ordered target column list for an
+// INSERT. An explicit column list is validated against the table's active
+// columns (existence, no duplicates); an absent one defaults to every
+// active column in declaration order, matching how INSERT INTO t VALUES
+// (...) with no column list is interpreted. names carries no positional
+// span of its own (ast.InsertStmt.Columns is a plain []string), so
+// diagnostics here point at the statement's table identifier — the closest
+// span the AST actually provides.
+func (pc *planContext) resolveInsertColumns(meta *catalog.TableMeta, names []string, tableID *ast.Identifier) ([]*ResolvedColumn, error) {
+	active := meta.ActiveColumns()
+
+	if len(names) == 0 {
+		cols := make([]*ResolvedColumn, len(active))
+		for i, c := range active {
+			cols[i] = resolvedColumnFrom(meta, c, i)
+		}
+		return cols, nil
+	}
+
+	indexByName := make(map[string]int, len(active))
+	for i, c := range active {
+		indexByName[c.Name] = i
+	}
+
+	cols := make([]*ResolvedColumn, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	var firstErr error
+	for _, name := range names {
+		if seen[name] {
+			err := pc.errorf(tableID.Span(), CodeDuplicateInsertColumn, "duplicate column %q in INSERT column list", name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		seen[name] = true
+
+		idx, ok := indexByName[name]
+		if !ok {
+			err := pc.errorf(tableID.Span(), CodeUnknownInsertColumn, "column %q does not exist on table %q", name, meta.Name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		cols = append(cols, resolvedColumnFrom(meta, active[idx], idx))
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return cols, nil
+}
+
+func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
+	meta, db, err := pc.resolveTableIdentifier(stmt.Table)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := newScope()
+	_ = scope.addTable(newResolvedTable(meta, stmt.Table.Name)) // fresh scope, one table: can't collide
+
+	assignments := make([]Assignment, 0, len(stmt.Set))
+	var firstErr error
+	for _, item := range stmt.Set {
+		col, err := pc.resolveColumn(scope, item.Column)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		value, err := pc.resolveExpr(scope, item.Value)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !exprsCompatible(value, &ResolvedColumnRef{Column: col}) {
+			err := pc.errorf(
+				item.Value.Span(), CodeTypeMismatch,
+				"value type %s is not compatible with column %q (%s)", exprTypeName(value), col.Name, typeName(col.Type),
+			)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		assignments = append(assignments, Assignment{Column: col, Value: value})
+	}
+
+	var where ResolvedCond
+	if stmt.Where != nil {
+		where, err = pc.resolveCond(scope, stmt.Where.Cond)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return &UpdatePlan{Database: db, Table: meta.Name, Schema: meta, Assignments: assignments, Where: where}, nil
+}
+
+func (pc *planContext) planDelete(stmt *ast.DeleteStmt) (Plan, error) {
+	meta, db, err := pc.resolveTableIdentifier(stmt.Table)
+	if err != nil {
+		return nil, err
+	}
+
+	var where ResolvedCond
+	if stmt.Where != nil {
+		scope := newScope()
+		_ = scope.addTable(newResolvedTable(meta, stmt.Table.Name))
+		where, err = pc.resolveCond(scope, stmt.Where.Cond)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &DeletePlan{Database: db, Table: meta.Name, Schema: meta, Where: where}, nil
+}

@@ -18,10 +18,10 @@ func (pc *planContext) resolveExpr(scope *Scope, expr ast.Expression) (ResolvedE
 	case *ast.FloatLiteral:
 		return pc.resolveFloatLiteral(e)
 	case *ast.StringLiteral:
-		return &ResolvedStringLiteral{ResolvedExprBase: ResolvedExprBase{Type: ast.TypeText}, Value: e.Value}, nil
+		return &ResolvedStringLiteral{ResolvedExprBase: newExprBase(ast.TypeText), Value: e.Value}, nil
 	case *ast.BooleanLiteral:
 		return &ResolvedBoolLiteral{
-			ResolvedExprBase: ResolvedExprBase{Type: ast.TypeBoolean},
+			ResolvedExprBase: newExprBase(ast.TypeBoolean),
 			Value:            strings.EqualFold(e.Value, "TRUE"),
 		}, nil
 	case *ast.NullLiteral:
@@ -71,7 +71,7 @@ func (pc *planContext) resolveIntLiteral(lit *ast.IntegerLiteral) (ResolvedExpr,
 	if v >= math.MinInt32 && v <= math.MaxInt32 {
 		t = ast.TypeInt
 	}
-	return &ResolvedIntLiteral{ResolvedExprBase: ResolvedExprBase{Type: t}, Value: v}, nil
+	return &ResolvedIntLiteral{ResolvedExprBase: newExprBase(t), Value: v}, nil
 }
 
 func (pc *planContext) resolveFloatLiteral(lit *ast.FloatLiteral) (ResolvedExpr, error) {
@@ -79,7 +79,7 @@ func (pc *planContext) resolveFloatLiteral(lit *ast.FloatLiteral) (ResolvedExpr,
 	if err != nil {
 		return nil, pc.errorf(lit.Span(), CodeLiteralOverflow, "float literal %q is invalid: %v", lit.Value, err)
 	}
-	return &ResolvedFloatLiteral{ResolvedExprBase: ResolvedExprBase{Type: ast.TypeDouble}, Value: v}, nil
+	return &ResolvedFloatLiteral{ResolvedExprBase: newExprBase(ast.TypeDouble), Value: v}, nil
 }
 
 func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (ResolvedExpr, error) {
@@ -99,7 +99,7 @@ func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (Reso
 			be.Op, exprTypeName(left), exprTypeName(right),
 		)
 	}
-	return &ResolvedBinaryExpr{ResolvedExprBase: ResolvedExprBase{Type: resultType}, Left: left, Op: be.Op, Right: right}, nil
+	return &ResolvedBinaryExpr{ResolvedExprBase: newExprBase(resultType), Left: left, Op: be.Op, Right: right}, nil
 }
 
 func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (ResolvedExpr, error) {
@@ -114,7 +114,7 @@ func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (Resolv
 			"unary %s requires a numeric operand, got %s", ue.Op, exprTypeName(operand),
 		)
 	}
-	return &ResolvedUnaryExpr{ResolvedExprBase: ResolvedExprBase{Type: resultType}, Op: ue.Op, Operand: operand}, nil
+	return &ResolvedUnaryExpr{ResolvedExprBase: newExprBase(resultType), Op: ue.Op, Operand: operand}, nil
 }
 
 func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (ResolvedExpr, error) {
@@ -128,7 +128,7 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 			return nil, pc.errorf(fc.Span(), CodeInvalidFunctionArgs, "%s(*) is not supported; only COUNT(*) is", name)
 		}
 		return &ResolvedFunctionCall{
-			ResolvedExprBase: ResolvedExprBase{Type: ast.TypeBigInt},
+			ResolvedExprBase: newExprBase(ast.TypeBigInt),
 			Name:             name,
 			Distinct:         fc.Distinct,
 			Star:             true,
@@ -156,7 +156,7 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 	}
 
 	return &ResolvedFunctionCall{
-		ResolvedExprBase: ResolvedExprBase{Type: resultType},
+		ResolvedExprBase: newExprBase(resultType),
 		Name:             name,
 		Distinct:         fc.Distinct,
 		Args:             []ResolvedExpr{arg},

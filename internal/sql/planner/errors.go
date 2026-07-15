@@ -126,6 +126,48 @@ const (
 	// CodeInvalidAlterAction is emitted for an ast.AlterActionKind
 	// planAlterSchema does not recognise.
 	CodeInvalidAlterAction diagnostic.Code = 3027
+
+	// CodeColumnCountMismatch is emitted when an INSERT VALUES row or
+	// INSERT ... SELECT source has a different number of columns than the
+	// INSERT's target column list.
+	CodeColumnCountMismatch diagnostic.Code = 3028
+
+	// CodeUnknownInsertColumn is emitted when an INSERT's explicit column
+	// list names a column that does not exist on the target table.
+	CodeUnknownInsertColumn diagnostic.Code = 3029
+
+	// CodeDuplicateInsertColumn is emitted when an INSERT's explicit
+	// column list repeats the same column name.
+	CodeDuplicateInsertColumn diagnostic.Code = 3030
+
+	// CodeAggregateInWhere is emitted when an aggregate function appears
+	// in a WHERE clause, where it is never legal (aggregation happens
+	// after filtering, not during).
+	CodeAggregateInWhere diagnostic.Code = 3031
+
+	// CodeMissingGroupBy is emitted when a SELECT list or HAVING clause
+	// references a column that is neither wrapped in an aggregate
+	// function nor listed in GROUP BY — including the case where an
+	// aggregate function forces a single implicit group with no GROUP BY
+	// clause at all, so no bare column reference can ever be legal.
+	CodeMissingGroupBy diagnostic.Code = 3032
+
+	// CodeAggregateWithoutFrom is emitted when an aggregate function or
+	// GROUP BY is used in a SELECT with no FROM clause.
+	CodeAggregateWithoutFrom diagnostic.Code = 3033
+
+	// CodeWhereWithoutFrom is emitted when a WHERE clause is used in a
+	// SELECT with no FROM clause.
+	CodeWhereWithoutFrom diagnostic.Code = 3034
+
+	// CodeEmptyStarExpansion is emitted when SELECT * (or table.*)
+	// expands to zero columns because the FROM clause has no tables in
+	// scope for it to expand against.
+	CodeEmptyStarExpansion diagnostic.Code = 3035
+
+	// CodeOrdinalOutOfRange is emitted when ORDER BY <n> names a position
+	// outside the SELECT list's column range.
+	CodeOrdinalOutOfRange diagnostic.Code = 3036
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding

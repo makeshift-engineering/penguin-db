@@ -32,6 +32,13 @@ type ResolvedExprBase struct {
 func (*ResolvedExprBase) resolvedExprNode()                {}
 func (b *ResolvedExprBase) ResolvedType() ast.DataTypeKind { return b.Type }
 
+// newExprBase is a shorthand for constructing a ResolvedExprBase with a
+// given type, reducing the verbose ResolvedExprBase{Type: t} pattern that
+// appears at every expression construction site.
+func newExprBase(t ast.DataTypeKind) ResolvedExprBase {
+	return ResolvedExprBase{Type: t}
+}
+
 // ResolvedIntLiteral is a resolved integer literal. Type is ast.TypeInt
 // when the value fits a 32-bit signed range, otherwise ast.TypeBigInt.
 type ResolvedIntLiteral struct {
