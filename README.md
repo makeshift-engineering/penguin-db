@@ -10,7 +10,7 @@ _Exposes operations over gRPC and supports prefix-range scans, write batching, a
 
 [![Go Tests](https://github.com/makeshift-engineering/penguin-db/actions/workflows/test.yml/badge.svg)](https://github.com/makeshift-engineering/penguin-db/actions/workflows/test.yml)
 [![Lint](https://github.com/makeshift-engineering/penguin-db/actions/workflows/lint.yml/badge.svg)](https://github.com/makeshift-engineering/penguin-db/actions/workflows/lint.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/makeshift-engineering/a9ad393a6f535c3e23df0f5a067766aa/raw/coverage-badge.json)](https://github.com/makeshift-engineering/penguin-db/actions/workflows/coverage-report.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/rahulc0dy/a9ad393a6f535c3e23df0f5a067766aa/raw/coverage-badge.json)](https://github.com/makeshift-engineering/penguin-db/actions/workflows/coverage-report.yml)
 [![CodeQL](https://github.com/makeshift-engineering/penguin-db/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/makeshift-engineering/penguin-db/actions/workflows/github-code-scanning/codeql)
 
 </div>
