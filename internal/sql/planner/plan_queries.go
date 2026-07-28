@@ -418,4 +418,3 @@ func (pc *planContext) resolveOrderByExpr(scope *Scope, items []ProjectItem, exp
 	}
 	return resolved, true, nil
 }
-
