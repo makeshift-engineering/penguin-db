@@ -129,8 +129,6 @@ func TestResolveExpr_ParenUnwraps(t *testing.T) {
 	}
 }
 
-// --- arithmetic promotion -----------------------------------------------
-
 func TestResolveExpr_BinaryExpr_IntPlusInt(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{}, nil)
 	got, err := pc.resolveExpr(newScope(), &ast.BinaryExpr{Left: intLit("1"), Op: utils.TOKEN_PLUS, Right: intLit("2")})
@@ -183,6 +181,21 @@ func TestResolveExpr_UnaryExpr_Numeric(t *testing.T) {
 	}
 }
 
+func TestResolveExpr_UnaryExpr_MinBigInt(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	got, err := pc.resolveExpr(newScope(), &ast.UnaryExpr{
+		Op:      utils.TOKEN_MINUS,
+		Operand: intLit("9223372036854775808"),
+	})
+	if err != nil {
+		t.Fatalf("resolveExpr: %v", err)
+	}
+	lit := got.(*ResolvedIntLiteral)
+	if lit.Value != -9223372036854775807-1 || lit.Type != ast.TypeBigInt {
+		t.Errorf("expected {MinInt64, TypeBigInt}, got %+v", lit)
+	}
+}
+
 func TestResolveExpr_UnaryExpr_NonNumeric_Errors(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{}, nil)
 	_, err := pc.resolveExpr(newScope(), &ast.UnaryExpr{Op: utils.TOKEN_MINUS, Operand: strLit("a")})
@@ -190,8 +203,6 @@ func TestResolveExpr_UnaryExpr_NonNumeric_Errors(t *testing.T) {
 		t.Errorf("expected CodeNonNumericOperand, got err=%v diag=%+v", err, pc.diag)
 	}
 }
-
-// --- function calls -------------------------------------------------
 
 func TestResolveExpr_CountStar(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{}, nil)
