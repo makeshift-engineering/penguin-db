@@ -460,3 +460,52 @@ func TestPlanSelect_FullPipelineOrdering(t *testing.T) {
 		t.Fatalf("expected *ProjectNode under DISTINCT, got %T", distinct.Input)
 	}
 }
+
+// --- ORDER BY aggregate validation ----------------------------------------
+
+func TestPlanSelect_OrderByNonGroupedColumn_InAggregate_Errors(t *testing.T) {
+	// SELECT COUNT(*) FROM users ORDER BY users.name — name is not in GROUP BY
+	// and is not an aggregate; this must be rejected.
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.SelectStmt{
+		Columns: []*ast.SelectColumn{exprCol(&ast.FunctionCall{Name: "COUNT", Star: true}, "cnt")},
+		From:    fromUsers("u"),
+		OrderBy: &ast.OrderByClause{Items: []*ast.OrderByItem{{Expr: qualifiedIdent("u", "name"), Direction: ast.OrderAsc}}},
+	}
+	_, err := pc.planSelect(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeMissingGroupBy {
+		t.Errorf("expected CodeMissingGroupBy, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanSelect_OrderByGroupedColumn_InAggregate_Succeeds(t *testing.T) {
+	// SELECT user_id, COUNT(*) FROM orders GROUP BY user_id ORDER BY user_id
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.SelectStmt{
+		Columns: []*ast.SelectColumn{
+			exprCol(qualifiedIdent("o", "user_id"), ""),
+			exprCol(&ast.FunctionCall{Name: "COUNT", Star: true}, "cnt"),
+		},
+		From:    []*ast.TableRef{tableRef(primary(ident("orders"), "o"))},
+		GroupBy: &ast.GroupByClause{Columns: []*ast.Identifier{qualifiedIdent("o", "user_id")}},
+		OrderBy: &ast.OrderByClause{Items: []*ast.OrderByItem{{Expr: qualifiedIdent("o", "user_id"), Direction: ast.OrderAsc}}},
+	}
+	_, err := pc.planSelect(stmt)
+	if err != nil {
+		t.Fatalf("expected ORDER BY a GROUP BY key to succeed, got %v", err)
+	}
+}
+
+func TestPlanSelect_OrderByAlias_InAggregate_Succeeds(t *testing.T) {
+	// SELECT COUNT(*) AS cnt FROM users ORDER BY cnt — alias bypasses scope validation.
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.SelectStmt{
+		Columns: []*ast.SelectColumn{exprCol(&ast.FunctionCall{Name: "COUNT", Star: true}, "cnt")},
+		From:    fromUsers("u"),
+		OrderBy: &ast.OrderByClause{Items: []*ast.OrderByItem{{Expr: ident("cnt"), Direction: ast.OrderAsc}}},
+	}
+	_, err := pc.planSelect(stmt)
+	if err != nil {
+		t.Fatalf("expected ORDER BY alias to succeed in aggregate query, got %v", err)
+	}
+}

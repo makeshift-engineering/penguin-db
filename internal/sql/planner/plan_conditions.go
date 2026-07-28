@@ -1,6 +1,9 @@
 package planner
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+import (
+	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
+)
 
 // resolveCond resolves an ast.Condition against scope, producing a fully
 // resolved ResolvedCond. Resolution errors are recorded as diagnostics on
@@ -55,13 +58,32 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 	if err != nil {
 		return nil, err
 	}
-	if !exprsCompatible(left, right) {
+	if isOrderingOp(cp.Op) {
+		if !isNullExpr(left) && !isNullExpr(right) && !typesOrderable(left.ResolvedType(), right.ResolvedType()) {
+			if typesCompatible(left.ResolvedType(), right.ResolvedType()) {
+				return nil, pc.errorf(
+					cp.Span(), CodeNonOrderableType,
+					"operator %s is not supported for %s", cp.Op, exprTypeName(left),
+				)
+			}
+			return nil, pc.errorf(
+				cp.Span(), CodeTypeMismatch,
+				"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
+			)
+		}
+	} else if !exprsCompatible(left, right) {
 		return nil, pc.errorf(
 			cp.Span(), CodeTypeMismatch,
 			"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
 		)
 	}
 	return &ResolvedComparison{Left: left, Op: cp.Op, Right: right}, nil
+}
+
+// isOrderingOp reports whether op is a strict ordering operator that
+// requires orderable operands, as opposed to an equality operator.
+func isOrderingOp(op utils.TokenType) bool {
+	return op == utils.TOKEN_LT || op == utils.TOKEN_GT || op == utils.TOKEN_LTE || op == utils.TOKEN_GTE
 }
 
 func (pc *planContext) resolveLike(scope *Scope, lp *ast.LikePredicate) (ResolvedCond, error) {
@@ -140,13 +162,26 @@ func (pc *planContext) resolveBetween(scope *Scope, bp *ast.BetweenPredicate) (R
 	}
 
 	var firstErr error
-	if !exprsCompatible(expr, low) {
-		firstErr = pc.errorf(bp.Low.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(low))
+	if !isNullExpr(expr) && !isNullExpr(low) {
+		if !typesOrderable(expr.ResolvedType(), low.ResolvedType()) {
+			if typesCompatible(expr.ResolvedType(), low.ResolvedType()) {
+				firstErr = pc.errorf(bp.Low.Span(), CodeNonOrderableType, "BETWEEN is not supported for %s", exprTypeName(expr))
+			} else {
+				firstErr = pc.errorf(bp.Low.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(low))
+			}
+		}
 	}
-	if !exprsCompatible(expr, high) {
-		err := pc.errorf(bp.High.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(high))
-		if firstErr == nil {
-			firstErr = err
+	if !isNullExpr(expr) && !isNullExpr(high) {
+		if !typesOrderable(expr.ResolvedType(), high.ResolvedType()) {
+			var err error
+			if typesCompatible(expr.ResolvedType(), high.ResolvedType()) {
+				err = pc.errorf(bp.High.Span(), CodeNonOrderableType, "BETWEEN is not supported for %s", exprTypeName(expr))
+			} else {
+				err = pc.errorf(bp.High.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(high))
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	if firstErr != nil {

@@ -50,11 +50,27 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 
 	isAggregate := stmt.GroupBy != nil || anyItemHasAggregate(items) || condHasAggregate(havingCond)
 
+	// Resolve GROUP BY keys early so they're available to both
+	// buildAggregatePlan (SELECT list / HAVING validation) and
+	// buildSortPlan (ORDER BY validation for aggregate queries).
+	var groupExprs []ResolvedExpr
+	var groupCols []*ResolvedColumn
+	if stmt.GroupBy != nil {
+		for _, id := range stmt.GroupBy.Columns {
+			col, err := pc.resolveColumn(scope, id)
+			if err != nil {
+				return nil, err
+			}
+			groupExprs = append(groupExprs, &ResolvedColumnRef{Column: col})
+			groupCols = append(groupCols, col)
+		}
+	}
+
 	switch {
 	case isAggregate && root == nil:
 		return nil, pc.errorf(stmt.Span(), CodeAggregateWithoutFrom, "aggregate queries require a FROM clause")
 	case isAggregate:
-		root, err = pc.buildAggregatePlan(root, scope, stmt, items, havingCond, havingSpan)
+		root, err = pc.buildAggregatePlan(root, groupExprs, groupCols, items, havingCond, havingSpan)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +85,7 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 	}
 
 	if stmt.OrderBy != nil {
-		root, err = pc.buildSortPlan(root, scope, items, stmt.OrderBy)
+		root, err = pc.buildSortPlan(root, scope, items, stmt.OrderBy, isAggregate, groupCols)
 		if err != nil {
 			return nil, err
 		}
@@ -309,27 +325,14 @@ func outputColumns(items []ProjectItem) []OutputColumn {
 	return cols
 }
 
-// buildAggregatePlan resolves GROUP BY's key list, validates that every
-// SELECT-list item and the HAVING condition (if any) are legal under that
-// grouping (see aggregate.go), and wraps root in an AggregateNode and, if
-// HAVING was present, a FilterNode on top of it.
+// buildAggregatePlan validates that every SELECT-list item and the HAVING
+// condition (if any) are legal under the resolved grouping (see
+// aggregate.go), and wraps root in an AggregateNode and, if HAVING was
+// present, a FilterNode on top of it. groupExprs and groupCols are
+// resolved by planSelect before this call so buildSortPlan can share them.
 func (pc *planContext) buildAggregatePlan(
-	root RelNode, scope *Scope, stmt *ast.SelectStmt, items []ProjectItem, having ResolvedCond, havingSpan diagnostic.Span,
+	root RelNode, groupExprs []ResolvedExpr, groupCols []*ResolvedColumn, items []ProjectItem, having ResolvedCond, havingSpan diagnostic.Span,
 ) (RelNode, error) {
-	var groupExprs []ResolvedExpr
-	var groupCols []*ResolvedColumn
-
-	if stmt.GroupBy != nil {
-		for _, id := range stmt.GroupBy.Columns {
-			col, err := pc.resolveColumn(scope, id)
-			if err != nil {
-				return nil, err
-			}
-			groupExprs = append(groupExprs, &ResolvedColumnRef{Column: col})
-			groupCols = append(groupCols, col)
-		}
-	}
-
 	for _, item := range items {
 		if err := pc.validateGroupedExpr(item.Expr, groupCols, item.Span); err != nil {
 			return nil, err
@@ -348,18 +351,28 @@ func (pc *planContext) buildAggregatePlan(
 	return result, nil
 }
 
-// buildSortPlan resolves an ORDER BY clause.
-func (pc *planContext) buildSortPlan(root RelNode, scope *Scope, items []ProjectItem, ob *ast.OrderByClause) (RelNode, error) {
+// buildSortPlan resolves an ORDER BY clause. When isAggregate is true, any
+// expression resolved via the scope fallback (i.e. not an ordinal or alias)
+// is validated against the GROUP BY keys through validateGroupedExpr.
+func (pc *planContext) buildSortPlan(root RelNode, scope *Scope, items []ProjectItem, ob *ast.OrderByClause, isAggregate bool, groupKeys []*ResolvedColumn) (RelNode, error) {
 	sortItems := make([]SortItem, 0, len(ob.Items))
 	var firstErr error
 
 	for _, item := range ob.Items {
-		expr, err := pc.resolveOrderByExpr(scope, items, item.Expr)
+		expr, fromScope, err := pc.resolveOrderByExpr(scope, items, item.Expr)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
+		}
+		if isAggregate && fromScope {
+			if err := pc.validateGroupedExpr(expr, groupKeys, item.Expr.Span()); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
 		}
 		sortItems = append(sortItems, SortItem{Expr: expr, Direction: item.Direction})
 	}
@@ -376,18 +389,16 @@ func (pc *planContext) buildSortPlan(root RelNode, scope *Scope, items []Project
 // normal expression resolved against scope (ORDER BY some_column) — the
 // three common ORDER BY forms.
 //
-// Known gap: for an aggregate query, the scope fallback lets ORDER BY
-// resolve any column in the original FROM tables, not just GROUP BY keys
-// and aggregate results — unlike the SELECT list and HAVING, this path
-// isn't run through validateGroupedExpr. Adding that is possible but was
-// left out here to keep this phase's scope bounded.
-func (pc *planContext) resolveOrderByExpr(scope *Scope, items []ProjectItem, expr ast.Expression) (ResolvedExpr, error) {
+// The returned fromScope flag is true when the expression was resolved via
+// the scope fallback (the third path). In an aggregate query, such
+// expressions must be validated against the GROUP BY keys.
+func (pc *planContext) resolveOrderByExpr(scope *Scope, items []ProjectItem, expr ast.Expression) (ResolvedExpr, bool, error) {
 	if lit, ok := expr.(*ast.IntegerLiteral); ok {
 		n, convErr := strconv.Atoi(lit.Value)
 		if convErr == nil && n >= 1 && n <= len(items) {
-			return items[n-1].Expr, nil
+			return items[n-1].Expr, false, nil
 		}
-		return nil, pc.errorf(
+		return nil, false, pc.errorf(
 			lit.Span(), CodeOrdinalOutOfRange,
 			"ORDER BY position %s is out of range (SELECT list has %d columns)", lit.Value, len(items),
 		)
@@ -396,10 +407,15 @@ func (pc *planContext) resolveOrderByExpr(scope *Scope, items []ProjectItem, exp
 	if id, ok := expr.(*ast.Identifier); ok && id.Qualifier == "" {
 		for _, item := range items {
 			if item.Alias != "" && item.Alias == id.Name {
-				return item.Expr, nil
+				return item.Expr, false, nil
 			}
 		}
 	}
 
-	return pc.resolveExpr(scope, expr)
+	resolved, err := pc.resolveExpr(scope, expr)
+	if err != nil {
+		return nil, false, err
+	}
+	return resolved, true, nil
 }
+

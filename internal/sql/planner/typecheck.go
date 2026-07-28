@@ -80,6 +80,20 @@ func typesCompatible(a, b ast.DataTypeKind) bool {
 	return a == b
 }
 
+// isOrderableType reports whether t supports ordering operators (<, <=, >,
+// >=, BETWEEN). BOOLEAN is the only type that supports equality but not
+// ordering.
+func isOrderableType(t ast.DataTypeKind) bool {
+	return t != ast.TypeBoolean
+}
+
+// typesOrderable reports whether two types may appear on either side of an
+// ordering operator (<, <=, >, >=) or BETWEEN. The types must be
+// compatible AND both must be orderable — BOOLEAN is excluded.
+func typesOrderable(a, b ast.DataTypeKind) bool {
+	return typesCompatible(a, b) && isOrderableType(a) && isOrderableType(b)
+}
+
 // exprsCompatible is typesCompatible for two resolved expressions, treating
 // NULL as compatible with anything.
 func exprsCompatible(a, b ResolvedExpr) bool {
@@ -165,6 +179,9 @@ func aggregateResultType(name string, argType ast.DataTypeKind) (result ast.Data
 		}
 		return ast.TypeDouble, true
 	case "MIN", "MAX":
+		if !isOrderableType(argType) {
+			return 0, false
+		}
 		return argType, true // any orderable type passes through unchanged
 	default:
 		return 0, false

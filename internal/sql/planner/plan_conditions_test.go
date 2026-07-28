@@ -160,3 +160,35 @@ func TestResolveCond_ExprCond_NonBoolean_Errors(t *testing.T) {
 		t.Errorf("expected CodeNonBooleanCondition, got err=%v diag=%+v", err, pc.diag)
 	}
 }
+
+func TestResolveCond_BoolLessThan_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveCond(newScope(), cmp(boolLit("TRUE"), utils.TOKEN_LT, boolLit("FALSE")))
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeNonOrderableType {
+		t.Errorf("expected CodeNonOrderableType, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestResolveCond_BoolEquals_Succeeds(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveCond(newScope(), cmp(boolLit("TRUE"), utils.TOKEN_EQ, boolLit("FALSE")))
+	if err != nil {
+		t.Fatalf("expected BOOLEAN = BOOLEAN to succeed, got %v", err)
+	}
+}
+
+func TestResolveCond_BoolGreaterThanOrEqual_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveCond(newScope(), cmp(boolLit("TRUE"), utils.TOKEN_GTE, boolLit("FALSE")))
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeNonOrderableType {
+		t.Errorf("expected CodeNonOrderableType, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestResolveCond_Between_BoolOperand_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveCond(newScope(), &ast.BetweenPredicate{Expr: boolLit("TRUE"), Low: boolLit("FALSE"), High: boolLit("TRUE")})
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeNonOrderableType {
+		t.Errorf("expected CodeNonOrderableType, got err=%v diag=%+v", err, pc.diag)
+	}
+}

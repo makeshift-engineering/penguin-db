@@ -114,7 +114,7 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 
 	switch action.Kind {
 	case ast.AlterAdd:
-		col, err := pc.buildColumnMeta(action.Column)
+		col, err := pc.buildColumnMeta(oldMeta.Database, action.Column)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +137,7 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 		if existing == nil {
 			return nil, pc.errorf(action.Column.Span(), CodeColumnNotFound, "column %q does not exist", action.Column.Name)
 		}
-		col, err := pc.buildColumnMeta(action.Column)
+		col, err := pc.buildColumnMeta(oldMeta.Database, action.Column)
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +220,7 @@ func (pc *planContext) buildTableMeta(db, table string, defs []*ast.ColumnDef) (
 		}
 		seen[def.Name] = true
 
-		col, err := pc.buildColumnMeta(def)
+		col, err := pc.buildColumnMeta(db, def)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -243,8 +243,9 @@ func (pc *planContext) buildTableMeta(db, table string, defs []*ast.ColumnDef) (
 }
 
 // buildColumnMeta resolves a single column definition's type and walks its
-// constraint list into a catalog-ready ColumnMeta.
-func (pc *planContext) buildColumnMeta(def *ast.ColumnDef) (*catalog.ColumnMeta, error) {
+// constraint list into a catalog-ready ColumnMeta. db is the database the
+// owning table lives in — used to validate REFERENCES targets.
+func (pc *planContext) buildColumnMeta(db string, def *ast.ColumnDef) (*catalog.ColumnMeta, error) {
 	dtype, err := pc.resolveDataType(def.Type)
 	if err != nil {
 		return nil, err
@@ -274,11 +275,25 @@ func (pc *planContext) buildColumnMeta(def *ast.ColumnDef) (*catalog.ColumnMeta,
 			}
 			col.DefaultValue = value
 		case *ast.ForeignRef:
-			col.ForeignKey = &catalog.ForeignKeyRef{ReferencedTable: c.Table, ReferencedColumn: c.Column}
+			fk, fkErr := pc.validateForeignKey(db, c.Table, c.Column, constr)
+			if fkErr != nil {
+				if firstErr == nil {
+					firstErr = fkErr
+				}
+				continue
+			}
+			col.ForeignKey = fk
 			// A foreign key can only target a table in the same database as
 			// the referencing column.
 		case *ast.ReferencesConstraint:
-			col.ForeignKey = &catalog.ForeignKeyRef{ReferencedTable: c.Table, ReferencedColumn: c.Column}
+			fk, fkErr := pc.validateForeignKey(db, c.Table, c.Column, constr)
+			if fkErr != nil {
+				if firstErr == nil {
+					firstErr = fkErr
+				}
+				continue
+			}
+			col.ForeignKey = fk
 		default:
 			err := pc.errorf(constr.Span(), CodeUnsupportedConstraint, "unsupported column constraint %T", constr)
 			if firstErr == nil {
@@ -513,6 +528,7 @@ func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
 	_ = scope.addTable(newResolvedTable(meta, stmt.Table.Name)) // fresh scope, one table: can't collide
 
 	assignments := make([]Assignment, 0, len(stmt.Set))
+	seenCols := make(map[string]bool, len(stmt.Set))
 	var firstErr error
 	for _, item := range stmt.Set {
 		col, err := pc.resolveColumn(scope, item.Column)
@@ -522,6 +538,14 @@ func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
 			}
 			continue
 		}
+		if seenCols[col.Name] {
+			err := pc.errorf(item.Column.Span(), CodeDuplicateSetColumn, "column %q is assigned more than once in SET clause", col.Name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		seenCols[col.Name] = true
 		value, err := pc.resolveExpr(scope, item.Value)
 		if err != nil {
 			if firstErr == nil {
@@ -573,4 +597,24 @@ func (pc *planContext) planDelete(stmt *ast.DeleteStmt) (Plan, error) {
 	}
 
 	return &DeletePlan{Database: db, Table: meta.Name, Schema: meta, Where: where}, nil
+}
+
+// validateForeignKey checks that a REFERENCES target table and column exist
+// in the catalog within the given database. Foreign keys can only reference
+// tables in the same database as the referencing column.
+func (pc *planContext) validateForeignKey(db, refTable, refColumn string, node ast.Clause) (*catalog.ForeignKeyRef, error) {
+	meta, err := pc.catalog.GetTable(db, refTable)
+	if err != nil {
+		return nil, pc.errorf(
+			node.Span(), CodeInvalidForeignKey,
+			"foreign key references unknown table %q in database %q", refTable, db,
+		)
+	}
+	if meta.FindColumn(refColumn) == nil {
+		return nil, pc.errorf(
+			node.Span(), CodeInvalidForeignKey,
+			"foreign key references unknown column %q on table %q", refColumn, refTable,
+		)
+	}
+	return &catalog.ForeignKeyRef{ReferencedDB: db, ReferencedTable: refTable, ReferencedColumn: refColumn}, nil
 }
