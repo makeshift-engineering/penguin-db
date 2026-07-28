@@ -168,6 +168,10 @@ const (
 	// CodeOrdinalOutOfRange is emitted when ORDER BY <n> names a position
 	// outside the SELECT list's column range.
 	CodeOrdinalOutOfRange diagnostic.Code = 3036
+
+	// CodeAggregateInJoin is emitted when an aggregate function is used in
+	// a join condition.
+	CodeAggregateInJoin diagnostic.Code = 3037
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding

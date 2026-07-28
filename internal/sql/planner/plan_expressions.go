@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // resolveExpr resolves an ast.Expression against scope, producing a fully
@@ -103,6 +104,27 @@ func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (Reso
 }
 
 func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (ResolvedExpr, error) {
+	if ue.Op == utils.TOKEN_MINUS {
+		if lit, ok := ue.Operand.(*ast.IntegerLiteral); ok {
+			v, err := strconv.ParseInt("-"+lit.Value, 10, 64)
+			if err != nil {
+				return nil, pc.errorf(
+					ue.Span(),
+					CodeLiteralOverflow,
+					"integer literal -%q does not fit in 64 bits",
+					lit.Value,
+				)
+			}
+			t := ast.TypeBigInt
+			if v >= math.MinInt32 && v <= math.MaxInt32 {
+				t = ast.TypeInt
+			}
+			return &ResolvedIntLiteral{
+				ResolvedExprBase: newExprBase(t),
+				Value:            v,
+			}, nil
+		}
+	}
 	operand, err := pc.resolveExpr(scope, ue.Operand)
 	if err != nil {
 		return nil, err

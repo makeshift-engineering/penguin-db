@@ -6,7 +6,7 @@ import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 // same physical column — used to check whether a SELECT-list or HAVING
 // column reference matches one of the query's GROUP BY keys.
 func columnRefsEqual(a, b *ResolvedColumn) bool {
-	return a.Database == b.Database && a.Table == b.Table && a.Name == b.Name
+	return a == b
 }
 
 // exprHasAggregate reports whether expr contains an aggregate function call

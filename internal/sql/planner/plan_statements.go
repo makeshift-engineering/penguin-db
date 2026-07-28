@@ -121,14 +121,14 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 		if oldMeta.FindColumn(col.Name) != nil {
 			return nil, pc.errorf(action.Column.Span(), CodeDuplicateColumn, "column %q already exists", col.Name)
 		}
-		if col.NotNull && col.DefaultValue == nil {
-			return nil, pc.errorf(action.Column.Span(), CodeUnsupportedAlter, "a new NOT NULL column requires a DEFAULT value")
-		}
 		if col.Unique {
 			return nil, pc.errorf(action.Column.Span(), CodeUnsupportedAlter, "adding a UNIQUE column is not supported in v1")
 		}
 		if col.PrimaryKey {
 			return nil, pc.errorf(action.Column.Span(), CodeUnsupportedAlter, "adding a PRIMARY KEY column is not supported in v1")
+		}
+		if col.NotNull && col.DefaultValue == nil {
+			return nil, pc.errorf(action.Column.Span(), CodeUnsupportedAlter, "a new NOT NULL column requires a DEFAULT value")
 		}
 		newMeta.Columns = append(newMeta.Columns, *col)
 
@@ -143,6 +143,9 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 		}
 		if col.Type != existing.Type {
 			return nil, pc.errorf(action.Column.Span(), CodeUnsupportedAlter, "changing a column's data type is not supported in v1")
+		}
+		if col.PrimaryKey != existing.PrimaryKey {
+			return nil, pc.errorf(action.Column.Span(), CodeUnsupportedAlter, "changing a column's PRIMARY KEY status via MODIFY is not supported in v1")
 		}
 		replaceActiveColumn(newMeta, col.Name, *col)
 

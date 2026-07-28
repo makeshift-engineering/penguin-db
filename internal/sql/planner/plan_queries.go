@@ -173,6 +173,17 @@ func (pc *planContext) walkTableRefPlan(ref *ast.TableRef, scope *Scope) (RelNod
 				}
 				continue
 			}
+			if condHasAggregate(cond) {
+				joinErr := pc.errorf(
+					join.On.Span(),
+					CodeAggregateInJoin,
+					"aggregate functions are not allowed in JOIN conditions",
+				)
+				if err == nil {
+					err = joinErr
+				}
+				continue
+			}
 			on = cond
 		}
 		root = &JoinNode{Left: root, Right: right, Type: join.Type, On: on}
