@@ -687,3 +687,71 @@ func TestPlanDelete_UnknownTable_Errors(t *testing.T) {
 		t.Errorf("expected CodeUnknownTable, got err=%v diag=%+v", err, pc.diag)
 	}
 }
+
+func TestPlanUpdate_DuplicateSetColumn_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.UpdateStmt{
+		Table: ident("users"),
+		Set: []*ast.SetItem{
+			{Column: ident("name"), Value: strLit("A")},
+			{Column: ident("name"), Value: strLit("B")},
+		},
+	}
+	_, err := pc.planUpdate(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeDuplicateSetColumn {
+		t.Errorf("expected CodeDuplicateSetColumn, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanCreateTable_ForeignKeyUnknownTable_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.CreateTableStmt{
+		Table: ident("new_table"),
+		Columns: []*ast.ColumnDef{
+			colDef("id", ast.TypeInt, &ast.PrimaryKeyConstraint{}),
+			colDef("ref_id", ast.TypeInt, &ast.ReferencesConstraint{Table: "nonexistent", Column: "id"}),
+		},
+	}
+	_, err := pc.planCreateTable(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidForeignKey {
+		t.Errorf("expected CodeInvalidForeignKey, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanCreateTable_ForeignKeyUnknownColumn_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.CreateTableStmt{
+		Table: ident("new_table"),
+		Columns: []*ast.ColumnDef{
+			colDef("id", ast.TypeInt, &ast.PrimaryKeyConstraint{}),
+			colDef("ref_id", ast.TypeInt, &ast.ReferencesConstraint{Table: "users", Column: "nonexistent"}),
+		},
+	}
+	_, err := pc.planCreateTable(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidForeignKey {
+		t.Errorf("expected CodeInvalidForeignKey, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestPlanCreateTable_ForeignKeyValid_PopulatesReferencedDB(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.CreateTableStmt{
+		Table: ident("new_table"),
+		Columns: []*ast.ColumnDef{
+			colDef("id", ast.TypeInt, &ast.PrimaryKeyConstraint{}),
+			colDef("user_id", ast.TypeInt, &ast.ReferencesConstraint{Table: "users", Column: "id"}),
+		},
+	}
+	plan, err := pc.planCreateTable(stmt)
+	if err != nil {
+		t.Fatalf("planCreateTable: %v", err)
+	}
+	schema := plan.(*CreateTablePlan).Schema
+	fk := schema.Columns[1].ForeignKey
+	if fk == nil {
+		t.Fatal("expected ForeignKey to be set")
+	}
+	if fk.ReferencedDB != "shop" || fk.ReferencedTable != "users" || fk.ReferencedColumn != "id" {
+		t.Errorf("unexpected FK: %+v", fk)
+	}
+}

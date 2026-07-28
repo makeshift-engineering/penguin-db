@@ -172,6 +172,19 @@ const (
 	// CodeAggregateInJoin is emitted when an aggregate function is used in
 	// a join condition.
 	CodeAggregateInJoin diagnostic.Code = 3037
+
+	// CodeNonOrderableType is emitted when an ordering operator (<, <=,
+	// >, >=) or BETWEEN is applied to a type that only supports equality,
+	// such as BOOLEAN.
+	CodeNonOrderableType diagnostic.Code = 3038
+
+	// CodeInvalidForeignKey is emitted when a REFERENCES constraint names
+	// a table or column that does not exist in the catalog.
+	CodeInvalidForeignKey diagnostic.Code = 3039
+
+	// CodeDuplicateSetColumn is emitted when an UPDATE's SET clause
+	// assigns the same column more than once.
+	CodeDuplicateSetColumn diagnostic.Code = 3040
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding

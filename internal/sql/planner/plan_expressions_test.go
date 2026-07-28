@@ -314,3 +314,19 @@ func TestResolveSelectExpression_CondSide_WrapsAsBoolean(t *testing.T) {
 		t.Errorf("expected wrapped condition to be *ResolvedComparison, got %T", wrapped.Cond)
 	}
 }
+
+func TestResolveExpr_MinBoolean_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveExpr(newScope(), &ast.FunctionCall{Name: "MIN", Args: []*ast.SelectExpression{selExpr(boolLit("TRUE"))}})
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidFunctionArgs {
+		t.Errorf("expected CodeInvalidFunctionArgs, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestResolveExpr_MaxBoolean_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveExpr(newScope(), &ast.FunctionCall{Name: "MAX", Args: []*ast.SelectExpression{selExpr(boolLit("TRUE"))}})
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidFunctionArgs {
+		t.Errorf("expected CodeInvalidFunctionArgs, got err=%v diag=%+v", err, pc.diag)
+	}
+}
