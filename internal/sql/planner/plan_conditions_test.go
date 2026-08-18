@@ -192,3 +192,19 @@ func TestResolveCond_Between_BoolOperand_Errors(t *testing.T) {
 		t.Errorf("expected CodeNonOrderableType, got err=%v diag=%+v", err, pc.diag)
 	}
 }
+
+func TestResolveCond_BoolLessThanNull_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveCond(newScope(), cmp(boolLit("TRUE"), utils.TOKEN_LT, &ast.NullLiteral{}))
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeNonOrderableType {
+		t.Errorf("expected CodeNonOrderableType for TRUE < NULL, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+func TestResolveCond_Between_BoolOperandNullBounds_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	_, err := pc.resolveCond(newScope(), &ast.BetweenPredicate{Expr: boolLit("TRUE"), Low: &ast.NullLiteral{}, High: &ast.NullLiteral{}})
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeNonOrderableType {
+		t.Errorf("expected CodeNonOrderableType for TRUE BETWEEN NULL AND NULL, got err=%v diag=%+v", err, pc.diag)
+	}
+}

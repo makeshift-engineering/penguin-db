@@ -59,7 +59,9 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 		return nil, err
 	}
 	if isOrderingOp(cp.Op) {
-		if !isNullExpr(left) && !isNullExpr(right) && !typesOrderable(left.ResolvedType(), right.ResolvedType()) {
+		leftNull, rightNull := isNullExpr(left), isNullExpr(right)
+		switch {
+		case !leftNull && !rightNull && !typesOrderable(left.ResolvedType(), right.ResolvedType()):
 			if typesCompatible(left.ResolvedType(), right.ResolvedType()) {
 				return nil, pc.errorf(
 					cp.Span(), CodeNonOrderableType,
@@ -69,6 +71,16 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 			return nil, pc.errorf(
 				cp.Span(), CodeTypeMismatch,
 				"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
+			)
+		case leftNull && !rightNull && !isOrderableType(right.ResolvedType()):
+			return nil, pc.errorf(
+				cp.Span(), CodeNonOrderableType,
+				"operator %s is not supported for %s", cp.Op, exprTypeName(right),
+			)
+		case !leftNull && rightNull && !isOrderableType(left.ResolvedType()):
+			return nil, pc.errorf(
+				cp.Span(), CodeNonOrderableType,
+				"operator %s is not supported for %s", cp.Op, exprTypeName(left),
 			)
 		}
 	} else if !exprsCompatible(left, right) {
@@ -159,6 +171,13 @@ func (pc *planContext) resolveBetween(scope *Scope, bp *ast.BetweenPredicate) (R
 	high, err := pc.resolveExpr(scope, bp.High)
 	if err != nil {
 		return nil, err
+	}
+
+	// Reject non-orderable base expression eagerly: if the base itself is
+	// not orderable (e.g. BOOLEAN), BETWEEN must fail regardless of what
+	// the bounds are. This catches TRUE BETWEEN NULL AND NULL.
+	if !isNullExpr(expr) && !isOrderableType(expr.ResolvedType()) {
+		return nil, pc.errorf(bp.Expr.Span(), CodeNonOrderableType, "BETWEEN is not supported for %s", exprTypeName(expr))
 	}
 
 	var firstErr error

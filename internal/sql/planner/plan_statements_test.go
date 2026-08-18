@@ -755,3 +755,19 @@ func TestPlanCreateTable_ForeignKeyValid_PopulatesReferencedDB(t *testing.T) {
 		t.Errorf("unexpected FK: %+v", fk)
 	}
 }
+
+func TestPlanCreateTable_ForeignKeyTypeMismatch_Errors(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	stmt := &ast.CreateTableStmt{
+		Table: ident("new_table"),
+		Columns: []*ast.ColumnDef{
+			colDef("id", ast.TypeInt, &ast.PrimaryKeyConstraint{}),
+			// INT referencing VARCHAR(100) users.name — type-incompatible.
+			colDef("user_name", ast.TypeInt, &ast.ReferencesConstraint{Table: "users", Column: "name"}),
+		},
+	}
+	_, err := pc.planCreateTable(stmt)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidForeignKey {
+		t.Errorf("expected CodeInvalidForeignKey for type-incompatible FK, got err=%v diag=%+v", err, pc.diag)
+	}
+}

@@ -275,7 +275,7 @@ func (pc *planContext) buildColumnMeta(db string, def *ast.ColumnDef) (*catalog.
 			}
 			col.DefaultValue = value
 		case *ast.ForeignRef:
-			fk, fkErr := pc.validateForeignKey(db, c.Table, c.Column, constr)
+			fk, fkErr := pc.validateForeignKey(db, c.Table, c.Column, col.Type, constr)
 			if fkErr != nil {
 				if firstErr == nil {
 					firstErr = fkErr
@@ -286,7 +286,7 @@ func (pc *planContext) buildColumnMeta(db string, def *ast.ColumnDef) (*catalog.
 			// A foreign key can only target a table in the same database as
 			// the referencing column.
 		case *ast.ReferencesConstraint:
-			fk, fkErr := pc.validateForeignKey(db, c.Table, c.Column, constr)
+			fk, fkErr := pc.validateForeignKey(db, c.Table, c.Column, col.Type, constr)
 			if fkErr != nil {
 				if firstErr == nil {
 					firstErr = fkErr
@@ -600,9 +600,10 @@ func (pc *planContext) planDelete(stmt *ast.DeleteStmt) (Plan, error) {
 }
 
 // validateForeignKey checks that a REFERENCES target table and column exist
-// in the catalog within the given database. Foreign keys can only reference
-// tables in the same database as the referencing column.
-func (pc *planContext) validateForeignKey(db, refTable, refColumn string, node ast.Clause) (*catalog.ForeignKeyRef, error) {
+// in the catalog within the given database, and that the referenced column's
+// type is compatible with the referencing column's type. Foreign keys can
+// only reference tables in the same database as the referencing column.
+func (pc *planContext) validateForeignKey(db, refTable, refColumn string, srcType ast.DataTypeKind, node ast.Clause) (*catalog.ForeignKeyRef, error) {
 	meta, err := pc.catalog.GetTable(db, refTable)
 	if err != nil {
 		return nil, pc.errorf(
@@ -610,10 +611,18 @@ func (pc *planContext) validateForeignKey(db, refTable, refColumn string, node a
 			"foreign key references unknown table %q in database %q", refTable, db,
 		)
 	}
-	if meta.FindColumn(refColumn) == nil {
+	targetCol := meta.FindColumn(refColumn)
+	if targetCol == nil {
 		return nil, pc.errorf(
 			node.Span(), CodeInvalidForeignKey,
 			"foreign key references unknown column %q on table %q", refColumn, refTable,
+		)
+	}
+	if !typesCompatible(srcType, targetCol.Type) {
+		return nil, pc.errorf(
+			node.Span(), CodeInvalidForeignKey,
+			"foreign key column type %s is not compatible with referenced column %q (%s)",
+			typeName(srcType), refColumn, typeName(targetCol.Type),
 		)
 	}
 	return &catalog.ForeignKeyRef{ReferencedDB: db, ReferencedTable: refTable, ReferencedColumn: refColumn}, nil
