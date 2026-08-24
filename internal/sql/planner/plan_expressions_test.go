@@ -330,3 +330,91 @@ func TestResolveExpr_MaxBoolean_Errors(t *testing.T) {
 		t.Errorf("expected CodeInvalidFunctionArgs, got err=%v diag=%+v", err, pc.diag)
 	}
 }
+
+// --- TypeNull -----------------------------------------------------------
+
+func TestResolveExpr_NullLiteral_ReturnsTypeNull(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{}, nil)
+	got, err := pc.resolveExpr(newScope(), &ast.NullLiteral{})
+	if err != nil {
+		t.Fatalf("resolveExpr: %v", err)
+	}
+	if got.ResolvedType() != ast.TypeNull {
+		t.Errorf("expected TypeNull, got %v", got.ResolvedType())
+	}
+}
+
+func TestTypeName_TypeNull(t *testing.T) {
+	if name := typeName(ast.TypeNull); name != "NULL" {
+		t.Errorf("expected typeName(TypeNull) == \"NULL\", got %q", name)
+	}
+}
+
+// --- Op enum ------------------------------------------------------------
+
+func TestTokenToOp_AllOperators(t *testing.T) {
+	cases := []struct {
+		tok utils.TokenType
+		op  Op
+	}{
+		{utils.TOKEN_EQ, OpEq},
+		{utils.TOKEN_NEQ, OpNeq},
+		{utils.TOKEN_LT, OpLt},
+		{utils.TOKEN_GT, OpGt},
+		{utils.TOKEN_LTE, OpLte},
+		{utils.TOKEN_GTE, OpGte},
+		{utils.TOKEN_PLUS, OpAdd},
+		{utils.TOKEN_MINUS, OpSub},
+		{utils.TOKEN_STAR, OpMul},
+		{utils.TOKEN_SLASH, OpDiv},
+		{utils.TOKEN_AND, OpAnd},
+		{utils.TOKEN_OR, OpOr},
+	}
+	for _, tc := range cases {
+		if got := tokenToOp(tc.tok); got != tc.op {
+			t.Errorf("tokenToOp(%v) = %v, want %v", tc.tok, got, tc.op)
+		}
+	}
+}
+
+func TestIsOrderingOp(t *testing.T) {
+	ordering := []Op{OpLt, OpGt, OpLte, OpGte}
+	nonOrdering := []Op{OpEq, OpNeq, OpAdd, OpSub, OpMul, OpDiv, OpAnd, OpOr}
+	for _, op := range ordering {
+		if !isOrderingOp(op) {
+			t.Errorf("expected isOrderingOp(%v) == true", op)
+		}
+	}
+	for _, op := range nonOrdering {
+		if isOrderingOp(op) {
+			t.Errorf("expected isOrderingOp(%v) == false", op)
+		}
+	}
+}
+
+func TestOp_String(t *testing.T) {
+	if s := OpAdd.String(); s != "+" {
+		t.Errorf("expected OpAdd.String() == \"+\", got %q", s)
+	}
+	if s := OpAnd.String(); s != "AND" {
+		t.Errorf("expected OpAnd.String() == \"AND\", got %q", s)
+	}
+}
+
+// --- ResolvedColumn value semantics ------------------------------------
+
+func TestResolvedColumnRef_ValueSemantics(t *testing.T) {
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
+	scope := userScope(t, pc)
+	got, err := pc.resolveExpr(scope, qualifiedIdent("u", "id"))
+	if err != nil {
+		t.Fatalf("resolveExpr: %v", err)
+	}
+	ref := got.(*ResolvedColumnRef)
+	// Mutate the copy inside ref — the scope's original must be unaffected.
+	ref.Column.Name = "MUTATED"
+	original := scope.byBinding["u"].findColumn("id")
+	if original.Name == "MUTATED" {
+		t.Error("mutating ResolvedColumnRef.Column should not affect the Scope's original — value semantics violated")
+	}
+}

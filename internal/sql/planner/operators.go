@@ -2,7 +2,6 @@ package planner
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
 // RelNode is the sealed interface for a node in a SELECT statement's
@@ -59,14 +58,6 @@ type FilterNode struct {
 type ProjectItem struct {
 	Expr  ResolvedExpr
 	Alias string
-	// Span is the source position of the original SELECT-list expression.
-	// It exists solely so GROUP BY validation (see aggregate.go), which
-	// runs as a pass over already-resolved items, can still attach an
-	// accurate diagnostic location. It has no meaning after planning
-	// completes and ResolvedExpr/ResolvedCond trees deliberately carry no
-	// equivalent — by the time those are built, any problem they'd have
-	// caused has already been turned into a diagnostic.
-	Span diagnostic.Span
 }
 
 // ProjectNode evaluates Items against each row of Input, producing the
@@ -112,10 +103,11 @@ type SortNode struct {
 }
 
 // LimitNode caps Input to at most Count rows, after skipping Offset of
-// them. Offset is 0 when no OFFSET was specified.
+// them. Offset is 0 when no OFFSET was specified. Both values must be
+// non-negative; the planner validates this before constructing the node.
 type LimitNode struct {
 	RelNodeBase
 	Input  RelNode
-	Count  int
-	Offset int
+	Count  int64
+	Offset int64
 }

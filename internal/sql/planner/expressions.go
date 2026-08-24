@@ -2,7 +2,6 @@ package planner
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // ResolvedExpr is the sealed interface for a fully resolved, type-annotated
@@ -74,13 +73,13 @@ type ResolvedBoolLiteral struct {
 type ResolvedNullLiteral struct{}
 
 func (*ResolvedNullLiteral) resolvedExprNode()              {}
-func (*ResolvedNullLiteral) ResolvedType() ast.DataTypeKind { return ast.TypeInt }
+func (*ResolvedNullLiteral) ResolvedType() ast.DataTypeKind { return ast.TypeNull }
 
 // ResolvedColumnRef is a resolved reference to a table column, produced by
-// looking an ast.Identifier up in a Scope. Its type is read live off the
-// resolved column rather than copied, so it doesn't use ResolvedExprBase.
+// looking an ast.Identifier up in a Scope. The column is stored by value
+// so that plan nodes never share a mutable pointer to the same metadata.
 type ResolvedColumnRef struct {
-	Column *ResolvedColumn
+	Column ResolvedColumn
 }
 
 func (*ResolvedColumnRef) resolvedExprNode()                {}
@@ -93,7 +92,7 @@ func (r *ResolvedColumnRef) ResolvedType() ast.DataTypeKind { return r.Column.Ty
 type ResolvedBinaryExpr struct {
 	ResolvedExprBase
 	Left  ResolvedExpr
-	Op    utils.TokenType
+	Op    Op
 	Right ResolvedExpr
 }
 
@@ -101,7 +100,7 @@ type ResolvedBinaryExpr struct {
 // matches the operand's type unchanged.
 type ResolvedUnaryExpr struct {
 	ResolvedExprBase
-	Op      utils.TokenType
+	Op      Op
 	Operand ResolvedExpr
 }
 

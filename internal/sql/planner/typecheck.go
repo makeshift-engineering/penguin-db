@@ -52,6 +52,8 @@ func typeName(t ast.DataTypeKind) string {
 		return "DOUBLE"
 	case ast.TypeDecimal:
 		return "DECIMAL"
+	case ast.TypeNull:
+		return "NULL"
 	default:
 		return "UNKNOWN"
 	}

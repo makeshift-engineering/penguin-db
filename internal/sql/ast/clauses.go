@@ -13,6 +13,7 @@ const (
 	TypeFloat                         // FLOAT
 	TypeDouble                        // DOUBLE
 	TypeDecimal                       // DECIMAL
+	TypeNull                          // NULL (sentinel; not a user-facing SQL type)
 )
 
 // DataType represents a column's SQL data type. VarcharLen is non-nil

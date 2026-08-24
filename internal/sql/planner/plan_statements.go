@@ -211,6 +211,9 @@ func (pc *planContext) buildTableMeta(db, table string, defs []*ast.ColumnDef) (
 	var firstErr error
 
 	for _, def := range defs {
+		if err := pc.ctx().Err(); err != nil {
+			return nil, err
+		}
 		if seen[def.Name] {
 			err := pc.errorf(def.Span(), CodeDuplicateColumn, "duplicate column name %q", def.Name)
 			if firstErr == nil {
@@ -410,12 +413,18 @@ func (pc *planContext) planInsert(stmt *ast.InsertStmt) (Plan, error) {
 			}
 		}
 		plan.Source = source
+		if err := plan.Validate(); err != nil {
+			return nil, err
+		}
 		return plan, nil
 	}
 
 	rows := make([][]ResolvedExpr, 0, len(stmt.Rows))
 	var firstErr error
 	for _, row := range stmt.Rows {
+		if err := pc.ctx().Err(); err != nil {
+			return nil, err
+		}
 		if len(row) != len(targetCols) {
 			err := pc.errorf(
 				stmt.Table.Span(), CodeColumnCountMismatch,
@@ -461,6 +470,9 @@ func (pc *planContext) planInsert(stmt *ast.InsertStmt) (Plan, error) {
 		return nil, firstErr
 	}
 	plan.Rows = rows
+	if err := plan.Validate(); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 
@@ -472,13 +484,13 @@ func (pc *planContext) planInsert(stmt *ast.InsertStmt) (Plan, error) {
 // span of its own (ast.InsertStmt.Columns is a plain []string), so
 // diagnostics here point at the statement's table identifier — the closest
 // span the AST actually provides.
-func (pc *planContext) resolveInsertColumns(meta *catalog.TableMeta, names []string, tableID *ast.Identifier) ([]*ResolvedColumn, error) {
+func (pc *planContext) resolveInsertColumns(meta *catalog.TableMeta, names []string, tableID *ast.Identifier) ([]ResolvedColumn, error) {
 	active := meta.ActiveColumns()
 
 	if len(names) == 0 {
-		cols := make([]*ResolvedColumn, len(active))
+		cols := make([]ResolvedColumn, len(active))
 		for i, c := range active {
-			cols[i] = resolvedColumnFrom(meta, c, i)
+			cols[i] = *resolvedColumnFrom(meta, c, i)
 		}
 		return cols, nil
 	}
@@ -488,7 +500,7 @@ func (pc *planContext) resolveInsertColumns(meta *catalog.TableMeta, names []str
 		indexByName[c.Name] = i
 	}
 
-	cols := make([]*ResolvedColumn, 0, len(names))
+	cols := make([]ResolvedColumn, 0, len(names))
 	seen := make(map[string]bool, len(names))
 	var firstErr error
 	for _, name := range names {
@@ -509,7 +521,7 @@ func (pc *planContext) resolveInsertColumns(meta *catalog.TableMeta, names []str
 			}
 			continue
 		}
-		cols = append(cols, resolvedColumnFrom(meta, active[idx], idx))
+		cols = append(cols, *resolvedColumnFrom(meta, active[idx], idx))
 	}
 
 	if firstErr != nil {
@@ -553,7 +565,7 @@ func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
 			}
 			continue
 		}
-		if !exprsCompatible(value, &ResolvedColumnRef{Column: col}) {
+		if !exprsCompatible(value, &ResolvedColumnRef{Column: *col}) {
 			err := pc.errorf(
 				item.Value.Span(), CodeTypeMismatch,
 				"value type %s is not compatible with column %q (%s)", exprTypeName(value), col.Name, typeName(col.Type),
@@ -563,7 +575,7 @@ func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
 			}
 			continue
 		}
-		assignments = append(assignments, Assignment{Column: col, Value: value})
+		assignments = append(assignments, Assignment{Column: *col, Value: value})
 	}
 
 	var where ResolvedCond

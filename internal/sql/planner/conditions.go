@@ -1,7 +1,5 @@
 package planner
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/utils"
-
 // ResolvedCond is the sealed interface for a fully resolved boolean
 // condition. Unlike ResolvedExpr, it carries no type field: every
 // ResolvedCond is boolean by definition.
@@ -19,7 +17,7 @@ func (*ResolvedCondBase) resolvedCondNode() {}
 type ResolvedBinaryCond struct {
 	ResolvedCondBase
 	Left  ResolvedCond
-	Op    utils.TokenType // utils.TOKEN_AND or utils.TOKEN_OR
+	Op    Op // OpAnd or OpOr
 	Right ResolvedCond
 }
 
@@ -34,7 +32,7 @@ type ResolvedNotCond struct {
 type ResolvedComparison struct {
 	ResolvedCondBase
 	Left  ResolvedExpr
-	Op    utils.TokenType
+	Op    Op
 	Right ResolvedExpr
 }
 

@@ -33,7 +33,7 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 		root = &FilterNode{Input: root, Cond: cond}
 	}
 
-	items, err := pc.resolveSelectList(scope, stmt.Columns)
+	items, itemSpans, err := pc.resolveSelectList(scope, stmt.Columns)
 	if err != nil {
 		return nil, err
 	}
@@ -54,15 +54,15 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 	// buildAggregatePlan (SELECT list / HAVING validation) and
 	// buildSortPlan (ORDER BY validation for aggregate queries).
 	var groupExprs []ResolvedExpr
-	var groupCols []*ResolvedColumn
+	var groupCols []ResolvedColumn
 	if stmt.GroupBy != nil {
 		for _, id := range stmt.GroupBy.Columns {
 			col, err := pc.resolveColumn(scope, id)
 			if err != nil {
 				return nil, err
 			}
-			groupExprs = append(groupExprs, &ResolvedColumnRef{Column: col})
-			groupCols = append(groupCols, col)
+			groupExprs = append(groupExprs, &ResolvedColumnRef{Column: *col})
+			groupCols = append(groupCols, *col)
 		}
 	}
 
@@ -70,7 +70,7 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 	case isAggregate && root == nil:
 		return nil, pc.errorf(stmt.Span(), CodeAggregateWithoutFrom, "aggregate queries require a FROM clause")
 	case isAggregate:
-		root, err = pc.buildAggregatePlan(root, groupExprs, groupCols, items, havingCond, havingSpan)
+		root, err = pc.buildAggregatePlan(root, groupExprs, groupCols, items, itemSpans, havingCond, havingSpan)
 		if err != nil {
 			return nil, err
 		}
@@ -92,11 +92,18 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 	}
 
 	if stmt.Limit != nil {
-		offset := 0
-		if stmt.Limit.Offset != nil {
-			offset = *stmt.Limit.Offset
+		count := int64(stmt.Limit.Count)
+		if count < 0 {
+			return nil, pc.errorf(stmt.Limit.Span(), CodeNegativeLimit, "LIMIT count must be non-negative, got %d", count)
 		}
-		root = &LimitNode{Input: root, Count: stmt.Limit.Count, Offset: offset}
+		var offset int64
+		if stmt.Limit.Offset != nil {
+			offset = int64(*stmt.Limit.Offset)
+			if offset < 0 {
+				return nil, pc.errorf(stmt.Limit.Span(), CodeNegativeLimit, "OFFSET must be non-negative, got %d", offset)
+			}
+		}
+		root = &LimitNode{Input: root, Count: count, Offset: offset}
 	}
 
 	return &QueryPlan{Root: root, Columns: outputColumns(items)}, nil
@@ -118,6 +125,9 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 func (pc *planContext) buildFromPlan(refs []*ast.TableRef) (root RelNode, scope *Scope, err error) {
 	scope = newScope()
 	for _, ref := range refs {
+		if ctxErr := pc.ctx().Err(); ctxErr != nil {
+			return nil, scope, ctxErr
+		}
 		next, refErr := pc.walkTableRefPlan(ref, scope)
 		if refErr != nil && err == nil {
 			err = refErr
@@ -233,15 +243,21 @@ func (pc *planContext) addTablePrimaryPlan(primary *ast.TablePrimary, scope *Sco
 }
 
 // resolveSelectList resolves a SELECT statement's column list against
-// scope, expanding * and table.* into every visible column.
-func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn) ([]ProjectItem, error) {
+// scope, expanding * and table.* into every visible column. The returned
+// spans slice is parallel to items and records each item's source
+// position — used only during GROUP BY validation, then discarded.
+func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn) ([]ProjectItem, []diagnostic.Span, error) {
 	var items []ProjectItem
+	var spans []diagnostic.Span
 	var firstErr error
 
 	for _, col := range cols {
+		if err := pc.ctx().Err(); err != nil {
+			return nil, nil, err
+		}
 		switch {
 		case col.Star:
-			expanded := expandStar(scope.Tables(), col.Span())
+			expanded, expandedSpans := expandStar(scope.Tables(), col.Span())
 			if len(expanded) == 0 {
 				err := pc.errorf(col.Span(), CodeEmptyStarExpansion, "SELECT * matched no columns: no tables in scope")
 				if firstErr == nil {
@@ -250,6 +266,7 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 				continue
 			}
 			items = append(items, expanded...)
+			spans = append(spans, expandedSpans...)
 
 		case col.QualifiedStar != nil:
 			// table.* uses Identifier{Name: table}; db.table.* uses
@@ -265,7 +282,8 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 				continue
 			}
 			for _, rc := range table.Columns() {
-				items = append(items, ProjectItem{Expr: &ResolvedColumnRef{Column: rc}, Alias: rc.Name, Span: col.Span()})
+				items = append(items, ProjectItem{Expr: &ResolvedColumnRef{Column: *rc}, Alias: rc.Name})
+				spans = append(spans, col.Span())
 			}
 
 		default:
@@ -280,24 +298,27 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 			if alias == "" {
 				alias = defaultAlias(expr)
 			}
-			items = append(items, ProjectItem{Expr: expr, Alias: alias, Span: col.Span()})
+			items = append(items, ProjectItem{Expr: expr, Alias: alias})
+			spans = append(spans, col.Span())
 		}
 	}
 
 	if firstErr != nil {
-		return nil, firstErr
+		return nil, nil, firstErr
 	}
-	return items, nil
+	return items, spans, nil
 }
 
-func expandStar(tables []*ResolvedTable, span diagnostic.Span) []ProjectItem {
+func expandStar(tables []*ResolvedTable, span diagnostic.Span) ([]ProjectItem, []diagnostic.Span) {
 	var items []ProjectItem
+	var spans []diagnostic.Span
 	for _, table := range tables {
 		for _, rc := range table.Columns() {
-			items = append(items, ProjectItem{Expr: &ResolvedColumnRef{Column: rc}, Alias: rc.Name, Span: span})
+			items = append(items, ProjectItem{Expr: &ResolvedColumnRef{Column: *rc}, Alias: rc.Name})
+			spans = append(spans, span)
 		}
 	}
-	return items
+	return items, spans
 }
 
 // defaultAlias picks a display name for a SELECT-list item with no
@@ -331,10 +352,10 @@ func outputColumns(items []ProjectItem) []OutputColumn {
 // present, a FilterNode on top of it. groupExprs and groupCols are
 // resolved by planSelect before this call so buildSortPlan can share them.
 func (pc *planContext) buildAggregatePlan(
-	root RelNode, groupExprs []ResolvedExpr, groupCols []*ResolvedColumn, items []ProjectItem, having ResolvedCond, havingSpan diagnostic.Span,
+	root RelNode, groupExprs []ResolvedExpr, groupCols []ResolvedColumn, items []ProjectItem, itemSpans []diagnostic.Span, having ResolvedCond, havingSpan diagnostic.Span,
 ) (RelNode, error) {
-	for _, item := range items {
-		if err := pc.validateGroupedExpr(item.Expr, groupCols, item.Span); err != nil {
+	for i, item := range items {
+		if err := pc.validateGroupedExpr(item.Expr, groupCols, itemSpans[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -354,7 +375,7 @@ func (pc *planContext) buildAggregatePlan(
 // buildSortPlan resolves an ORDER BY clause. When isAggregate is true, any
 // expression resolved via the scope fallback (i.e. not an ordinal or alias)
 // is validated against the GROUP BY keys through validateGroupedExpr.
-func (pc *planContext) buildSortPlan(root RelNode, scope *Scope, items []ProjectItem, ob *ast.OrderByClause, isAggregate bool, groupKeys []*ResolvedColumn) (RelNode, error) {
+func (pc *planContext) buildSortPlan(root RelNode, scope *Scope, items []ProjectItem, ob *ast.OrderByClause, isAggregate bool, groupKeys []ResolvedColumn) (RelNode, error) {
 	sortItems := make([]SortItem, 0, len(ob.Items))
 	var firstErr error
 

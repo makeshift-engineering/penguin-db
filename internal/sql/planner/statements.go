@@ -133,14 +133,25 @@ type InsertPlan struct {
 	Database string
 	Table    string
 	Schema   *catalog.TableMeta
-	Columns  []*ResolvedColumn
+	Columns  []ResolvedColumn
 	Rows     [][]ResolvedExpr
 	Source   *QueryPlan
 }
 
+// Validate ensures the plan is well-formed: exactly one of Rows or Source
+// must be set. A plan with both or neither indicates a planner bug.
+func (p *InsertPlan) Validate() error {
+	hasRows := len(p.Rows) > 0
+	hasSource := p.Source != nil
+	if hasRows == hasSource {
+		return fmt.Errorf("InsertPlan: exactly one of Rows or Source must be set (rows=%v, source=%v)", hasRows, hasSource)
+	}
+	return nil
+}
+
 // Assignment is one SET item in an UPDATE statement.
 type Assignment struct {
-	Column *ResolvedColumn
+	Column ResolvedColumn
 	Value  ResolvedExpr
 }
 
