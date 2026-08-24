@@ -6,6 +6,7 @@
 package planner
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -15,9 +16,12 @@ import (
 
 // Session holds the per-connection state a planning call needs beyond the
 // AST itself. ActiveDatabase is the database selected by the most recent
-// USE statement, or empty if none has been selected yet.
+// USE statement, or empty if none has been selected yet. Ctx carries the
+// request-scoped context for cancellation and deadline propagation; when
+// nil, planning uses context.Background().
 type Session struct {
 	ActiveDatabase string
+	Ctx            context.Context
 }
 
 // Planner produces logical plans from parsed SQL statements. It wraps a
@@ -65,8 +69,20 @@ func newPlanContext(cat *catalog.Catalog, session Session, src *diagnostic.Sourc
 	}
 }
 
+// ctx returns the request-scoped context from the session, defaulting to
+// context.Background() when the session was constructed without one.
+func (pc *planContext) ctx() context.Context {
+	if pc.session.Ctx != nil {
+		return pc.session.Ctx
+	}
+	return context.Background()
+}
+
 // planStatement dispatches to the planning method for stmt's concrete type.
 func (pc *planContext) planStatement(stmt ast.Statement) (Plan, error) {
+	if err := pc.ctx().Err(); err != nil {
+		return nil, err
+	}
 	switch s := stmt.(type) {
 	case *ast.CreateDatabaseStmt:
 		return pc.planCreateDatabase(s)

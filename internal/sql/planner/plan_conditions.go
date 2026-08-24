@@ -2,7 +2,6 @@ package planner
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
-	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
 // resolveCond resolves an ast.Condition against scope, producing a fully
@@ -46,7 +45,7 @@ func (pc *planContext) resolveBinaryCond(scope *Scope, bc *ast.BinaryCondition) 
 	if err != nil {
 		return nil, err
 	}
-	return &ResolvedBinaryCond{Left: left, Op: bc.Op, Right: right}, nil
+	return &ResolvedBinaryCond{Left: left, Op: tokenToOp(bc.Op), Right: right}, nil
 }
 
 func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredicate) (ResolvedCond, error) {
@@ -58,14 +57,15 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 	if err != nil {
 		return nil, err
 	}
-	if isOrderingOp(cp.Op) {
+	op := tokenToOp(cp.Op)
+	if isOrderingOp(op) {
 		leftNull, rightNull := isNullExpr(left), isNullExpr(right)
 		switch {
 		case !leftNull && !rightNull && !typesOrderable(left.ResolvedType(), right.ResolvedType()):
 			if typesCompatible(left.ResolvedType(), right.ResolvedType()) {
 				return nil, pc.errorf(
 					cp.Span(), CodeNonOrderableType,
-					"operator %s is not supported for %s", cp.Op, exprTypeName(left),
+					"operator %s is not supported for %s", op, exprTypeName(left),
 				)
 			}
 			return nil, pc.errorf(
@@ -75,12 +75,12 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 		case leftNull && !rightNull && !isOrderableType(right.ResolvedType()):
 			return nil, pc.errorf(
 				cp.Span(), CodeNonOrderableType,
-				"operator %s is not supported for %s", cp.Op, exprTypeName(right),
+				"operator %s is not supported for %s", op, exprTypeName(right),
 			)
 		case !leftNull && rightNull && !isOrderableType(left.ResolvedType()):
 			return nil, pc.errorf(
 				cp.Span(), CodeNonOrderableType,
-				"operator %s is not supported for %s", cp.Op, exprTypeName(left),
+				"operator %s is not supported for %s", op, exprTypeName(left),
 			)
 		}
 	} else if !exprsCompatible(left, right) {
@@ -89,13 +89,7 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 			"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
 		)
 	}
-	return &ResolvedComparison{Left: left, Op: cp.Op, Right: right}, nil
-}
-
-// isOrderingOp reports whether op is a strict ordering operator that
-// requires orderable operands, as opposed to an equality operator.
-func isOrderingOp(op utils.TokenType) bool {
-	return op == utils.TOKEN_LT || op == utils.TOKEN_GT || op == utils.TOKEN_LTE || op == utils.TOKEN_GTE
+	return &ResolvedComparison{Left: left, Op: op, Right: right}, nil
 }
 
 func (pc *planContext) resolveLike(scope *Scope, lp *ast.LikePredicate) (ResolvedCond, error) {
@@ -137,6 +131,9 @@ func (pc *planContext) resolveIn(scope *Scope, ip *ast.InPredicate) (ResolvedCon
 	values := make([]ResolvedExpr, 0, len(ip.Values))
 	var firstErr error
 	for _, v := range ip.Values {
+		if err := pc.ctx().Err(); err != nil {
+			return nil, err
+		}
 		rv, err := pc.resolveExpr(scope, v)
 		if err != nil {
 			if firstErr == nil {

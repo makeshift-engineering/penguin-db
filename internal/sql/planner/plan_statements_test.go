@@ -1,6 +1,8 @@
 package planner
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -769,5 +771,50 @@ func TestPlanCreateTable_ForeignKeyTypeMismatch_Errors(t *testing.T) {
 	_, err := pc.planCreateTable(stmt)
 	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidForeignKey {
 		t.Errorf("expected CodeInvalidForeignKey for type-incompatible FK, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
+// --- InsertPlan.Validate -------------------------------------------------
+
+func TestInsertPlan_Validate_BothNil_Errors(t *testing.T) {
+	plan := &InsertPlan{}
+	if err := plan.Validate(); err == nil {
+		t.Error("expected Validate to fail when both Rows and Source are nil")
+	}
+}
+
+func TestInsertPlan_Validate_RowsOnly_Succeeds(t *testing.T) {
+	plan := &InsertPlan{Rows: [][]ResolvedExpr{{}}}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("expected Validate to succeed with Rows only, got %v", err)
+	}
+}
+
+func TestInsertPlan_Validate_SourceOnly_Succeeds(t *testing.T) {
+	plan := &InsertPlan{Source: &QueryPlan{}}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("expected Validate to succeed with Source only, got %v", err)
+	}
+}
+
+func TestInsertPlan_Validate_BothSet_Errors(t *testing.T) {
+	plan := &InsertPlan{Rows: [][]ResolvedExpr{{}}, Source: &QueryPlan{}}
+	if err := plan.Validate(); err == nil {
+		t.Error("expected Validate to fail when both Rows and Source are set")
+	}
+}
+
+// --- context cancellation ------------------------------------------------
+
+func TestPlan_CancelledContext_ReturnsEarly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop", Ctx: ctx}, nil)
+	_, err := pc.planStatement(&ast.SelectStmt{
+		Columns: []*ast.SelectColumn{{Star: true}},
+		From:    []*ast.TableRef{tableRef(primary(ident("users"), "u"))},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }

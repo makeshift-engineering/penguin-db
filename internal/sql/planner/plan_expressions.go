@@ -32,7 +32,7 @@ func (pc *planContext) resolveExpr(scope *Scope, expr ast.Expression) (ResolvedE
 		if err != nil {
 			return nil, err
 		}
-		return &ResolvedColumnRef{Column: col}, nil
+		return &ResolvedColumnRef{Column: *col}, nil
 	case *ast.ParenExpr:
 		return pc.resolveExpr(scope, e.Inner)
 	case *ast.BinaryExpr:
@@ -100,7 +100,7 @@ func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (Reso
 			be.Op, exprTypeName(left), exprTypeName(right),
 		)
 	}
-	return &ResolvedBinaryExpr{ResolvedExprBase: newExprBase(resultType), Left: left, Op: be.Op, Right: right}, nil
+	return &ResolvedBinaryExpr{ResolvedExprBase: newExprBase(resultType), Left: left, Op: tokenToOp(be.Op), Right: right}, nil
 }
 
 func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (ResolvedExpr, error) {
@@ -136,7 +136,7 @@ func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (Resolv
 			"unary %s requires a numeric operand, got %s", ue.Op, exprTypeName(operand),
 		)
 	}
-	return &ResolvedUnaryExpr{ResolvedExprBase: newExprBase(resultType), Op: ue.Op, Operand: operand}, nil
+	return &ResolvedUnaryExpr{ResolvedExprBase: newExprBase(resultType), Op: tokenToOp(ue.Op), Operand: operand}, nil
 }
 
 func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (ResolvedExpr, error) {

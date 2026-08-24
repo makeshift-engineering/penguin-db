@@ -6,7 +6,7 @@ import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 // same physical column — used to check whether a SELECT-list or HAVING
 // column reference matches one of the query's GROUP BY keys.
 func columnRefsEqual(a, b *ResolvedColumn) bool {
-	return a == b
+	return a.Database == b.Database && a.Table == b.Table && a.Name == b.Name && a.Index == b.Index
 }
 
 // exprHasAggregate reports whether expr contains an aggregate function call
@@ -85,13 +85,13 @@ func anyItemHasAggregate(items []ProjectItem) bool {
 // clause — SQL's "single implicit group" case), no bare column reference
 // can ever pass, which is exactly correct: there is no grouping key for it
 // to align with.
-func (pc *planContext) validateGroupedExpr(expr ResolvedExpr, groupKeys []*ResolvedColumn, span diagnostic.Span) error {
+func (pc *planContext) validateGroupedExpr(expr ResolvedExpr, groupKeys []ResolvedColumn, span diagnostic.Span) error {
 	switch e := expr.(type) {
 	case *ResolvedFunctionCall:
 		return nil
 	case *ResolvedColumnRef:
-		for _, k := range groupKeys {
-			if columnRefsEqual(e.Column, k) {
+		for i := range groupKeys {
+			if columnRefsEqual(&e.Column, &groupKeys[i]) {
 				return nil
 			}
 		}
@@ -116,7 +116,7 @@ func (pc *planContext) validateGroupedExpr(expr ResolvedExpr, groupKeys []*Resol
 // validateGroupedCond is validateGroupedExpr for a resolved condition tree
 // — used for HAVING, and for a ResolvedExprCond nested inside a
 // SELECT-list item.
-func (pc *planContext) validateGroupedCond(cond ResolvedCond, groupKeys []*ResolvedColumn, span diagnostic.Span) error {
+func (pc *planContext) validateGroupedCond(cond ResolvedCond, groupKeys []ResolvedColumn, span diagnostic.Span) error {
 	switch c := cond.(type) {
 	case *ResolvedComparison:
 		if err := pc.validateGroupedExpr(c.Left, groupKeys, span); err != nil {

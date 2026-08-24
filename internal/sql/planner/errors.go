@@ -185,6 +185,14 @@ const (
 	// CodeDuplicateSetColumn is emitted when an UPDATE's SET clause
 	// assigns the same column more than once.
 	CodeDuplicateSetColumn diagnostic.Code = 3040
+
+	// CodeNegativeLimit is emitted when LIMIT or OFFSET is negative.
+	CodeNegativeLimit diagnostic.Code = 3041
+
+	// CodeInvalidInsertPlan is a planner-internal assertion failure
+	// emitted when an InsertPlan is constructed with both Rows and Source
+	// set, or neither set.
+	CodeInvalidInsertPlan diagnostic.Code = 3042
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding
