@@ -89,6 +89,18 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 			"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
 		)
 	}
+
+	// Warn when comparing with NULL using = or !=. In SQL, NULL = NULL
+	// and NULL != NULL both evaluate to NULL (unknown), never TRUE or
+	// FALSE. This is almost certainly a user mistake — use IS [NOT] NULL
+	// instead.
+	if op == OpEq || op == OpNeq {
+		if isNullExpr(left) || isNullExpr(right) {
+			pc.warnf(cp.Span(), CodeNullComparison,
+				"comparison with NULL using %s always yields NULL; use IS [NOT] NULL instead", op)
+		}
+	}
+
 	return &ResolvedComparison{Left: left, Op: op, Right: right}, nil
 }
 
@@ -147,6 +159,13 @@ func (pc *planContext) resolveIn(scope *Scope, ip *ast.InPredicate) (ResolvedCon
 				firstErr = err
 			}
 			continue
+		}
+		// Warn about NULL literals in IN lists. In SQL, x IN (1, NULL, 3)
+		// never returns TRUE for the NULL element — it can only change a
+		// FALSE to NULL, which is still filtered out by WHERE.
+		if isNullExpr(rv) {
+			pc.warnf(v.Span(), CodeNullInList,
+				"NULL in IN list has no useful filtering effect; consider removing it")
 		}
 		values = append(values, rv)
 	}
