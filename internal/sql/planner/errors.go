@@ -193,6 +193,31 @@ const (
 	// emitted when an InsertPlan is constructed with both Rows and Source
 	// set, or neither set.
 	CodeInvalidInsertPlan diagnostic.Code = 3042
+
+	// CodeNestedAggregate is emitted when an aggregate function call is
+	// nested inside another aggregate function call, e.g. SUM(COUNT(*)),
+	// which is illegal in standard SQL.
+	CodeNestedAggregate diagnostic.Code = 3043
+
+	// CodeNullComparison is emitted as a warning when NULL is compared
+	// using = or !=, which always evaluates to NULL (unknown) in SQL
+	// and is almost certainly a user mistake.
+	CodeNullComparison diagnostic.Code = 3044
+
+	// CodeNullInList is emitted as a warning when a NULL literal
+	// appears in an IN list, which has no useful filtering effect —
+	// it can only change FALSE to NULL, but NULL is still filtered out
+	// by WHERE.
+	CodeNullInList diagnostic.Code = 3045
+
+	// CodeNullAggregate is emitted as a warning when an aggregate
+	// function is called with a NULL literal argument, e.g. SUM(NULL).
+	CodeNullAggregate diagnostic.Code = 3046
+
+	// CodeMalformedAST is emitted when the planner encounters a
+	// structurally invalid AST node — e.g. a SelectExpression with
+	// neither Expr nor Cond set.
+	CodeMalformedAST diagnostic.Code = 3047
 )
 
 // ErrDuplicateTableBinding is returned by Scope.addTable when a binding
@@ -214,4 +239,19 @@ func (pc *planContext) errorf(span diagnostic.Span, code diagnostic.Code, format
 	}
 	pc.diag.Append(d)
 	return d
+}
+
+// warnf creates a Diagnostic with SeverityWarning and appends it to the
+// planContext's diagnostic list. Unlike errorf it does not return an error
+// — warnings are advisory and never block planning.
+func (pc *planContext) warnf(span diagnostic.Span, code diagnostic.Code, format string, args ...any) {
+	d := &diagnostic.Diagnostic{
+		Severity: diagnostic.SeverityWarning,
+		Code:     code,
+		Category: "Semantic Warning",
+		Span:     span,
+		Msg:      fmt.Sprintf(format, args...),
+		Source:   pc.source,
+	}
+	pc.diag.Append(d)
 }

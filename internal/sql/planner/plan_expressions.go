@@ -56,6 +56,9 @@ func (pc *planContext) resolveSelectExpression(scope *Scope, se *ast.SelectExpre
 	if se.Expr != nil {
 		return pc.resolveExpr(scope, se.Expr)
 	}
+	if se.Cond == nil {
+		return nil, pc.errorf(se.Span(), CodeMalformedAST, "malformed AST: SelectExpression has neither Expr nor Cond set")
+	}
 	cond, err := pc.resolveCond(scope, se.Cond)
 	if err != nil {
 		return nil, err
@@ -167,6 +170,32 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 	arg, err := pc.resolveSelectExpression(scope, fc.Args[0])
 	if err != nil {
 		return nil, err
+	}
+
+	// Reject nested aggregates: SUM(COUNT(*)) is illegal in standard SQL.
+	if exprHasAggregate(arg) {
+		return nil, pc.errorf(
+			fc.Span(), CodeNestedAggregate,
+			"aggregate function %s cannot contain another aggregate function", name,
+		)
+	}
+
+	// Handle NULL literal argument: SUM(NULL), AVG(NULL), etc. are legal
+	// SQL — the result is always NULL regardless of the aggregate. COUNT
+	// is the exception: COUNT(NULL) returns 0 (or BIGINT-typed in the
+	// plan), since COUNT counts non-NULL values.
+	if isNullExpr(arg) {
+		pc.warnf(fc.Span(), CodeNullAggregate, "%s(NULL) is always NULL", name)
+		resultType := ast.TypeNull
+		if name == "COUNT" {
+			resultType = ast.TypeBigInt
+		}
+		return &ResolvedFunctionCall{
+			ResolvedExprBase: newExprBase(resultType),
+			Name:             name,
+			Distinct:         fc.Distinct,
+			Args:             []ResolvedExpr{arg},
+		}, nil
 	}
 
 	resultType, ok := aggregateResultType(name, arg.ResolvedType())

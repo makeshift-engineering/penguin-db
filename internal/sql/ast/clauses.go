@@ -28,6 +28,9 @@ type DataType struct {
 }
 
 func (d *DataType) Validate() error {
+	if d.Kind == TypeNull {
+		return ErrTypeNullNotAllowed
+	}
 	if d.Kind == TypeVarchar {
 		if d.VarcharLen == nil {
 			return ErrVarcharLengthRequired

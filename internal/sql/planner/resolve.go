@@ -136,6 +136,12 @@ func (s *Scope) Tables() []*ResolvedTable {
 // database. Returns a CodeNoActiveDatabase diagnostic if neither is set.
 func (pc *planContext) resolveDatabaseName(qualifier string, span ast.Node) (string, error) {
 	if qualifier != "" {
+		if !pc.catalog.DatabaseExists(qualifier) {
+			return "", pc.errorf(
+				span.Span(), CodeUnknownDatabase,
+				"database %q does not exist", qualifier,
+			)
+		}
 		return qualifier, nil
 	}
 	if pc.session.ActiveDatabase != "" {
