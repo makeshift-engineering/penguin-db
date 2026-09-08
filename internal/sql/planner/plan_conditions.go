@@ -160,12 +160,15 @@ func (pc *planContext) resolveIn(scope *Scope, ip *ast.InPredicate) (ResolvedCon
 			}
 			continue
 		}
-		// Warn about NULL literals in IN lists. In SQL, x IN (1, NULL, 3)
-		// never returns TRUE for the NULL element — it can only change a
-		// FALSE to NULL, which is still filtered out by WHERE.
+		// Warn about NULL literals in IN lists. In SQL, any comparison
+		// with NULL yields UNKNOWN. For x IN (1, NULL, 3), a non-matching
+		// x evaluates to NULL (not FALSE), which WHERE still filters out.
+		// For x NOT IN (1, NULL, 3), a non-matching x also evaluates to
+		// NULL instead of TRUE, silently excluding rows that would
+		// otherwise pass. Removing the NULL may change query results.
 		if isNullExpr(rv) {
 			pc.warnf(v.Span(), CodeNullInList,
-				"NULL in IN list has no useful filtering effect; consider removing it")
+				"NULL in IN list: comparisons with NULL yield UNKNOWN, which may silently filter rows in NOT IN")
 		}
 		values = append(values, rv)
 	}

@@ -185,10 +185,12 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 	// is the exception: COUNT(NULL) returns 0 (or BIGINT-typed in the
 	// plan), since COUNT counts non-NULL values.
 	if isNullExpr(arg) {
-		pc.warnf(fc.Span(), CodeNullAggregate, "%s(NULL) is always NULL", name)
 		resultType := ast.TypeNull
 		if name == "COUNT" {
+			pc.warnf(fc.Span(), CodeNullAggregate, "COUNT(NULL) always returns 0")
 			resultType = ast.TypeBigInt
+		} else {
+			pc.warnf(fc.Span(), CodeNullAggregate, "%s(NULL) is always NULL", name)
 		}
 		return &ResolvedFunctionCall{
 			ResolvedExprBase: newExprBase(resultType),

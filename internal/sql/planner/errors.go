@@ -205,9 +205,10 @@ const (
 	CodeNullComparison diagnostic.Code = 3044
 
 	// CodeNullInList is emitted as a warning when a NULL literal
-	// appears in an IN list, which has no useful filtering effect —
-	// it can only change FALSE to NULL, but NULL is still filtered out
-	// by WHERE.
+	// appears in an IN list. Any comparison with NULL yields UNKNOWN:
+	// for IN, a non-matching value evaluates to NULL instead of FALSE;
+	// for NOT IN, a non-matching value evaluates to NULL instead of
+	// TRUE, silently filtering rows. Removing NULL may change results.
 	CodeNullInList diagnostic.Code = 3045
 
 	// CodeNullAggregate is emitted as a warning when an aggregate
