@@ -255,6 +255,7 @@ func cmpOrdered[T int | int64 | float64 | string](a, b T) int {
 	}
 }
 
+// boolToInt converts a boolean value to 1 for true or 0 for false for ordered comparison.
 func boolToInt(b bool) int {
 	if b {
 		return 1
