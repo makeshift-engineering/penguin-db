@@ -66,26 +66,11 @@ func (e *Executor) execDropDatabase(ctx context.Context, plan *planner.DropDatab
 		return nil, fmt.Errorf("executor: building DROP DATABASE ops: %w", err)
 	}
 
-	// Also delete all user data rows for each table.
+	// Delete all user data rows for each table in the database.
 	for _, t := range plan.Tables {
-		prefix, err := encoding.EncodeScanPrefix(plan.Name, t.Name)
+		ops, err = e.appendTableDeleteOps(ctx, ops, plan.Name, t.Name)
 		if err != nil {
-			return nil, fmt.Errorf("executor: encoding scan prefix for %q.%q: %w", plan.Name, t.Name, err)
-		}
-		iter, err := e.kv.Scan(ctx, prefix)
-		if err != nil {
-			return nil, fmt.Errorf("executor: scanning rows for %q.%q: %w", plan.Name, t.Name, err)
-		}
-		for iter.Valid() {
-			key, _ := iter.Next()
-			if key == nil {
-				continue
-			}
-			ops = append(ops, kv.Op{Type: kv.OpDelete, Key: key})
-		}
-		iter.Close()
-		if err := iter.Err(); err != nil {
-			return nil, fmt.Errorf("executor: scanning rows for %q.%q: %w", plan.Name, t.Name, err)
+			return nil, err
 		}
 	}
 
@@ -114,8 +99,7 @@ func (e *Executor) execCreateTable(ctx context.Context, plan *planner.CreateTabl
 		return nil, fmt.Errorf("executor: building CREATE TABLE ops: %w", err)
 	}
 
-	// If the table has a snowflake ID, initialise the sequence counter
-	// to 0.
+	// If the table has a snowflake ID, initialise the sequence counter to 0.
 	if plan.Schema.HasSnowflakeID {
 		seqKey, err := encoding.EncodeCatalogSeqKey(plan.Database, plan.Table)
 		if err != nil {
@@ -154,24 +138,9 @@ func (e *Executor) execDropTable(ctx context.Context, plan *planner.DropTablePla
 	}
 
 	// Delete all user data rows for the table.
-	prefix, err := encoding.EncodeScanPrefix(plan.Database, plan.Table)
+	ops, err = e.appendTableDeleteOps(ctx, ops, plan.Database, plan.Table)
 	if err != nil {
-		return nil, fmt.Errorf("executor: encoding scan prefix: %w", err)
-	}
-	iter, err := e.kv.Scan(ctx, prefix)
-	if err != nil {
-		return nil, fmt.Errorf("executor: scanning rows: %w", err)
-	}
-	for iter.Valid() {
-		key, _ := iter.Next()
-		if key == nil {
-			continue
-		}
-		ops = append(ops, kv.Op{Type: kv.OpDelete, Key: key})
-	}
-	iter.Close()
-	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("executor: scanning rows: %w", err)
+		return nil, err
 	}
 
 	if err := e.kv.WriteBatch(ctx, ops); err != nil {
@@ -228,4 +197,28 @@ func (e *Executor) execRenameTable(ctx context.Context, plan *planner.RenameTabl
 		Type:    ResultDDL,
 		Message: fmt.Sprintf("table %q.%q renamed to %q", plan.Database, plan.OldName, plan.NewName),
 	}, nil
+}
+
+// appendTableDeleteOps scans all user data row keys for db.table and appends kv.OpDelete operations to ops.
+func (e *Executor) appendTableDeleteOps(ctx context.Context, ops []kv.Op, db, table string) ([]kv.Op, error) {
+	prefix, err := encoding.EncodeScanPrefix(db, table)
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding scan prefix for %q.%q: %w", db, table, err)
+	}
+	iter, err := e.kv.Scan(ctx, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("executor: scanning rows for %q.%q: %w", db, table, err)
+	}
+	defer iter.Close()
+
+	for iter.Valid() {
+		key, _ := iter.Next()
+		if key != nil {
+			ops = append(ops, kv.Op{Type: kv.OpDelete, Key: key})
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("executor: scanning rows for %q.%q: %w", db, table, err)
+	}
+	return ops, nil
 }
