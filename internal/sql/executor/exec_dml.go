@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -223,7 +224,7 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 			return nil, err
 		}
 
-		if string(newKey) != string(pair.key) {
+		if !bytes.Equal(newKey, pair.key) {
 			ops = append(ops, kv.Op{Type: kv.OpDelete, Key: pair.key})
 		}
 		ops = append(ops, kv.Op{Type: kv.OpPut, Key: newKey, Value: newEncoded})
@@ -413,22 +414,23 @@ func (e *Executor) extractPKValues(colValues []codec.ColumnValue, schema *catalo
 		// Find the active column index for this PK column.
 		found := false
 		for j, col := range activeColumns {
-			if col.Name == pkName {
-				v, err := columnValueToAny(colValues[j])
-				if err != nil {
-					return nil, fmt.Errorf("executor: reading PK column %q: %w", pkName, err)
-				}
-				if v == nil {
-					return nil, fmt.Errorf("%w: column %q", ErrNullPrimaryKey, pkName)
-				}
-				pkv, err := anyToPKValue(v, col.Type)
-				if err != nil {
-					return nil, err
-				}
-				pkVals[i] = pkv
-				found = true
-				break
+			if col.Name != pkName {
+				continue
 			}
+			v, err := columnValueToAny(colValues[j])
+			if err != nil {
+				return nil, fmt.Errorf("executor: reading PK column %q: %w", pkName, err)
+			}
+			if v == nil {
+				return nil, fmt.Errorf("%w: column %q", ErrNullPrimaryKey, pkName)
+			}
+			pkv, err := anyToPKValue(v, col.Type)
+			if err != nil {
+				return nil, err
+			}
+			pkVals[i] = pkv
+			found = true
+			break
 		}
 		if !found {
 			return nil, fmt.Errorf("executor: PK column %q not found in active columns", pkName)

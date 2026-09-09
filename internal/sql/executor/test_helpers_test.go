@@ -118,8 +118,7 @@ func (it *memIter) Err() error { return nil }
 
 // --- Test helpers ---
 
-func intPtr(v int) *int       { return &v }
-func strPtr(v string) *string { return &v }
+func intPtr(v int) *int { return &v }
 
 // setupExecutor creates a fresh in-memory KV, empty catalog, and executor.
 func setupExecutor(t *testing.T) (*Executor, *catalog.Catalog, kv.KV) {
@@ -140,13 +139,7 @@ func mustExec(t *testing.T, exec *Executor, plan planner.Plan) *Result {
 	return result
 }
 
-// testDBMeta returns a test database metadata.
-func testDBMeta() *catalog.DatabaseMeta {
-	return &catalog.DatabaseMeta{
-		Name:      "testdb",
-		CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-}
+
 
 // testTableMeta returns a test table schema (users table).
 func testTableMeta() *catalog.TableMeta {
