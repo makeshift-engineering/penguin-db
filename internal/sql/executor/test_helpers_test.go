@@ -104,7 +104,10 @@ type memIter struct {
 	pos     int
 }
 
-func (it *memIter) Valid() bool { return it.pos < len(it.entries) }
+func (it *memIter) Valid() bool {
+	return it.pos < len(it.entries)
+}
+
 func (it *memIter) Next() (key, value []byte) {
 	if it.pos >= len(it.entries) {
 		return nil, nil
@@ -113,12 +116,20 @@ func (it *memIter) Next() (key, value []byte) {
 	it.pos++
 	return e.key, e.value
 }
-func (it *memIter) Close()     { it.pos = len(it.entries) }
-func (it *memIter) Err() error { return nil }
+
+func (it *memIter) Close() {
+	it.pos = len(it.entries)
+}
+
+func (it *memIter) Err() error {
+	return nil
+}
 
 // --- Test helpers ---
 
-func intPtr(v int) *int { return &v }
+func intPtr(v int) *int {
+	return &v
+}
 
 // setupExecutor creates a fresh in-memory KV, empty catalog, and executor.
 func setupExecutor(t *testing.T) (*Executor, *catalog.Catalog, kv.KV) {
@@ -138,8 +149,6 @@ func mustExec(t *testing.T, exec *Executor, plan planner.Plan) *Result {
 	}
 	return result
 }
-
-
 
 // testTableMeta returns a test table schema (users table).
 func testTableMeta() *catalog.TableMeta {
