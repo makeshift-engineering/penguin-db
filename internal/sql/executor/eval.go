@@ -435,9 +435,7 @@ func coerceResultByKind(f float64, kind ast.DataTypeKind) any {
 // accumulateNumericGroup evaluates a numeric aggregate expression (for SUM or AVG)
 // over group rows, respecting DISTINCT filtering. It returns the running sum and
 // the count of non-NULL evaluated values.
-func accumulateNumericGroup(fn *planner.ResolvedFunctionCall, groupRows []row) (float64, int64, error) {
-	var sum float64
-	var count int64
+func accumulateNumericGroup(fn *planner.ResolvedFunctionCall, groupRows []row) (sum float64, count int64, err error) {
 	var seen map[any]struct{}
 	if fn.Distinct {
 		seen = make(map[any]struct{})
@@ -466,4 +464,3 @@ func accumulateNumericGroup(fn *planner.ResolvedFunctionCall, groupRows []row) (
 	}
 	return sum, count, nil
 }
-
