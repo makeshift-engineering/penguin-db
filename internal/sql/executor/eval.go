@@ -59,6 +59,31 @@ func evalExpr(expr planner.ResolvedExpr, r row) (any, error) {
 	}
 }
 
+// computeBinaryArithmetic applies a binary arithmetic operation (add, sub, mul, div, mod)
+// to two float64 operands, returning ErrDivisionByZero if dividing or modding by zero.
+func computeBinaryArithmetic(op planner.Op, lf, rf float64) (float64, error) {
+	switch op {
+	case planner.OpAdd:
+		return lf + rf, nil
+	case planner.OpSub:
+		return lf - rf, nil
+	case planner.OpMul:
+		return lf * rf, nil
+	case planner.OpDiv:
+		if rf == 0 {
+			return 0, ErrDivisionByZero
+		}
+		return lf / rf, nil
+	case planner.OpMod:
+		if rf == 0 {
+			return 0, ErrDivisionByZero
+		}
+		return math.Mod(lf, rf), nil
+	default:
+		return 0, fmt.Errorf("%w: unknown binary operator %d", ErrUnsupportedExpr, op)
+	}
+}
+
 // evalBinaryExpr evaluates a binary arithmetic expression.
 func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 	left, err := evalExpr(e.Left, r)
@@ -83,26 +108,9 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 		return nil, err
 	}
 
-	var result float64
-	switch e.Op {
-	case planner.OpAdd:
-		result = lf + rf
-	case planner.OpSub:
-		result = lf - rf
-	case planner.OpMul:
-		result = lf * rf
-	case planner.OpDiv:
-		if rf == 0 {
-			return nil, ErrDivisionByZero
-		}
-		result = lf / rf
-	case planner.OpMod:
-		if rf == 0 {
-			return nil, ErrDivisionByZero
-		}
-		result = math.Mod(lf, rf)
-	default:
-		return nil, fmt.Errorf("%w: unknown binary operator %d", ErrUnsupportedExpr, e.Op)
+	result, err := computeBinaryArithmetic(e.Op, lf, rf)
+	if err != nil {
+		return nil, err
 	}
 
 	// Preserve integer type when both operands are integer and the
@@ -272,6 +280,7 @@ func matchLike(str, pattern string) bool {
 	return matchLikeRecursive(str, 0, pattern, 0)
 }
 
+// matchLikeRecursive recursively matches a string against a pattern slice.
 func matchLikeRecursive(str string, si int, pattern string, pi int) bool {
 	for pi < len(pattern) {
 		switch pattern[pi] {
@@ -422,3 +431,39 @@ func coerceResultByKind(f float64, kind ast.DataTypeKind) any {
 		return f
 	}
 }
+
+// accumulateNumericGroup evaluates a numeric aggregate expression (for SUM or AVG)
+// over group rows, respecting DISTINCT filtering. It returns the running sum and
+// the count of non-NULL evaluated values.
+func accumulateNumericGroup(fn *planner.ResolvedFunctionCall, groupRows []row) (float64, int64, error) {
+	var sum float64
+	var count int64
+	var seen map[any]struct{}
+	if fn.Distinct {
+		seen = make(map[any]struct{})
+	}
+
+	for _, r := range groupRows {
+		v, err := evalExpr(fn.Args[0], r)
+		if err != nil {
+			return 0, 0, err
+		}
+		if v == nil {
+			continue
+		}
+		if fn.Distinct {
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+		}
+		f, err := toFloat64(v)
+		if err != nil {
+			return 0, 0, err
+		}
+		sum += f
+		count++
+	}
+	return sum, count, nil
+}
+

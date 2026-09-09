@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -276,26 +275,9 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		if err != nil {
 			return nil, err
 		}
-		var result float64
-		switch e.Op {
-		case planner.OpAdd:
-			result = lf + rf
-		case planner.OpSub:
-			result = lf - rf
-		case planner.OpMul:
-			result = lf * rf
-		case planner.OpDiv:
-			if rf == 0 {
-				return nil, ErrDivisionByZero
-			}
-			result = lf / rf
-		case planner.OpMod:
-			if rf == 0 {
-				return nil, ErrDivisionByZero
-			}
-			result = math.Mod(lf, rf)
-		default:
-			return nil, fmt.Errorf("unsupported operator in aggregate expression")
+		result, err := computeBinaryArithmetic(e.Op, lf, rf)
+		if err != nil {
+			return nil, err
 		}
 		return coerceResultByKind(result, e.ResolvedType()), nil
 	case *planner.ResolvedUnaryExpr:
@@ -379,32 +361,11 @@ func evalSum(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 		return nil, nil // SUM of empty set is NULL
 	}
 
-	var sum float64
-	hasValue := false
-	seen := make(map[any]struct{})
-
-	for _, r := range groupRows {
-		v, err := evalExpr(fn.Args[0], r)
-		if err != nil {
-			return nil, err
-		}
-		if v == nil {
-			continue
-		}
-		if fn.Distinct {
-			if _, ok := seen[v]; ok {
-				continue
-			}
-			seen[v] = struct{}{}
-		}
-		f, err := toFloat64(v)
-		if err != nil {
-			return nil, err
-		}
-		sum += f
-		hasValue = true
+	sum, count, err := accumulateNumericGroup(fn, groupRows)
+	if err != nil {
+		return nil, err
 	}
-	if !hasValue {
+	if count == 0 {
 		return nil, nil
 	}
 	return coerceResultByKind(sum, fn.ResolvedType()), nil
@@ -416,30 +377,9 @@ func evalAvg(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 		return nil, nil
 	}
 
-	var sum float64
-	var count int64
-	seen := make(map[any]struct{})
-
-	for _, r := range groupRows {
-		v, err := evalExpr(fn.Args[0], r)
-		if err != nil {
-			return nil, err
-		}
-		if v == nil {
-			continue
-		}
-		if fn.Distinct {
-			if _, ok := seen[v]; ok {
-				continue
-			}
-			seen[v] = struct{}{}
-		}
-		f, err := toFloat64(v)
-		if err != nil {
-			return nil, err
-		}
-		sum += f
-		count++
+	sum, count, err := accumulateNumericGroup(fn, groupRows)
+	if err != nil {
+		return nil, err
 	}
 	if count == 0 {
 		return nil, nil

@@ -13,7 +13,12 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/planner"
 )
 
-// execInsert executes an INSERT plan.
+type kvPair struct {
+	key   []byte
+	value []byte
+}
+
+// execInsert executes an INSERT plan by delegating to INSERT ... VALUES or INSERT ... SELECT handlers.
 func (e *Executor) execInsert(ctx context.Context, plan *planner.InsertPlan) (*Result, error) {
 	if plan.Source != nil {
 		return e.execInsertSelect(ctx, plan)
@@ -21,7 +26,7 @@ func (e *Executor) execInsert(ctx context.Context, plan *planner.InsertPlan) (*R
 	return e.execInsertValues(ctx, plan)
 }
 
-// execInsertValues handles INSERT ... VALUES.
+// execInsertValues handles INSERT INTO ... VALUES.
 func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPlan) (*Result, error) {
 	schema := plan.Schema
 	activeColumns := schema.ActiveColumns()
@@ -43,10 +48,6 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 	var ops []kv.Op
 
 	for _, rowExprs := range plan.Rows {
-		// Build the full row of column values.
-		colValues := make([]codec.ColumnValue, len(activeColumns))
-
-		// Evaluate each expression in the VALUES row.
 		exprValues := make([]any, len(rowExprs))
 		for i, expr := range rowExprs {
 			v, err := evalExpr(expr, row{})
@@ -56,74 +57,11 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 			exprValues[i] = v
 		}
 
-		// Map expression values to column positions.
-		for i, col := range plan.Columns {
-			val := exprValues[i]
-
-			// Validate NOT NULL constraint.
-			if val == nil && !col.Nullable {
-				return nil, fmt.Errorf("%w: column %q", ErrNotNullViolation, col.Name)
-			}
-
-			// Validate VARCHAR length.
-			if col.Type == ast.TypeVarchar && col.VarcharLen != nil && val != nil {
-				if s, ok := val.(string); ok && len(s) > *col.VarcharLen {
-					return nil, fmt.Errorf("%w: column %q (max %d, got %d)",
-						ErrVarcharTooLong, col.Name, *col.VarcharLen, len(s))
-				}
-			}
-
-			cv, err := anyToColumnValue(val, col.Type)
-			if err != nil {
-				return nil, fmt.Errorf("executor: converting value for column %q: %w", col.Name, err)
-			}
-			colValues[col.Index] = cv
-		}
-
-		// Fill in snowflake ID if needed.
-		if schema.HasSnowflakeID {
-			nextSeq++
-			colValues[0] = codec.BigIntValue(int64(nextSeq))
-		}
-
-		// Fill in default NULL for any unset columns.
-		for i := range colValues {
-			if colValues[i].Type == 0 && colValues[i].Raw == nil && !colValues[i].IsNull {
-				colValues[i] = codec.NullValue(activeColumns[i].Type)
-			}
-		}
-
-		// Encode the row.
-		codecRow := &codec.Row{Values: colValues}
-		encoded, err := codec.Encode(codecRow)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding row: %w", err)
-		}
-
-		// Build the primary key.
-		pkVals, err := e.extractPKValues(colValues, schema, activeColumns)
+		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, exprValues, plan.Columns, &nextSeq)
 		if err != nil {
 			return nil, err
 		}
-		pkBytes, err := encoding.EncodePK(pkTypes, pkVals)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding PK: %w", err)
-		}
-		rowKey, err := encoding.EncodeRowKey(plan.Database, plan.Table, pkBytes)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding row key: %w", err)
-		}
-
-		// Check for duplicate PK.
-		_, err = e.kv.Get(ctx, rowKey)
-		if err == nil {
-			return nil, fmt.Errorf("%w: key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
-		}
-		if !errors.Is(err, kv.ErrKeyNotFound) {
-			return nil, fmt.Errorf("executor: checking PK existence: %w", err)
-		}
-
-		ops = append(ops, kv.Op{Type: kv.OpPut, Key: rowKey, Value: encoded})
+		ops = append(ops, op)
 	}
 
 	// Update sequence counter if we used snowflake IDs.
@@ -145,9 +83,8 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 	}, nil
 }
 
-// execInsertSelect handles INSERT ... SELECT.
+// execInsertSelect handles INSERT INTO ... SELECT.
 func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPlan) (*Result, error) {
-	// Execute the source query.
 	queryResult, err := e.execQuery(ctx, plan.Source)
 	if err != nil {
 		return nil, fmt.Errorf("executor: executing INSERT ... SELECT source: %w", err)
@@ -177,61 +114,11 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 				ErrColumnCountMismatch, len(srcRow), len(plan.Columns))
 		}
 
-		colValues := make([]codec.ColumnValue, len(activeColumns))
-
-		for i, col := range plan.Columns {
-			val := srcRow[i]
-
-			if val == nil && !col.Nullable {
-				return nil, fmt.Errorf("%w: column %q", ErrNotNullViolation, col.Name)
-			}
-
-			cv, err := anyToColumnValue(val, col.Type)
-			if err != nil {
-				return nil, fmt.Errorf("executor: converting value for column %q: %w", col.Name, err)
-			}
-			colValues[col.Index] = cv
-		}
-
-		if schema.HasSnowflakeID {
-			nextSeq++
-			colValues[0] = codec.BigIntValue(int64(nextSeq))
-		}
-
-		for i := range colValues {
-			if colValues[i].Type == 0 && colValues[i].Raw == nil && !colValues[i].IsNull {
-				colValues[i] = codec.NullValue(activeColumns[i].Type)
-			}
-		}
-
-		codecRow := &codec.Row{Values: colValues}
-		encoded, err := codec.Encode(codecRow)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding row: %w", err)
-		}
-
-		pkVals, err := e.extractPKValues(colValues, schema, activeColumns)
+		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, srcRow, plan.Columns, &nextSeq)
 		if err != nil {
 			return nil, err
 		}
-		pkBytes, err := encoding.EncodePK(pkTypes, pkVals)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding PK: %w", err)
-		}
-		rowKey, err := encoding.EncodeRowKey(plan.Database, plan.Table, pkBytes)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding row key: %w", err)
-		}
-
-		_, err = e.kv.Get(ctx, rowKey)
-		if err == nil {
-			return nil, fmt.Errorf("%w: key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
-		}
-		if !errors.Is(err, kv.ErrKeyNotFound) {
-			return nil, fmt.Errorf("executor: checking PK existence: %w", err)
-		}
-
-		ops = append(ops, kv.Op{Type: kv.OpPut, Key: rowKey, Value: encoded})
+		ops = append(ops, op)
 	}
 
 	if schema.HasSnowflakeID {
@@ -252,7 +139,7 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 	}, nil
 }
 
-// execUpdate executes an UPDATE plan.
+// execUpdate executes an UPDATE plan against target table rows.
 func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*Result, error) {
 	schema := plan.Schema
 	activeColumns := schema.ActiveColumns()
@@ -270,30 +157,8 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 	activeCount := catalog.CountActiveColumns(schema)
 	indexMap := catalog.BuildColumnIndexMap(len(schema.Columns), schema)
 
-	iter, err := e.kv.Scan(ctx, prefix)
+	allPairs, err := e.scanTableKVPairs(ctx, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("executor: scanning for UPDATE: %w", err)
-	}
-
-	type kvPair struct {
-		key   []byte
-		value []byte
-	}
-	var allPairs []kvPair
-	for iter.Valid() {
-		key, value := iter.Next()
-		if key == nil || value == nil {
-			continue
-		}
-		// Copy key and value since the iterator may reuse buffers.
-		keyCopy := make([]byte, len(key))
-		copy(keyCopy, key)
-		valueCopy := make([]byte, len(value))
-		copy(valueCopy, value)
-		allPairs = append(allPairs, kvPair{key: keyCopy, value: valueCopy})
-	}
-	iter.Close()
-	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("executor: scanning for UPDATE: %w", err)
 	}
 
@@ -313,7 +178,6 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 
 		r := row{values: vals}
 
-		// Apply WHERE filter.
 		if plan.Where != nil {
 			match, err := evalCond(plan.Where, r)
 			if err != nil {
@@ -324,7 +188,6 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 			}
 		}
 
-		// Apply assignments.
 		newVals := make([]any, len(vals))
 		copy(newVals, vals)
 		for _, assign := range plan.Assignments {
@@ -334,19 +197,12 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 			}
 
 			col := assign.Column
-			if v == nil && !col.Nullable {
-				return nil, fmt.Errorf("%w: column %q", ErrNotNullViolation, col.Name)
-			}
-			if col.Type == ast.TypeVarchar && col.VarcharLen != nil && v != nil {
-				if s, ok := v.(string); ok && len(s) > *col.VarcharLen {
-					return nil, fmt.Errorf("%w: column %q (max %d, got %d)",
-						ErrVarcharTooLong, col.Name, *col.VarcharLen, len(s))
-				}
+			if err := validateColumnValue(col.Name, col.Type, col.VarcharLen, col.Nullable, v); err != nil {
+				return nil, err
 			}
 			newVals[col.Index] = v
 		}
 
-		// Re-encode the row.
 		colValues := make([]codec.ColumnValue, len(activeColumns))
 		for i, col := range activeColumns {
 			cv, err := anyToColumnValue(newVals[i], col.Type)
@@ -362,21 +218,11 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 			return nil, fmt.Errorf("executor: encoding updated row: %w", err)
 		}
 
-		// Compute the new PK.
-		pkVals, err := e.extractPKValues(colValues, schema, activeColumns)
+		newKey, err := e.buildRowKey(plan.Database, plan.Table, colValues, schema, activeColumns, pkTypes)
 		if err != nil {
 			return nil, err
 		}
-		pkBytes, err := encoding.EncodePK(pkTypes, pkVals)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding PK: %w", err)
-		}
-		newKey, err := encoding.EncodeRowKey(plan.Database, plan.Table, pkBytes)
-		if err != nil {
-			return nil, fmt.Errorf("executor: encoding row key: %w", err)
-		}
 
-		// If the PK changed, delete the old key.
 		if string(newKey) != string(pair.key) {
 			ops = append(ops, kv.Op{Type: kv.OpDelete, Key: pair.key})
 		}
@@ -396,7 +242,7 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 	}, nil
 }
 
-// execDelete executes a DELETE plan.
+// execDelete executes a DELETE plan by deleting matching table rows.
 func (e *Executor) execDelete(ctx context.Context, plan *planner.DeletePlan) (*Result, error) {
 	schema := plan.Schema
 	prefix, err := encoding.EncodeScanPrefix(plan.Database, plan.Table)
@@ -407,34 +253,8 @@ func (e *Executor) execDelete(ctx context.Context, plan *planner.DeletePlan) (*R
 	activeCount := catalog.CountActiveColumns(schema)
 	indexMap := catalog.BuildColumnIndexMap(len(schema.Columns), schema)
 
-	iter, err := e.kv.Scan(ctx, prefix)
+	candidates, err := e.scanTableKVPairs(ctx, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("executor: scanning for DELETE: %w", err)
-	}
-
-	type kvKey struct {
-		key []byte
-	}
-	var candidates []struct {
-		key   []byte
-		value []byte
-	}
-	for iter.Valid() {
-		key, value := iter.Next()
-		if key == nil {
-			continue
-		}
-		keyCopy := make([]byte, len(key))
-		copy(keyCopy, key)
-		valueCopy := make([]byte, len(value))
-		copy(valueCopy, value)
-		candidates = append(candidates, struct {
-			key   []byte
-			value []byte
-		}{key: keyCopy, value: valueCopy})
-	}
-	iter.Close()
-	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("executor: scanning for DELETE: %w", err)
 	}
 
@@ -475,8 +295,113 @@ func (e *Executor) execDelete(ctx context.Context, plan *planner.DeletePlan) (*R
 	}, nil
 }
 
-// extractPKValues extracts primary key column values from a row's
-// codec.ColumnValue slice, converting them to the types EncodePK expects.
+// validateColumnValue checks NOT NULL and VARCHAR max length constraints for a column.
+func validateColumnValue(name string, typ ast.DataTypeKind, varcharLen *int, nullable bool, val any) error {
+	if val == nil && !nullable {
+		return fmt.Errorf("%w: column %q", ErrNotNullViolation, name)
+	}
+	if typ == ast.TypeVarchar && varcharLen != nil && val != nil {
+		if s, ok := val.(string); ok && len(s) > *varcharLen {
+			return fmt.Errorf("%w: column %q (max %d, got %d)",
+				ErrVarcharTooLong, name, *varcharLen, len(s))
+		}
+	}
+	return nil
+}
+
+// scanTableKVPairs performs a prefix scan over KV storage and returns copied key-value pairs.
+func (e *Executor) scanTableKVPairs(ctx context.Context, prefix []byte) ([]kvPair, error) {
+	iter, err := e.kv.Scan(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var pairs []kvPair
+	for iter.Valid() {
+		key, value := iter.Next()
+		if key == nil || value == nil {
+			continue
+		}
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		valueCopy := make([]byte, len(value))
+		copy(valueCopy, value)
+		pairs = append(pairs, kvPair{key: keyCopy, value: valueCopy})
+	}
+	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	return pairs, nil
+}
+
+// buildRowKey extracts primary key column values and encodes the storage row key db.table.pkBytes.
+func (e *Executor) buildRowKey(db, table string, colValues []codec.ColumnValue, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta, pkTypes []ast.DataTypeKind) ([]byte, error) {
+	pkVals, err := e.extractPKValues(colValues, schema, activeColumns)
+	if err != nil {
+		return nil, err
+	}
+	pkBytes, err := encoding.EncodePK(pkTypes, pkVals)
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding PK: %w", err)
+	}
+	rowKey, err := encoding.EncodeRowKey(db, table, pkBytes)
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding row key: %w", err)
+	}
+	return rowKey, nil
+}
+
+// prepareInsertOp validates column values, encodes a row, checks for duplicate primary keys, and returns a put Op.
+func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta, pkTypes []ast.DataTypeKind, rowValues []any, targetCols []planner.ResolvedColumn, nextSeq *uint64) (kv.Op, error) {
+	colValues := make([]codec.ColumnValue, len(activeColumns))
+
+	for i, col := range targetCols {
+		val := rowValues[i]
+		if err := validateColumnValue(col.Name, col.Type, col.VarcharLen, col.Nullable, val); err != nil {
+			return kv.Op{}, err
+		}
+		cv, err := anyToColumnValue(val, col.Type)
+		if err != nil {
+			return kv.Op{}, fmt.Errorf("executor: converting value for column %q: %w", col.Name, err)
+		}
+		colValues[col.Index] = cv
+	}
+
+	if schema.HasSnowflakeID {
+		*nextSeq++
+		colValues[0] = codec.BigIntValue(int64(*nextSeq))
+	}
+
+	for i := range colValues {
+		if colValues[i].Type == 0 && colValues[i].Raw == nil && !colValues[i].IsNull {
+			colValues[i] = codec.NullValue(activeColumns[i].Type)
+		}
+	}
+
+	codecRow := &codec.Row{Values: colValues}
+	encoded, err := codec.Encode(codecRow)
+	if err != nil {
+		return kv.Op{}, fmt.Errorf("executor: encoding row: %w", err)
+	}
+
+	rowKey, err := e.buildRowKey(db, table, colValues, schema, activeColumns, pkTypes)
+	if err != nil {
+		return kv.Op{}, err
+	}
+
+	_, err = e.kv.Get(ctx, rowKey)
+	if err == nil {
+		return kv.Op{}, fmt.Errorf("%w: key already exists in %q.%q", ErrDuplicateKey, db, table)
+	}
+	if !errors.Is(err, kv.ErrKeyNotFound) {
+		return kv.Op{}, fmt.Errorf("executor: checking PK existence: %w", err)
+	}
+
+	return kv.Op{Type: kv.OpPut, Key: rowKey, Value: encoded}, nil
+}
+
+// extractPKValues extracts primary key column values from a row's codec.ColumnValue slice.
 func (e *Executor) extractPKValues(colValues []codec.ColumnValue, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta) ([]any, error) {
 	pkColNames := schema.PrimaryKey
 	if schema.HasSnowflakeID {
