@@ -9,9 +9,20 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
 
-func mustVarchar(v string) codec.ColumnValue { cv, _ := codec.VarcharValue(v); return cv }
-func mustText(v string) codec.ColumnValue { cv, _ := codec.TextValue(v); return cv }
-func mustDecimal(v string) codec.ColumnValue { cv, _ := codec.DecimalValue(v); return cv }
+func mustVarchar(v string) codec.ColumnValue {
+	cv, _ := codec.VarcharValue(v)
+	return cv
+}
+
+func mustText(v string) codec.ColumnValue {
+	cv, _ := codec.TextValue(v)
+	return cv
+}
+
+func mustDecimal(v string) codec.ColumnValue {
+	cv, _ := codec.DecimalValue(v)
+	return cv
+}
 
 func TestToFloat32(t *testing.T) {
 	tests := []struct {

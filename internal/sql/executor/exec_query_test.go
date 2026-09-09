@@ -110,9 +110,10 @@ func TestAggregates(t *testing.T) {
 			Distinct: distinct,
 			Star:     argIdx < 0, // e.g. COUNT(*)
 		}
-		if name == "SUM" || name == "AVG" || name == "MIN" || name == "MAX" {
+		switch name {
+		case "SUM", "AVG", "MIN", "MAX":
 			fn.Type = ast.TypeInt
-		} else if name == "COUNT" {
+		case "COUNT":
 			fn.Type = ast.TypeBigInt
 		}
 		return evalAggregateFunc(fn, groupRows)
