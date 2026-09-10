@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/utils"
 )
 
@@ -66,16 +67,20 @@ func (pc *planContext) resolveSelectExpression(scope *Scope, se *ast.SelectExpre
 	return &ResolvedConditionExpr{Cond: cond}, nil
 }
 
-func (pc *planContext) resolveIntLiteral(lit *ast.IntegerLiteral) (ResolvedExpr, error) {
-	v, err := strconv.ParseInt(lit.Value, 10, 64)
+func (pc *planContext) parseIntLiteral(raw string, displayVal string, span diagnostic.Span) (ResolvedExpr, error) {
+	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return nil, pc.errorf(lit.Span(), CodeLiteralOverflow, "integer literal %q does not fit in 64 bits", lit.Value)
+		return nil, pc.errorf(span, CodeLiteralOverflow, "integer literal %s does not fit in 64 bits", displayVal)
 	}
 	t := ast.TypeBigInt
 	if v >= math.MinInt32 && v <= math.MaxInt32 {
 		t = ast.TypeInt
 	}
 	return &ResolvedIntLiteral{ResolvedExprBase: newExprBase(t), Value: v}, nil
+}
+
+func (pc *planContext) resolveIntLiteral(lit *ast.IntegerLiteral) (ResolvedExpr, error) {
+	return pc.parseIntLiteral(lit.Value, strconv.Quote(lit.Value), lit.Span())
 }
 
 func (pc *planContext) resolveFloatLiteral(lit *ast.FloatLiteral) (ResolvedExpr, error) {
@@ -109,23 +114,7 @@ func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (Reso
 func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (ResolvedExpr, error) {
 	if ue.Op == utils.TOKEN_MINUS {
 		if lit, ok := ue.Operand.(*ast.IntegerLiteral); ok {
-			v, err := strconv.ParseInt("-"+lit.Value, 10, 64)
-			if err != nil {
-				return nil, pc.errorf(
-					ue.Span(),
-					CodeLiteralOverflow,
-					"integer literal -%q does not fit in 64 bits",
-					lit.Value,
-				)
-			}
-			t := ast.TypeBigInt
-			if v >= math.MinInt32 && v <= math.MaxInt32 {
-				t = ast.TypeInt
-			}
-			return &ResolvedIntLiteral{
-				ResolvedExprBase: newExprBase(t),
-				Value:            v,
-			}, nil
+			return pc.parseIntLiteral("-"+lit.Value, "-"+strconv.Quote(lit.Value), ue.Span())
 		}
 	}
 	operand, err := pc.resolveExpr(scope, ue.Operand)

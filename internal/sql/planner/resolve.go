@@ -6,6 +6,7 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
 // ResolvedColumn is the bridge artifact between a catalog schema and the
@@ -110,6 +111,13 @@ func newScope() *Scope {
 	}
 }
 
+// newSingleTableScope creates a Scope containing exactly one resolved table.
+func newSingleTableScope(meta *catalog.TableMeta, binding string) *Scope {
+	s := newScope()
+	_ = s.addTable(newResolvedTable(meta, binding))
+	return s
+}
+
 // addTable registers a resolved table under its binding name. It returns
 // ErrDuplicateTableBinding if that name is already taken in this scope —
 // e.g. two unaliased references to the same table, or two tables sharing
@@ -129,6 +137,15 @@ func (s *Scope) addTable(rt *ResolvedTable) error {
 // Tables returns every table registered in this scope, in FROM-clause order.
 func (s *Scope) Tables() []*ResolvedTable {
 	return s.tables
+}
+
+// resolveTableBinding looks up a table in scope by its binding name.
+func (pc *planContext) resolveTableBinding(scope *Scope, name string, span diagnostic.Span) (*ResolvedTable, error) {
+	table, ok := scope.byBinding[name]
+	if !ok {
+		return nil, pc.errorf(span, CodeUnknownTableBinding, "unknown table or alias %q", name)
+	}
+	return table, nil
 }
 
 // resolveDatabaseName returns the database an identifier resolves against:

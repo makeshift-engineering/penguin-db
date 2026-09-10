@@ -48,6 +48,22 @@ func (pc *planContext) resolveBinaryCond(scope *Scope, bc *ast.BinaryCondition) 
 	return &ResolvedBinaryCond{Left: left, Op: tokenToOp(bc.Op), Right: right}, nil
 }
 
+func (pc *planContext) typeMismatchErr(span ast.Node, left, right ResolvedExpr) error {
+	return pc.errorf(span.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(left), exprTypeName(right))
+}
+
+func (pc *planContext) checkOrderableBound(expr, bound ResolvedExpr, span ast.Node) error {
+	if !isNullExpr(expr) && !isNullExpr(bound) {
+		if !typesOrderable(expr.ResolvedType(), bound.ResolvedType()) {
+			if typesCompatible(expr.ResolvedType(), bound.ResolvedType()) {
+				return pc.errorf(span.Span(), CodeNonOrderableType, "BETWEEN is not supported for %s", exprTypeName(expr))
+			}
+			return pc.typeMismatchErr(span, expr, bound)
+		}
+	}
+	return nil
+}
+
 func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredicate) (ResolvedCond, error) {
 	left, err := pc.resolveExpr(scope, cp.Left)
 	if err != nil {
@@ -68,10 +84,7 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 					"operator %s is not supported for %s", op, exprTypeName(left),
 				)
 			}
-			return nil, pc.errorf(
-				cp.Span(), CodeTypeMismatch,
-				"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
-			)
+			return nil, pc.typeMismatchErr(cp, left, right)
 		case leftNull && !rightNull && !isOrderableType(right.ResolvedType()):
 			return nil, pc.errorf(
 				cp.Span(), CodeNonOrderableType,
@@ -84,10 +97,7 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 			)
 		}
 	} else if !exprsCompatible(left, right) {
-		return nil, pc.errorf(
-			cp.Span(), CodeTypeMismatch,
-			"cannot compare %s and %s", exprTypeName(left), exprTypeName(right),
-		)
+		return nil, pc.typeMismatchErr(cp, left, right)
 	}
 
 	// Warn when comparing with NULL using = or !=. In SQL, NULL = NULL
@@ -143,21 +153,16 @@ func (pc *planContext) resolveIn(scope *Scope, ip *ast.InPredicate) (ResolvedCon
 	values := make([]ResolvedExpr, 0, len(ip.Values))
 	var firstErr error
 	for _, v := range ip.Values {
-		if err := pc.ctx().Err(); err != nil {
+		if err := pc.checkContext(); err != nil {
 			return nil, err
 		}
 		rv, err := pc.resolveExpr(scope, v)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+			recordErr(&firstErr, err)
 			continue
 		}
 		if !exprsCompatible(expr, rv) {
-			err := pc.errorf(v.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(rv))
-			if firstErr == nil {
-				firstErr = err
-			}
+			recordErr(&firstErr, pc.typeMismatchErr(v, expr, rv))
 			continue
 		}
 		// Warn about NULL literals in IN lists. In SQL, any comparison
@@ -200,28 +205,8 @@ func (pc *planContext) resolveBetween(scope *Scope, bp *ast.BetweenPredicate) (R
 	}
 
 	var firstErr error
-	if !isNullExpr(expr) && !isNullExpr(low) {
-		if !typesOrderable(expr.ResolvedType(), low.ResolvedType()) {
-			if typesCompatible(expr.ResolvedType(), low.ResolvedType()) {
-				firstErr = pc.errorf(bp.Low.Span(), CodeNonOrderableType, "BETWEEN is not supported for %s", exprTypeName(expr))
-			} else {
-				firstErr = pc.errorf(bp.Low.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(low))
-			}
-		}
-	}
-	if !isNullExpr(expr) && !isNullExpr(high) {
-		if !typesOrderable(expr.ResolvedType(), high.ResolvedType()) {
-			var err error
-			if typesCompatible(expr.ResolvedType(), high.ResolvedType()) {
-				err = pc.errorf(bp.High.Span(), CodeNonOrderableType, "BETWEEN is not supported for %s", exprTypeName(expr))
-			} else {
-				err = pc.errorf(bp.High.Span(), CodeTypeMismatch, "cannot compare %s and %s", exprTypeName(expr), exprTypeName(high))
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
+	recordErr(&firstErr, pc.checkOrderableBound(expr, low, bp.Low))
+	recordErr(&firstErr, pc.checkOrderableBound(expr, high, bp.High))
 	if firstErr != nil {
 		return nil, firstErr
 	}
