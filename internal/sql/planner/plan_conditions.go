@@ -158,11 +158,11 @@ func (pc *planContext) resolveIn(scope *Scope, ip *ast.InPredicate) (ResolvedCon
 		}
 		rv, err := pc.resolveExpr(scope, v)
 		if err != nil {
-			recordErr(&firstErr, err)
+			firstErr = recordErr(firstErr, err)
 			continue
 		}
 		if !exprsCompatible(expr, rv) {
-			recordErr(&firstErr, pc.typeMismatchErr(v, expr, rv))
+			firstErr = recordErr(firstErr, pc.typeMismatchErr(v, expr, rv))
 			continue
 		}
 		// Warn about NULL literals in IN lists. In SQL, any comparison
@@ -205,8 +205,8 @@ func (pc *planContext) resolveBetween(scope *Scope, bp *ast.BetweenPredicate) (R
 	}
 
 	var firstErr error
-	recordErr(&firstErr, pc.checkOrderableBound(expr, low, bp.Low))
-	recordErr(&firstErr, pc.checkOrderableBound(expr, high, bp.High))
+	firstErr = recordErr(firstErr, pc.checkOrderableBound(expr, low, bp.Low))
+	firstErr = recordErr(firstErr, pc.checkOrderableBound(expr, high, bp.High))
 	if firstErr != nil {
 		return nil, firstErr
 	}

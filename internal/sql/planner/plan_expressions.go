@@ -67,7 +67,7 @@ func (pc *planContext) resolveSelectExpression(scope *Scope, se *ast.SelectExpre
 	return &ResolvedConditionExpr{Cond: cond}, nil
 }
 
-func (pc *planContext) parseIntLiteral(raw string, displayVal string, span diagnostic.Span) (ResolvedExpr, error) {
+func (pc *planContext) parseIntLiteral(raw, displayVal string, span diagnostic.Span) (ResolvedExpr, error) {
 	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return nil, pc.errorf(span, CodeLiteralOverflow, "integer literal %s does not fit in 64 bits", displayVal)

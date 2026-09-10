@@ -250,14 +250,15 @@ func (pc *planContext) errorf(span diagnostic.Span, code diagnostic.Code, format
 // planContext's diagnostic list. Unlike errorf it does not return an error
 // — warnings are advisory and never block planning.
 func (pc *planContext) warnf(span diagnostic.Span, code diagnostic.Code, format string, args ...any) {
-	pc.emitDiag(diagnostic.SeverityWarning, "Semantic Warning", span, code, format, args...)
+	_ = pc.emitDiag(diagnostic.SeverityWarning, "Semantic Warning", span, code, format, args...)
 }
 
-// recordErr sets *first to err if *first is currently nil.
-func recordErr(first *error, err error) {
-	if first != nil && *first == nil {
-		*first = err
+// recordErr returns err if first is nil, preserving the first error encountered.
+func recordErr(first, err error) error {
+	if first == nil {
+		return err
 	}
+	return first
 }
 
 // checkContext checks if the session context has been cancelled.

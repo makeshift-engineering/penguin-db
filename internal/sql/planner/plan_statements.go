@@ -215,14 +215,14 @@ func (pc *planContext) buildTableMeta(db, table string, defs []*ast.ColumnDef) (
 			return nil, err
 		}
 		if seen[def.Name] {
-			recordErr(&firstErr, pc.errorf(def.Span(), CodeDuplicateColumn, "duplicate column name %q", def.Name))
+			firstErr = recordErr(firstErr, pc.errorf(def.Span(), CodeDuplicateColumn, "duplicate column name %q", def.Name))
 			continue
 		}
 		seen[def.Name] = true
 
 		col, err := pc.buildColumnMeta(db, def)
 		if err != nil {
-			recordErr(&firstErr, err)
+			firstErr = recordErr(firstErr, err)
 			continue
 		}
 		meta.Columns = append(meta.Columns, *col)
@@ -266,27 +266,28 @@ func (pc *planContext) buildColumnMeta(db string, def *ast.ColumnDef) (*catalog.
 		case *ast.DefaultConstraint:
 			value, err := pc.resolveDefaultValue(c.Value, col.Type)
 			if err != nil {
-				recordErr(&firstErr, err)
+				firstErr = recordErr(firstErr, err)
 				continue
 			}
 			col.DefaultValue = value
 		case *ast.ForeignRef, *ast.ReferencesConstraint:
 			var targetTable, targetCol string
-			if ref, ok := constr.(*ast.ForeignRef); ok {
+			switch ref := constr.(type) {
+			case *ast.ForeignRef:
 				targetTable, targetCol = ref.Table, ref.Column
-			} else if ref, ok := constr.(*ast.ReferencesConstraint); ok {
+			case *ast.ReferencesConstraint:
 				targetTable, targetCol = ref.Table, ref.Column
 			}
 			fk, fkErr := pc.validateForeignKey(db, targetTable, targetCol, col.Type, constr)
 			if fkErr != nil {
-				recordErr(&firstErr, fkErr)
+				firstErr = recordErr(firstErr, fkErr)
 				continue
 			}
 			col.ForeignKey = fk
 			// A foreign key can only target a table in the same database as
 			// the referencing column.
 		default:
-			recordErr(&firstErr, pc.errorf(constr.Span(), CodeUnsupportedConstraint, "unsupported column constraint %T", constr))
+			firstErr = recordErr(firstErr, pc.errorf(constr.Span(), CodeUnsupportedConstraint, "unsupported column constraint %T", constr))
 		}
 	}
 
@@ -411,7 +412,7 @@ func (pc *planContext) planInsert(stmt *ast.InsertStmt) (Plan, error) {
 			return nil, err
 		}
 		if len(row) != len(targetCols) {
-			recordErr(&firstErr, pc.errorf(
+			firstErr = recordErr(firstErr, pc.errorf(
 				stmt.Table.Span(), CodeColumnCountMismatch,
 				"INSERT has %d target columns but a VALUES row has %d", len(targetCols), len(row),
 			))
@@ -424,11 +425,11 @@ func (pc *planContext) planInsert(stmt *ast.InsertStmt) (Plan, error) {
 			expr, err := pc.resolveSelectExpression(newScope(), val)
 			if err != nil {
 				rowOK = false
-				recordErr(&firstErr, err)
+				firstErr = recordErr(firstErr, err)
 				continue
 			}
 			if !exprsCompatible(expr, &ResolvedColumnRef{Column: targetCols[i]}) {
-				recordErr(&firstErr, pc.errorf(
+				firstErr = recordErr(firstErr, pc.errorf(
 					val.Span(), CodeTypeMismatch,
 					"value type %s is not compatible with column %q (%s)",
 					exprTypeName(expr), targetCols[i].Name, typeName(targetCols[i].Type),
@@ -482,14 +483,14 @@ func (pc *planContext) resolveInsertColumns(meta *catalog.TableMeta, names []str
 	var firstErr error
 	for _, name := range names {
 		if seen[name] {
-			recordErr(&firstErr, pc.errorf(tableID.Span(), CodeDuplicateInsertColumn, "duplicate column %q in INSERT column list", name))
+			firstErr = recordErr(firstErr, pc.errorf(tableID.Span(), CodeDuplicateInsertColumn, "duplicate column %q in INSERT column list", name))
 			continue
 		}
 		seen[name] = true
 
 		idx, ok := indexByName[name]
 		if !ok {
-			recordErr(&firstErr, pc.errorf(tableID.Span(), CodeUnknownInsertColumn, "column %q does not exist on table %q", name, meta.Name))
+			firstErr = recordErr(firstErr, pc.errorf(tableID.Span(), CodeUnknownInsertColumn, "column %q does not exist on table %q", name, meta.Name))
 			continue
 		}
 		cols = append(cols, *resolvedColumnFrom(meta, active[idx], idx))
@@ -515,21 +516,21 @@ func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
 	for _, item := range stmt.Set {
 		col, err := pc.resolveColumn(scope, item.Column)
 		if err != nil {
-			recordErr(&firstErr, err)
+			firstErr = recordErr(firstErr, err)
 			continue
 		}
 		if seenCols[col.Name] {
-			recordErr(&firstErr, pc.errorf(item.Column.Span(), CodeDuplicateSetColumn, "column %q is assigned more than once in SET clause", col.Name))
+			firstErr = recordErr(firstErr, pc.errorf(item.Column.Span(), CodeDuplicateSetColumn, "column %q is assigned more than once in SET clause", col.Name))
 			continue
 		}
 		seenCols[col.Name] = true
 		value, err := pc.resolveExpr(scope, item.Value)
 		if err != nil {
-			recordErr(&firstErr, err)
+			firstErr = recordErr(firstErr, err)
 			continue
 		}
 		if !exprsCompatible(value, &ResolvedColumnRef{Column: *col}) {
-			recordErr(&firstErr, pc.errorf(
+			firstErr = recordErr(firstErr, pc.errorf(
 				item.Value.Span(), CodeTypeMismatch,
 				"value type %s is not compatible with column %q (%s)", exprTypeName(value), col.Name, typeName(col.Type),
 			))
@@ -541,7 +542,7 @@ func (pc *planContext) planUpdate(stmt *ast.UpdateStmt) (Plan, error) {
 	var where ResolvedCond
 	if stmt.Where != nil {
 		where, err = pc.resolveCond(scope, stmt.Where.Cond)
-		recordErr(&firstErr, err)
+		firstErr = recordErr(firstErr, err)
 	}
 
 	if firstErr != nil {
