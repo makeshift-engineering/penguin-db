@@ -226,14 +226,11 @@ const (
 // into a Diagnostic via errorf; Scope itself carries no source positions.
 var ErrDuplicateTableBinding = errors.New("planner: duplicate table name or alias in FROM clause")
 
-// errorf creates a Diagnostic with SeverityError, appends it to the
-// planContext's diagnostic list, and returns it as an error value. This
-// mirrors (*parser.Parser).errorf so the two packages read the same way.
-func (pc *planContext) errorf(span diagnostic.Span, code diagnostic.Code, format string, args ...any) error {
+func (pc *planContext) emitDiag(severity diagnostic.Severity, category string, span diagnostic.Span, code diagnostic.Code, format string, args ...any) *diagnostic.Diagnostic {
 	d := &diagnostic.Diagnostic{
-		Severity: diagnostic.SeverityError,
+		Severity: severity,
 		Code:     code,
-		Category: "Semantic Error",
+		Category: category,
 		Span:     span,
 		Msg:      fmt.Sprintf(format, args...),
 		Source:   pc.source,
@@ -242,17 +239,28 @@ func (pc *planContext) errorf(span diagnostic.Span, code diagnostic.Code, format
 	return d
 }
 
+// errorf creates a Diagnostic with SeverityError, appends it to the
+// planContext's diagnostic list, and returns it as an error value. This
+// mirrors (*parser.Parser).errorf so the two packages read the same way.
+func (pc *planContext) errorf(span diagnostic.Span, code diagnostic.Code, format string, args ...any) error {
+	return pc.emitDiag(diagnostic.SeverityError, "Semantic Error", span, code, format, args...)
+}
+
 // warnf creates a Diagnostic with SeverityWarning and appends it to the
 // planContext's diagnostic list. Unlike errorf it does not return an error
 // — warnings are advisory and never block planning.
 func (pc *planContext) warnf(span diagnostic.Span, code diagnostic.Code, format string, args ...any) {
-	d := &diagnostic.Diagnostic{
-		Severity: diagnostic.SeverityWarning,
-		Code:     code,
-		Category: "Semantic Warning",
-		Span:     span,
-		Msg:      fmt.Sprintf(format, args...),
-		Source:   pc.source,
+	pc.emitDiag(diagnostic.SeverityWarning, "Semantic Warning", span, code, format, args...)
+}
+
+// recordErr sets *first to err if *first is currently nil.
+func recordErr(first *error, err error) {
+	if first != nil && *first == nil {
+		*first = err
 	}
-	pc.diag.Append(d)
+}
+
+// checkContext checks if the session context has been cancelled.
+func (pc *planContext) checkContext() error {
+	return pc.ctx().Err()
 }

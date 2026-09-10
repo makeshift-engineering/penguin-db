@@ -1,6 +1,10 @@
 package planner
 
-import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+import (
+	"errors"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+)
 
 // columnRefsEqual reports whether two resolved columns refer to the exact
 // same physical column — used to check whether a SELECT-list or HAVING
@@ -27,36 +31,77 @@ func exprHasAggregate(expr ResolvedExpr) bool {
 	}
 }
 
-// condHasAggregate is exprHasAggregate for a resolved condition tree.
-func condHasAggregate(cond ResolvedCond) bool {
+// errStopWalk is an internal sentinel error to halt tree traversal early.
+var errStopWalk = errors.New("stop walk")
+
+// walkCond traverses a condition tree, invoking fnExpr on child expressions
+// and fnCond on child conditions.
+func walkCond(cond ResolvedCond, fnExpr func(ResolvedExpr) error, fnCond func(ResolvedCond) error) error {
 	switch c := cond.(type) {
 	case *ResolvedComparison:
-		return exprHasAggregate(c.Left) || exprHasAggregate(c.Right)
+		if err := fnExpr(c.Left); err != nil {
+			return err
+		}
+		return fnExpr(c.Right)
 	case *ResolvedLike:
-		return exprHasAggregate(c.Left) || exprHasAggregate(c.Pattern)
+		if err := fnExpr(c.Left); err != nil {
+			return err
+		}
+		return fnExpr(c.Pattern)
 	case *ResolvedIsNull:
-		return exprHasAggregate(c.Expr)
+		return fnExpr(c.Expr)
 	case *ResolvedIn:
-		if exprHasAggregate(c.Expr) {
-			return true
+		if err := fnExpr(c.Expr); err != nil {
+			return err
 		}
 		for _, v := range c.Values {
-			if exprHasAggregate(v) {
-				return true
+			if err := fnExpr(v); err != nil {
+				return err
 			}
 		}
-		return false
+		return nil
 	case *ResolvedBetween:
-		return exprHasAggregate(c.Expr) || exprHasAggregate(c.Low) || exprHasAggregate(c.High)
+		if err := fnExpr(c.Expr); err != nil {
+			return err
+		}
+		if err := fnExpr(c.Low); err != nil {
+			return err
+		}
+		return fnExpr(c.High)
 	case *ResolvedBinaryCond:
-		return condHasAggregate(c.Left) || condHasAggregate(c.Right)
+		if err := fnCond(c.Left); err != nil {
+			return err
+		}
+		return fnCond(c.Right)
 	case *ResolvedNotCond:
-		return condHasAggregate(c.Operand)
+		return fnCond(c.Operand)
 	case *ResolvedExprCond:
-		return exprHasAggregate(c.Expr)
+		return fnExpr(c.Expr)
 	default:
-		return false
+		return nil
 	}
+}
+
+// condHasAggregate is exprHasAggregate for a resolved condition tree.
+func condHasAggregate(cond ResolvedCond) bool {
+	hasAgg := false
+	_ = walkCond(cond,
+		func(e ResolvedExpr) error {
+			if exprHasAggregate(e) {
+				hasAgg = true
+				return errStopWalk
+			}
+			return nil
+		},
+		func(c ResolvedCond) error {
+			if condHasAggregate(c) {
+				hasAgg = true
+				return errStopWalk
+			}
+			return nil
+		},
+	)
+	return hasAgg
 }
 
 // anyItemHasAggregate reports whether any SELECT-list item contains an
@@ -117,47 +162,8 @@ func (pc *planContext) validateGroupedExpr(expr ResolvedExpr, groupKeys []Resolv
 // — used for HAVING, and for a ResolvedExprCond nested inside a
 // SELECT-list item.
 func (pc *planContext) validateGroupedCond(cond ResolvedCond, groupKeys []ResolvedColumn, span diagnostic.Span) error {
-	switch c := cond.(type) {
-	case *ResolvedComparison:
-		if err := pc.validateGroupedExpr(c.Left, groupKeys, span); err != nil {
-			return err
-		}
-		return pc.validateGroupedExpr(c.Right, groupKeys, span)
-	case *ResolvedLike:
-		if err := pc.validateGroupedExpr(c.Left, groupKeys, span); err != nil {
-			return err
-		}
-		return pc.validateGroupedExpr(c.Pattern, groupKeys, span)
-	case *ResolvedIsNull:
-		return pc.validateGroupedExpr(c.Expr, groupKeys, span)
-	case *ResolvedIn:
-		if err := pc.validateGroupedExpr(c.Expr, groupKeys, span); err != nil {
-			return err
-		}
-		for _, v := range c.Values {
-			if err := pc.validateGroupedExpr(v, groupKeys, span); err != nil {
-				return err
-			}
-		}
-		return nil
-	case *ResolvedBetween:
-		if err := pc.validateGroupedExpr(c.Expr, groupKeys, span); err != nil {
-			return err
-		}
-		if err := pc.validateGroupedExpr(c.Low, groupKeys, span); err != nil {
-			return err
-		}
-		return pc.validateGroupedExpr(c.High, groupKeys, span)
-	case *ResolvedBinaryCond:
-		if err := pc.validateGroupedCond(c.Left, groupKeys, span); err != nil {
-			return err
-		}
-		return pc.validateGroupedCond(c.Right, groupKeys, span)
-	case *ResolvedNotCond:
-		return pc.validateGroupedCond(c.Operand, groupKeys, span)
-	case *ResolvedExprCond:
-		return pc.validateGroupedExpr(c.Expr, groupKeys, span)
-	default:
-		return nil
-	}
+	return walkCond(cond,
+		func(e ResolvedExpr) error { return pc.validateGroupedExpr(e, groupKeys, span) },
+		func(c ResolvedCond) error { return pc.validateGroupedCond(c, groupKeys, span) },
+	)
 }

@@ -252,17 +252,14 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 	var firstErr error
 
 	for _, col := range cols {
-		if err := pc.ctx().Err(); err != nil {
+		if err := pc.checkContext(); err != nil {
 			return nil, nil, err
 		}
 		switch {
 		case col.Star:
 			expanded, expandedSpans := expandStar(scope.Tables(), col.Span())
 			if len(expanded) == 0 {
-				err := pc.errorf(col.Span(), CodeEmptyStarExpansion, "SELECT * matched no columns: no tables in scope")
-				if firstErr == nil {
-					firstErr = err
-				}
+				recordErr(&firstErr, pc.errorf(col.Span(), CodeEmptyStarExpansion, "SELECT * matched no columns: no tables in scope"))
 				continue
 			}
 			items = append(items, expanded...)
@@ -273,12 +270,12 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 			// Identifier{Qualifier: db, Name: table} — Qualifier here is a
 			// database name, not a table alias, unlike every other use of
 			// Identifier.Qualifier in this grammar. See parseSelectColumn.
-			table, ok := scope.byBinding[col.QualifiedStar.Name]
-			if !ok || (col.QualifiedStar.Qualifier != "" && table.Database != col.QualifiedStar.Qualifier) {
-				err := pc.errorf(col.QualifiedStar.Span(), CodeUnknownTableBinding, "unknown table %q", col.QualifiedStar.Name)
-				if firstErr == nil {
-					firstErr = err
+			table, err := pc.resolveTableBinding(scope, col.QualifiedStar.Name, col.QualifiedStar.Span())
+			if err != nil || (col.QualifiedStar.Qualifier != "" && table.Database != col.QualifiedStar.Qualifier) {
+				if err == nil {
+					err = pc.errorf(col.QualifiedStar.Span(), CodeUnknownTableBinding, "unknown table %q", col.QualifiedStar.Name)
 				}
+				recordErr(&firstErr, err)
 				continue
 			}
 			for _, rc := range table.Columns() {
@@ -289,9 +286,7 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 		default:
 			expr, err := pc.resolveSelectExpression(scope, col.Expr)
 			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
+				recordErr(&firstErr, err)
 				continue
 			}
 			alias := col.Alias
