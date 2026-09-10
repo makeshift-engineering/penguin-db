@@ -259,7 +259,7 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 		case col.Star:
 			expanded, expandedSpans := expandStar(scope.Tables(), col.Span())
 			if len(expanded) == 0 {
-				recordErr(&firstErr, pc.errorf(col.Span(), CodeEmptyStarExpansion, "SELECT * matched no columns: no tables in scope"))
+				firstErr = recordErr(firstErr, pc.errorf(col.Span(), CodeEmptyStarExpansion, "SELECT * matched no columns: no tables in scope"))
 				continue
 			}
 			items = append(items, expanded...)
@@ -275,7 +275,7 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 				if err == nil {
 					err = pc.errorf(col.QualifiedStar.Span(), CodeUnknownTableBinding, "unknown table %q", col.QualifiedStar.Name)
 				}
-				recordErr(&firstErr, err)
+				firstErr = recordErr(firstErr, err)
 				continue
 			}
 			for _, rc := range table.Columns() {
@@ -286,7 +286,7 @@ func (pc *planContext) resolveSelectList(scope *Scope, cols []*ast.SelectColumn)
 		default:
 			expr, err := pc.resolveSelectExpression(scope, col.Expr)
 			if err != nil {
-				recordErr(&firstErr, err)
+				firstErr = recordErr(firstErr, err)
 				continue
 			}
 			alias := col.Alias
