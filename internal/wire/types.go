@@ -7,22 +7,25 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
 
+// PostgreSQL Data Type Object Identifiers (OIDs) and metadata mappings.
 const (
-	OIDBool      int32 = 16   // BOOL
-	OIDInt8      int32 = 20   // INT8 / BIGINT
-	OIDInt4      int32 = 23   // INT4 / INT
-	OIDText      int32 = 25   // TEXT / VARCHAR
-	OIDFloat4    int32 = 700  // FLOAT4 / FLOAT
-	OIDFloat8    int32 = 701  // FLOAT8 / DOUBLE
-	OIDTimestamp int32 = 1114 // TIMESTAMP
-	OIDNumeric   int32 = 1700 // NUMERIC / DECIMAL
+	OIDBool      int32 = 16   // Boolean data type
+	OIDInt8      int32 = 20   // 8-byte signed integer (BIGINT)
+	OIDInt4      int32 = 23   // 4-byte signed integer (INT)
+	OIDText      int32 = 25   // Text string / Variable length character
+	OIDFloat4    int32 = 700  // Single precision floating-point
+	OIDFloat8    int32 = 701  // Double precision floating-point
+	OIDTimestamp int32 = 1114 // Timestamp without timezone
+	OIDNumeric   int32 = 1700 // Arbitrary precision numeric / decimal
 )
 
+// TypeInfo encapsulates PostgreSQL type OID and fixed byte width descriptor.
 type TypeInfo struct {
 	OID  int32
 	Size int16
 }
 
+// MapASTTypeToOID maps internal AST data type kinds to standard PostgreSQL OIDs and sizes.
 func MapASTTypeToOID(kind ast.DataTypeKind) TypeInfo {
 	switch kind {
 	case ast.TypeInt:
@@ -46,6 +49,7 @@ func MapASTTypeToOID(kind ast.DataTypeKind) TypeInfo {
 	}
 }
 
+// FormatColumnValue converts an internal Go evaluation result into a text-format byte slice for wire DataRow transmission.
 func FormatColumnValue(val any) ([]byte, bool) {
 	if val == nil {
 		return nil, true
@@ -57,6 +61,8 @@ func FormatColumnValue(val any) ([]byte, bool) {
 			return []byte("t"), false
 		}
 		return []byte("f"), false
+	case int:
+		return []byte(fmt.Sprintf("%d", v)), false
 	case int32:
 		return []byte(fmt.Sprintf("%d", v)), false
 	case int64:
