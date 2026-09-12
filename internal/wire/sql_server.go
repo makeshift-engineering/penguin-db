@@ -17,11 +17,13 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/planner"
 )
 
+// Session encapsulates connection-scoped state for an active client connection.
 type Session struct {
 	User           string
 	ActiveDatabase string
 }
 
+// Server manages TCP listener lifecycle and PostgreSQL wire protocol client connections.
 type Server struct {
 	addr     string
 	exec     *executor.Executor
@@ -29,6 +31,7 @@ type Server struct {
 	listener net.Listener
 }
 
+// NewServer instantiates a wire Server backed by an executor engine and catalog.
 func NewServer(addr string, exec *executor.Executor, cat *catalog.Catalog) *Server {
 	return &Server{
 		addr:    addr,
@@ -37,6 +40,7 @@ func NewServer(addr string, exec *executor.Executor, cat *catalog.Catalog) *Serv
 	}
 }
 
+// Start opens a TCP socket and accepts client connections until context cancellation.
 func (s *Server) Start(ctx context.Context) error {
 	var lc net.ListenConfig
 	l, err := lc.Listen(ctx, "tcp", s.addr)
@@ -62,6 +66,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
+// Close gracefully terminates the underlying TCP network listener.
 func (s *Server) Close() error {
 	if s.listener != nil {
 		return s.listener.Close()
@@ -69,6 +74,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// handleConnection manages connection handshake negotiation and processes incoming query packets.
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
@@ -112,6 +118,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 }
 
+// performHandshake negotiates SSL decline and processes frontend startup parameters.
 func (s *Server) performHandshake(conn net.Conn, session *Session) error {
 	for {
 		length, err := readInt32(conn)
@@ -139,9 +146,15 @@ func (s *Server) performHandshake(conn net.Conn, session *Session) error {
 
 			r := bytes.NewReader(paramBytes)
 
-			for r.Len() > 1 {
-				k, _ := readCString(r)
-				v, _ := readCString(r)
+			for r.Len() > 0 {
+				k, err := readCString(r)
+				if err != nil || k == "" {
+					break
+				}
+				v, err := readCString(r)
+				if err != nil {
+					break
+				}
 				if k == "user" && v != "" {
 					session.User = v
 				}
@@ -169,6 +182,7 @@ func (s *Server) performHandshake(conn net.Conn, session *Session) error {
 	}
 }
 
+// executeQuery compiles and executes SQL string statements, returning wire responses to the client.
 func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Session, query string) {
 	lex := lexer.NewLexer("query", query)
 	tokens := lex.Tokenize()
@@ -181,89 +195,90 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	source := &diagnostic.Source{Name: "query", Text: query}
 	p := parser.New(tokens, source)
 	prog, err := p.Parse()
-	if err != nil || len(prog.Statements) == 0 {
+	if err != nil || prog == nil || len(prog.Statements) == 0 {
 		conn.Write(encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)))
 		conn.Write(encodeReadyForQuery('I'))
 		return
 	}
 
-	statement := prog.Statements[0]
-
-	pl := planner.New(s.catalog)
-	pSess := planner.Session{ActiveDatabase: session.ActiveDatabase, Ctx: ctx}
-	plan, diagList, err := pl.Plan(statement, pSess, source)
-	if err != nil || diagList.HasErrors() {
-		var errDetail interface{} = err
-		if err == nil {
-			errDetail = diagList.AsError()
-		}
-		conn.Write(encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)))
-		conn.Write(encodeReadyForQuery('I'))
-		return
-	}
-
-	result, err := s.exec.Execute(ctx, plan)
-	if err != nil {
-		conn.Write(encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)))
-		conn.Write(encodeReadyForQuery('I'))
-		return
-	}
-
-	if result.SessionUpdate != nil && result.SessionUpdate.ActiveDatabase != "" {
-		session.ActiveDatabase = result.SessionUpdate.ActiveDatabase
-	}
-
-	if result.Type == executor.ResultQuery {
-		descBuff := newMessageBuffer()
-		descBuff.writeInt16(int16(len(result.Columns)))
-		for _, col := range result.Columns {
-			descBuff.writeCString(col.Name)
-			descBuff.writeInt32(0)
-			descBuff.writeInt16(0)
-			info := MapASTTypeToOID(col.Type)
-			descBuff.writeInt32(info.OID)
-			descBuff.writeInt16(info.Size)
-			descBuff.writeInt32(-1)
-			descBuff.writeInt16(0)
-		}
-		conn.Write(descBuff.finish(MessageRowDescription))
-
-		for _, r := range result.Rows {
-			dataBuf := newMessageBuffer()
-			dataBuf.writeInt16(int16(len(r)))
-			for _, val := range r {
-				valBytes, isNull := FormatColumnValue(val)
-				if isNull {
-					dataBuf.writeInt32(-1)
-				} else {
-					dataBuf.writeInt32(int32(len(valBytes)))
-					dataBuf.writeBytes(valBytes)
-				}
+	for _, statement := range prog.Statements {
+		pl := planner.New(s.catalog)
+		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase, Ctx: ctx}
+		plan, diagList, err := pl.Plan(statement, pSess, source)
+		if err != nil || diagList.HasErrors() {
+			var errDetail interface{} = err
+			if err == nil {
+				errDetail = diagList.AsError()
 			}
-			conn.Write(dataBuf.finish(MessageDataRow))
+			conn.Write(encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)))
+			conn.Write(encodeReadyForQuery('I'))
+			return
 		}
+
+		result, err := s.exec.Execute(ctx, plan)
+		if err != nil {
+			conn.Write(encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)))
+			conn.Write(encodeReadyForQuery('I'))
+			return
+		}
+
+		if result.SessionUpdate != nil && result.SessionUpdate.ActiveDatabase != "" {
+			session.ActiveDatabase = result.SessionUpdate.ActiveDatabase
+		}
+
+		if result.Type == executor.ResultQuery {
+			descBuff := newMessageBuffer()
+			descBuff.writeInt16(int16(len(result.Columns)))
+			for _, col := range result.Columns {
+				descBuff.writeCString(col.Name)
+				descBuff.writeInt32(0)
+				descBuff.writeInt16(0)
+				info := MapASTTypeToOID(col.Type)
+				descBuff.writeInt32(info.OID)
+				descBuff.writeInt16(info.Size)
+				descBuff.writeInt32(-1)
+				descBuff.writeInt16(0)
+			}
+			conn.Write(descBuff.finish(MessageRowDescription))
+
+			for _, r := range result.Rows {
+				dataBuf := newMessageBuffer()
+				dataBuf.writeInt16(int16(len(r)))
+				for _, val := range r {
+					valBytes, isNull := FormatColumnValue(val)
+					if isNull {
+						dataBuf.writeInt32(-1)
+					} else {
+						dataBuf.writeInt32(int32(len(valBytes)))
+						dataBuf.writeBytes(valBytes)
+					}
+				}
+				conn.Write(dataBuf.finish(MessageDataRow))
+			}
+		}
+
+		tag := "SELECT 0"
+		switch result.Type {
+		case executor.ResultQuery:
+			tag = fmt.Sprintf("SELECT %d", len(result.Rows))
+		case executor.ResultDML:
+			switch statement.(type) {
+			case *ast.InsertStmt:
+				tag = fmt.Sprintf("INSERT 0 %d", result.RowsAffected)
+			case *ast.DeleteStmt:
+				tag = fmt.Sprintf("DELETE %d", result.RowsAffected)
+			default:
+				tag = fmt.Sprintf("UPDATE %d", result.RowsAffected)
+			}
+		case executor.ResultDDL:
+			if result.Message != "" {
+				tag = result.Message
+			} else {
+				tag = "OK"
+			}
+		}
+		conn.Write(encodeCommandComplete(tag))
 	}
 
-	tag := "SELECT 0"
-	switch result.Type {
-	case executor.ResultQuery:
-		tag = fmt.Sprintf("SELECT %d", len(result.Rows))
-	case executor.ResultDML:
-		switch statement.(type) {
-		case *ast.InsertStmt:
-			tag = fmt.Sprintf("INSERT 0 %d", result.RowsAffected)
-		case *ast.DeleteStmt:
-			tag = fmt.Sprintf("DELETE %d", result.RowsAffected)
-		default:
-			tag = fmt.Sprintf("UPDATE %d", result.RowsAffected)
-		}
-	case executor.ResultDDL:
-		if result.Message != "" {
-			tag = result.Message
-		} else {
-			tag = "OK"
-		}
-	}
-	conn.Write(encodeCommandComplete(tag))
 	conn.Write(encodeReadyForQuery('I'))
 }

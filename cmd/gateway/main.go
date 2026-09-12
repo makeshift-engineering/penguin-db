@@ -10,29 +10,34 @@ import (
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	storagepb "github.com/makeshift-engineering/penguin-db/gen/go/storage/v1"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/kv"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/executor"
 	"github.com/makeshift-engineering/penguin-db/internal/wire"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
+// FixedConfigPath defines the mandatory fixed path location for reading JSON configuration.
 const FixedConfigPath = "configs/config.json"
 
+// GatewayConfig holds configuration settings for the SQL Wire Protocol Gateway daemon.
 type GatewayConfig struct {
 	PGWirePort  int    `json:"pgwire_port"`
 	StorageAddr string `json:"storage_addr"`
 }
 
+// DefaultGatewayConfig provides default fallback values when configuration file is absent.
 func DefaultGatewayConfig() *GatewayConfig {
 	return &GatewayConfig{
 		PGWirePort:  5433,
-		StorageAddr: "127:0.0.0.1:50051",
+		StorageAddr: "127.0.0.1:50051",
 	}
 }
 
+// LoadFixedConfig reads JSON configuration from configs/config.json if present.
 func LoadFixedConfig() *GatewayConfig {
 	cfg := DefaultGatewayConfig()
 	file, err := os.Open(FixedConfigPath)
@@ -40,6 +45,7 @@ func LoadFixedConfig() *GatewayConfig {
 		return cfg
 	}
 	defer file.Close()
+
 	var doc struct {
 		Gateway *GatewayConfig `json:"gateway"`
 		Server  *struct {
@@ -50,6 +56,7 @@ func LoadFixedConfig() *GatewayConfig {
 		log.Printf("Warning: Error parsing %s (%v), using default settings", FixedConfigPath, err)
 		return cfg
 	}
+
 	if doc.Gateway != nil {
 		if doc.Gateway.PGWirePort != 0 {
 			cfg.PGWirePort = doc.Gateway.PGWirePort
@@ -60,11 +67,13 @@ func LoadFixedConfig() *GatewayConfig {
 	} else if doc.Server != nil && doc.Server.Port != 0 {
 		cfg.StorageAddr = fmt.Sprintf("127.0.0.1:%d", doc.Server.Port)
 	}
+
 	return cfg
 }
 
 func main() {
 	portFlag := flag.Int("port", 0, "PenguinDB pgwire TCP server port (overrides config.json)")
+	pFlag := flag.Int("p", 0, "PenguinDB pgwire TCP server port short (overrides config.json)")
 	storageAddrFlag := flag.String("storage-addr", "", "Remote storage node gRPC address (overrides config.json)")
 	flag.Parse()
 
@@ -72,6 +81,8 @@ func main() {
 
 	if *portFlag != 0 {
 		cfg.PGWirePort = *portFlag
+	} else if *pFlag != 0 {
+		cfg.PGWirePort = *pFlag
 	}
 
 	if *storageAddrFlag != "" {
