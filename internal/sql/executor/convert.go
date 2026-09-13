@@ -149,6 +149,14 @@ func toInt32(v any) (int32, error) {
 			return 0, fmt.Errorf("%w: %v overflows INT", ErrTypeMismatch, n)
 		}
 		return int32(n), nil
+	case string:
+		if i, err := strconv.ParseInt(n, 10, 32); err == nil {
+			return int32(i), nil
+		}
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return toInt32(f)
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to INT", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to INT", ErrTypeMismatch, v)
 	}
@@ -168,6 +176,14 @@ func toInt64(v any) (int64, error) {
 			return 0, fmt.Errorf("%w: %v overflows BIGINT", ErrTypeMismatch, n)
 		}
 		return int64(n), nil
+	case string:
+		if i, err := strconv.ParseInt(n, 10, 64); err == nil {
+			return i, nil
+		}
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return toInt64(f)
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to BIGINT", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to BIGINT", ErrTypeMismatch, v)
 	}
@@ -190,6 +206,11 @@ func toFloat32(v any) (float32, error) {
 			return 0, fmt.Errorf("%w: cannot convert decimal %q to FLOAT: %w", ErrTypeMismatch, n, err)
 		}
 		return float32(f), nil
+	case string:
+		if f, err := strconv.ParseFloat(n, 32); err == nil {
+			return float32(f), nil
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to FLOAT", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to FLOAT", ErrTypeMismatch, v)
 	}
@@ -212,6 +233,11 @@ func toFloat64(v any) (float64, error) {
 			return 0, fmt.Errorf("%w: cannot convert decimal %q to numeric: %w", ErrTypeMismatch, n, err)
 		}
 		return f, nil
+	case string:
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return f, nil
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to numeric", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to numeric", ErrTypeMismatch, v)
 	}
