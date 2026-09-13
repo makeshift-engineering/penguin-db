@@ -363,8 +363,12 @@ func TestPlanSelect_OrderByColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSelect: %v", err)
 	}
-	if _, ok := plan.Root.(*SortNode); !ok {
-		t.Errorf("expected *SortNode, got %T", plan.Root)
+	proj, ok := plan.Root.(*ProjectNode)
+	if !ok {
+		t.Fatalf("expected root *ProjectNode, got %T", plan.Root)
+	}
+	if _, ok := proj.Input.(*SortNode); !ok {
+		t.Errorf("expected *SortNode under ProjectNode, got %T", proj.Input)
 	}
 }
 
@@ -392,7 +396,14 @@ func TestPlanSelect_OrderByOrdinal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSelect: %v", err)
 	}
-	sort := plan.Root.(*SortNode)
+	proj, ok := plan.Root.(*ProjectNode)
+	if !ok {
+		t.Fatalf("expected root *ProjectNode, got %T", plan.Root)
+	}
+	sort, ok := proj.Input.(*SortNode)
+	if !ok {
+		t.Fatalf("expected *SortNode under ProjectNode, got %T", proj.Input)
+	}
 	if sort.Items[0].Expr.ResolvedType() != ast.TypeVarchar {
 		t.Errorf("expected ORDER BY 2 to resolve to the name column, got type %v", sort.Items[0].Expr.ResolvedType())
 	}
@@ -429,7 +440,7 @@ func TestPlanSelect_Limit(t *testing.T) {
 	}
 }
 
-// --- pipeline ordering: LIMIT wraps ORDER BY wraps DISTINCT wraps SELECT list --
+// --- pipeline ordering: LIMIT wraps DISTINCT wraps ProjectNode wraps ORDER BY --
 
 func TestPlanSelect_FullPipelineOrdering(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
@@ -448,16 +459,16 @@ func TestPlanSelect_FullPipelineOrdering(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected root *LimitNode, got %T", plan.Root)
 	}
-	sort, ok := limit.Input.(*SortNode)
+	distinct, ok := limit.Input.(*DistinctNode)
 	if !ok {
-		t.Fatalf("expected *SortNode under LIMIT, got %T", limit.Input)
+		t.Fatalf("expected *DistinctNode under LIMIT, got %T", limit.Input)
 	}
-	distinct, ok := sort.Input.(*DistinctNode)
+	proj, ok := distinct.Input.(*ProjectNode)
 	if !ok {
-		t.Fatalf("expected *DistinctNode under ORDER BY, got %T", sort.Input)
-	}
-	if _, ok := distinct.Input.(*ProjectNode); !ok {
 		t.Fatalf("expected *ProjectNode under DISTINCT, got %T", distinct.Input)
+	}
+	if _, ok := proj.Input.(*SortNode); !ok {
+		t.Fatalf("expected *SortNode under ProjectNode, got %T", proj.Input)
 	}
 }
 

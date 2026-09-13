@@ -2,6 +2,7 @@ package planner
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
@@ -74,21 +75,26 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 		if err != nil {
 			return nil, err
 		}
+		if stmt.OrderBy != nil {
+			root, err = pc.buildSortPlan(root, scope, items, stmt.OrderBy, isAggregate, groupCols)
+			if err != nil {
+				return nil, err
+			}
+		}
 	case stmt.Having != nil:
 		return nil, pc.errorf(havingSpan, CodeMissingGroupBy, "HAVING requires GROUP BY or an aggregate function")
 	default:
+		if stmt.OrderBy != nil {
+			root, err = pc.buildSortPlan(root, scope, items, stmt.OrderBy, isAggregate, groupCols)
+			if err != nil {
+				return nil, err
+			}
+		}
 		root = &ProjectNode{Input: root, Items: items}
 	}
 
 	if stmt.Distinct {
 		root = &DistinctNode{Input: root}
-	}
-
-	if stmt.OrderBy != nil {
-		root, err = pc.buildSortPlan(root, scope, items, stmt.OrderBy, isAggregate, groupCols)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	if stmt.Limit != nil {
@@ -332,9 +338,9 @@ func defaultAlias(expr ResolvedExpr) string {
 	case *ResolvedColumnRef:
 		return e.Column.Name
 	case *ResolvedFunctionCall:
-		return e.Name
+		return strings.ToLower(e.Name)
 	default:
-		return ""
+		return "?column?"
 	}
 }
 
@@ -372,6 +378,67 @@ func (pc *planContext) buildAggregatePlan(
 	return result, nil
 }
 
+// findAggregateNode searches a RelNode subtree for the underlying AggregateNode.
+func findAggregateNode(node RelNode) *AggregateNode {
+	switch n := node.(type) {
+	case *AggregateNode:
+		return n
+	case *FilterNode:
+		return findAggregateNode(n.Input)
+	default:
+		return nil
+	}
+}
+
+// exprEqual reports whether two resolved expressions are structurally equal.
+func exprEqual(a, b ResolvedExpr) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	switch ea := a.(type) {
+	case *ResolvedColumnRef:
+		eb, ok := b.(*ResolvedColumnRef)
+		if !ok {
+			return false
+		}
+		return ea.Column.Table == eb.Column.Table && ea.Column.Name == eb.Column.Name && ea.Column.Index == eb.Column.Index
+	case *ResolvedFunctionCall:
+		eb, ok := b.(*ResolvedFunctionCall)
+		if !ok {
+			return false
+		}
+		if ea.Name != eb.Name || ea.Distinct != eb.Distinct || len(ea.Args) != len(eb.Args) {
+			return false
+		}
+		for i := range ea.Args {
+			if !exprEqual(ea.Args[i], eb.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *ResolvedIntLiteral:
+		eb, ok := b.(*ResolvedIntLiteral)
+		return ok && ea.Value == eb.Value
+	case *ResolvedFloatLiteral:
+		eb, ok := b.(*ResolvedFloatLiteral)
+		return ok && ea.Value == eb.Value
+	case *ResolvedStringLiteral:
+		eb, ok := b.(*ResolvedStringLiteral)
+		return ok && ea.Value == eb.Value
+	case *ResolvedBoolLiteral:
+		eb, ok := b.(*ResolvedBoolLiteral)
+		return ok && ea.Value == eb.Value
+	case *ResolvedBinaryExpr:
+		eb, ok := b.(*ResolvedBinaryExpr)
+		return ok && ea.Op == eb.Op && exprEqual(ea.Left, eb.Left) && exprEqual(ea.Right, eb.Right)
+	case *ResolvedUnaryExpr:
+		eb, ok := b.(*ResolvedUnaryExpr)
+		return ok && ea.Op == eb.Op && exprEqual(ea.Operand, eb.Operand)
+	default:
+		return false
+	}
+}
+
 // buildSortPlan resolves an ORDER BY clause. When isAggregate is true, any
 // expression resolved via the scope fallback (i.e. not an ordinal or alias)
 // is validated against the GROUP BY keys through validateGroupedExpr.
@@ -379,23 +446,101 @@ func (pc *planContext) buildSortPlan(root RelNode, scope *Scope, items []Project
 	sortItems := make([]SortItem, 0, len(ob.Items))
 	var firstErr error
 
-	for _, item := range ob.Items {
-		expr, fromScope, err := pc.resolveOrderByExpr(scope, items, item.Expr)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+	if isAggregate {
+		aggNode := findAggregateNode(root)
+		for _, item := range ob.Items {
+			dir := item.Direction
+
+			if lit, ok := item.Expr.(*ast.IntegerLiteral); ok {
+				n, convErr := strconv.Atoi(lit.Value)
+				if convErr == nil && n >= 1 && n <= len(items) {
+					sortItems = append(sortItems, SortItem{
+						Expr:      &ResolvedColumnRef{Column: ResolvedColumn{Index: n - 1}},
+						Direction: dir,
+					})
+					continue
+				}
+				if firstErr == nil {
+					firstErr = pc.errorf(
+						lit.Span(), CodeOrdinalOutOfRange,
+						"ORDER BY position %s is out of range (SELECT list has %d columns)", lit.Value, len(items),
+					)
+				}
+				continue
 			}
-			continue
-		}
-		if isAggregate && fromScope {
-			if err := pc.validateGroupedExpr(expr, groupKeys, item.Expr.Span()); err != nil {
+
+			matchedAlias := false
+			if id, ok := item.Expr.(*ast.Identifier); ok && id.Qualifier == "" {
+				for idx, projItem := range items {
+					if projItem.Alias != "" && projItem.Alias == id.Name {
+						sortItems = append(sortItems, SortItem{
+							Expr:      &ResolvedColumnRef{Column: ResolvedColumn{Index: idx}},
+							Direction: dir,
+						})
+						matchedAlias = true
+						break
+					}
+				}
+			}
+			if matchedAlias {
+				continue
+			}
+
+			resolved, err := pc.resolveExpr(scope, item.Expr)
+			if err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
 				continue
 			}
+
+			if err := pc.validateGroupedExpr(resolved, groupKeys, item.Expr.Span()); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+
+			matchedExpr := false
+			if aggNode != nil {
+				for idx, aggItem := range aggNode.Aggregates {
+					if exprEqual(aggItem.Expr, resolved) {
+						sortItems = append(sortItems, SortItem{
+							Expr:      &ResolvedColumnRef{Column: ResolvedColumn{Index: idx}},
+							Direction: dir,
+						})
+						matchedExpr = true
+						break
+					}
+				}
+			}
+
+			if matchedExpr {
+				continue
+			}
+
+			if aggNode != nil {
+				idx := len(aggNode.Aggregates)
+				aggNode.Aggregates = append(aggNode.Aggregates, ProjectItem{Expr: resolved, Alias: ""})
+				sortItems = append(sortItems, SortItem{
+					Expr:      &ResolvedColumnRef{Column: ResolvedColumn{Index: idx}},
+					Direction: dir,
+				})
+			} else {
+				sortItems = append(sortItems, SortItem{Expr: resolved, Direction: dir})
+			}
 		}
-		sortItems = append(sortItems, SortItem{Expr: expr, Direction: item.Direction})
+	} else {
+		for _, item := range ob.Items {
+			expr, _, err := pc.resolveOrderByExpr(scope, items, item.Expr)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			sortItems = append(sortItems, SortItem{Expr: expr, Direction: item.Direction})
+		}
 	}
 
 	if firstErr != nil {

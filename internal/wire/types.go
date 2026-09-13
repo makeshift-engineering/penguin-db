@@ -2,6 +2,7 @@ package wire
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -68,9 +69,9 @@ func FormatColumnValue(val any) ([]byte, bool) {
 	case int64:
 		return []byte(fmt.Sprintf("%d", v)), false
 	case float32:
-		return []byte(fmt.Sprintf("%g", v)), false
+		return []byte(strconv.FormatFloat(float64(v), 'f', -1, 32)), false
 	case float64:
-		return []byte(fmt.Sprintf("%g", v)), false
+		return []byte(strconv.FormatFloat(v, 'f', -1, 64)), false
 	case string:
 		return []byte(v), false
 	case time.Time:

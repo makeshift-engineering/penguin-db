@@ -118,6 +118,31 @@ func (s *Scope) addTable(rt *ResolvedTable) error {
 	if _, exists := s.byBinding[rt.Binding]; exists {
 		return ErrDuplicateTableBinding
 	}
+
+	offset := 0
+	for _, existing := range s.tables {
+		offset += len(existing.columns)
+	}
+
+	if offset > 0 {
+		newCols := make([]*ResolvedColumn, len(rt.columns))
+		newByName := make(map[string]*ResolvedColumn, len(rt.columns))
+		for i, col := range rt.columns {
+			c := *col
+			c.Index = offset + i
+			newCols[i] = &c
+			newByName[col.Name] = &c
+		}
+		rt = &ResolvedTable{
+			Database: rt.Database,
+			Table:    rt.Table,
+			Binding:  rt.Binding,
+			Schema:   rt.Schema,
+			columns:  newCols,
+			byName:   newByName,
+		}
+	}
+
 	s.tables = append(s.tables, rt)
 	s.byBinding[rt.Binding] = rt
 	for _, col := range rt.columns {

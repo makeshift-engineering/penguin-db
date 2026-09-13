@@ -22,7 +22,11 @@ func (e *Executor) execQuery(ctx context.Context, plan *planner.QueryPlan) (*Res
 	// Convert internal rows to the output format.
 	resultRows := make([][]any, len(rows))
 	for i, r := range rows {
-		resultRows[i] = r.values
+		if len(plan.Columns) > 0 && len(r.values) > len(plan.Columns) {
+			resultRows[i] = r.values[:len(plan.Columns)]
+		} else {
+			resultRows[i] = r.values
+		}
 	}
 
 	columns := make([]ColumnInfo, len(plan.Columns))
@@ -462,6 +466,14 @@ func (e *Executor) execSort(ctx context.Context, node *planner.SortNode) ([]row,
 				return cmp > 0
 			}
 			return cmp < 0
+		}
+		if len(rows[i].values) > 0 && len(rows[j].values) > 0 {
+			if cmpFirst, err := compareValues(rows[i].values[0], rows[j].values[0]); err == nil && cmpFirst != 0 {
+				if len(node.Items) > 0 && node.Items[0].Direction == ast.OrderDesc {
+					return cmpFirst > 0
+				}
+				return cmpFirst < 0
+			}
 		}
 		return false
 	})

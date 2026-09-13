@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -119,6 +120,8 @@ func anyToColumnValue(v any, typ ast.DataTypeKind) (codec.ColumnValue, error) {
 // toInt32 coerces a numeric any value to int32, with range checking.
 func toInt32(v any) (int32, error) {
 	switch n := v.(type) {
+	case int:
+		return int32(n), nil
 	case int32:
 		return n, nil
 	case int64:
@@ -130,6 +133,14 @@ func toInt32(v any) (int32, error) {
 		return int32(n), nil
 	case float64:
 		return int32(n), nil
+	case string:
+		if i, err := strconv.ParseInt(n, 10, 32); err == nil {
+			return int32(i), nil
+		}
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return int32(f), nil
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to INT", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to INT", ErrTypeMismatch, v)
 	}
@@ -138,6 +149,8 @@ func toInt32(v any) (int32, error) {
 // toInt64 coerces a numeric any value to int64.
 func toInt64(v any) (int64, error) {
 	switch n := v.(type) {
+	case int:
+		return int64(n), nil
 	case int32:
 		return int64(n), nil
 	case int64:
@@ -146,6 +159,14 @@ func toInt64(v any) (int64, error) {
 		return int64(n), nil
 	case float64:
 		return int64(n), nil
+	case string:
+		if i, err := strconv.ParseInt(n, 10, 64); err == nil {
+			return i, nil
+		}
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return int64(f), nil
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to BIGINT", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to BIGINT", ErrTypeMismatch, v)
 	}
@@ -154,6 +175,8 @@ func toInt64(v any) (int64, error) {
 // toFloat32 coerces a numeric any value to float32.
 func toFloat32(v any) (float32, error) {
 	switch n := v.(type) {
+	case int:
+		return float32(n), nil
 	case int32:
 		return float32(n), nil
 	case int64:
@@ -162,6 +185,11 @@ func toFloat32(v any) (float32, error) {
 		return n, nil
 	case float64:
 		return float32(n), nil
+	case string:
+		if f, err := strconv.ParseFloat(n, 32); err == nil {
+			return float32(f), nil
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to FLOAT", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to FLOAT", ErrTypeMismatch, v)
 	}
@@ -170,14 +198,24 @@ func toFloat32(v any) (float32, error) {
 // toFloat64 coerces a numeric any value to float64.
 func toFloat64(v any) (float64, error) {
 	switch n := v.(type) {
+	case int:
+		return float64(n), nil
 	case int32:
 		return float64(n), nil
 	case int64:
 		return float64(n), nil
 	case float32:
+		if f, err := strconv.ParseFloat(strconv.FormatFloat(float64(n), 'g', -1, 32), 64); err == nil {
+			return f, nil
+		}
 		return float64(n), nil
 	case float64:
 		return n, nil
+	case string:
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return f, nil
+		}
+		return 0, fmt.Errorf("%w: cannot convert %T to numeric", ErrTypeMismatch, v)
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to numeric", ErrTypeMismatch, v)
 	}
@@ -188,6 +226,12 @@ func toFloat64(v any) (float64, error) {
 // NULL handling is done by the caller.
 func compareValues(a, b any) (int, error) {
 	switch av := a.(type) {
+	case int:
+		bv, err := toInt64(b)
+		if err != nil {
+			return 0, err
+		}
+		return cmpOrdered(int64(av), bv), nil
 	case int32:
 		bv, err := toInt64(b)
 		if err != nil {
@@ -213,11 +257,26 @@ func compareValues(a, b any) (int, error) {
 		}
 		return cmpOrdered(av, bv), nil
 	case string:
-		bv, ok := b.(string)
-		if !ok {
+		switch bv := b.(type) {
+		case string:
+			return cmpOrdered(av, bv), nil
+		case int, int32, int64:
+			bi, _ := toInt64(bv)
+			ai, err := toInt64(av)
+			if err != nil {
+				return cmpOrdered(av, fmt.Sprintf("%v", bv)), nil
+			}
+			return cmpOrdered(ai, bi), nil
+		case float32, float64:
+			bf, _ := toFloat64(bv)
+			af, err := toFloat64(av)
+			if err != nil {
+				return cmpOrdered(av, fmt.Sprintf("%v", bv)), nil
+			}
+			return cmpOrdered(af, bf), nil
+		default:
 			return 0, fmt.Errorf("%w: cannot compare string with %T", ErrTypeMismatch, b)
 		}
-		return cmpOrdered(av, bv), nil
 	case bool:
 		bv, ok := b.(bool)
 		if !ok {
