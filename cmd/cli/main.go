@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const FixedConfigPath = "configs/config.json"
