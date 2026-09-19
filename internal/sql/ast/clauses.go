@@ -13,6 +13,7 @@ const (
 	TypeFloat                         // FLOAT
 	TypeDouble                        // DOUBLE
 	TypeDecimal                       // DECIMAL
+	TypeNull                          // NULL (sentinel; not a user-facing SQL type)
 )
 
 // DataType represents a column's SQL data type. VarcharLen is non-nil
@@ -27,6 +28,9 @@ type DataType struct {
 }
 
 func (d *DataType) Validate() error {
+	if d.Kind == TypeNull {
+		return ErrTypeNullNotAllowed
+	}
 	if d.Kind == TypeVarchar {
 		if d.VarcharLen == nil {
 			return ErrVarcharLengthRequired
