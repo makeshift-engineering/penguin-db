@@ -16,12 +16,9 @@ import (
 
 // Session holds the per-connection state a planning call needs beyond the
 // AST itself. ActiveDatabase is the database selected by the most recent
-// USE statement, or empty if none has been selected yet. Ctx carries the
-// request-scoped context for cancellation and deadline propagation; when
-// nil, planning uses context.Background().
+// USE statement, or empty if none has been selected yet.
 type Session struct {
 	ActiveDatabase string
-	Ctx            context.Context
 }
 
 // Planner produces logical plans from parsed SQL statements. It wraps a
@@ -42,8 +39,11 @@ func New(cat *catalog.Catalog) *Planner {
 // attach source snippets to diagnostics and may be nil. Diagnostics
 // accumulated during planning are returned alongside any error, since a
 // single statement can surface more than one problem.
-func (p *Planner) Plan(stmt ast.Statement, session Session, src *diagnostic.Source) (Plan, diagnostic.List, error) {
+func (p *Planner) Plan(ctx context.Context, stmt ast.Statement, session Session, src *diagnostic.Source) (Plan, diagnostic.List, error) {
 	pc := newPlanContext(p.catalog, session, src)
+	if ctx != nil {
+		pc.ctx = ctx
+	}
 	plan, err := pc.planStatement(stmt)
 	return plan, pc.diag, err
 }
@@ -54,6 +54,7 @@ func (p *Planner) Plan(stmt ast.Statement, session Session, src *diagnostic.Sour
 // A fresh planContext is created per call so the Planner itself never
 // accumulates state across queries.
 type planContext struct {
+	ctx     context.Context
 	catalog *catalog.Catalog
 	session Session
 	source  *diagnostic.Source
@@ -63,24 +64,16 @@ type planContext struct {
 // newPlanContext creates a planContext for a single planning call.
 func newPlanContext(cat *catalog.Catalog, session Session, src *diagnostic.Source) *planContext {
 	return &planContext{
+		ctx:     context.Background(),
 		catalog: cat,
 		session: session,
 		source:  src,
 	}
 }
 
-// ctx returns the request-scoped context from the session, defaulting to
-// context.Background() when the session was constructed without one.
-func (pc *planContext) ctx() context.Context {
-	if pc.session.Ctx != nil {
-		return pc.session.Ctx
-	}
-	return context.Background()
-}
-
 // planStatement dispatches to the planning method for stmt's concrete type.
 func (pc *planContext) planStatement(stmt ast.Statement) (Plan, error) {
-	if err := pc.ctx().Err(); err != nil {
+	if err := pc.checkContext(); err != nil {
 		return nil, err
 	}
 	switch s := stmt.(type) {

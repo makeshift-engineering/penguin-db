@@ -84,6 +84,26 @@ func (pc *planContext) planDropTable(stmt *ast.DropTableStmt) (Plan, error) {
 		}
 		return nil, pc.errorf(stmt.Table.Span(), CodeUnknownTable, "table %q does not exist in database %q", stmt.Table.Name, db)
 	}
+
+	// Check for foreign key references from other tables.
+	tables, listErr := pc.catalog.ListTables(db)
+	if listErr == nil {
+		for _, t := range tables {
+			if t.Name == stmt.Table.Name {
+				continue
+			}
+			for _, col := range t.ActiveColumns() {
+				if col.ForeignKey != nil && col.ForeignKey.ReferencedTable == stmt.Table.Name {
+					return nil, pc.errorf(
+						stmt.Table.Span(), CodeInvalidForeignKey,
+						"cannot drop table %q: column %q on table %q has a foreign key reference to it",
+						stmt.Table.Name, col.Name, t.Name,
+					)
+				}
+			}
+		}
+	}
+
 	return &DropTablePlan{Database: db, Table: stmt.Table.Name}, nil
 }
 

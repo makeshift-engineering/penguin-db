@@ -125,7 +125,7 @@ func (pc *planContext) planSelect(stmt *ast.SelectStmt) (*QueryPlan, error) {
 func (pc *planContext) buildFromPlan(refs []*ast.TableRef) (root RelNode, scope *Scope, err error) {
 	scope = newScope()
 	for _, ref := range refs {
-		if ctxErr := pc.ctx().Err(); ctxErr != nil {
+		if ctxErr := pc.checkContext(); ctxErr != nil {
 			return nil, scope, ctxErr
 		}
 		next, refErr := pc.walkTableRefPlan(ref, scope)

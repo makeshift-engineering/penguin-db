@@ -263,5 +263,8 @@ func recordErr(first, err error) error {
 
 // checkContext checks if the session context has been cancelled.
 func (pc *planContext) checkContext() error {
-	return pc.ctx().Err()
+	if pc.ctx != nil {
+		return pc.ctx.Err()
+	}
+	return nil
 }

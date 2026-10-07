@@ -247,6 +247,29 @@ func TestPlanDropTable_Success(t *testing.T) {
 	}
 }
 
+func TestPlanDropTable_ReferencedByForeignKey_Errors(t *testing.T) {
+	cat := testCatalog()
+	cat.ApplyCreateTable(&catalog.TableMeta{
+		Database: "shop",
+		Name:     "user_profiles",
+		Columns: []catalog.ColumnMeta{
+			{Name: "id", Type: ast.TypeInt, PrimaryKey: true},
+			{Name: "user_id", Type: ast.TypeInt, ForeignKey: &catalog.ForeignKeyRef{
+				ReferencedDB:     "shop",
+				ReferencedTable:  "users",
+				ReferencedColumn: "id",
+			}},
+		},
+		PrimaryKey: []string{"id"},
+		Version:    1,
+	})
+	pc := newPlanContext(cat, Session{ActiveDatabase: "shop"}, nil)
+	_, err := pc.planDropTable(&ast.DropTableStmt{Table: ident("users")})
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeInvalidForeignKey {
+		t.Fatalf("expected CodeInvalidForeignKey, got err=%v diag=%+v", err, pc.diag)
+	}
+}
+
 func TestPlanDropTable_Unknown(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
 	_, err := pc.planDropTable(&ast.DropTableStmt{Table: ident("nope")})
@@ -809,11 +832,11 @@ func TestInsertPlan_Validate_BothSet_Errors(t *testing.T) {
 func TestPlan_CancelledContext_ReturnsEarly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
-	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop", Ctx: ctx}, nil)
-	_, err := pc.planStatement(&ast.SelectStmt{
+	p := New(testCatalog())
+	_, _, err := p.Plan(ctx, &ast.SelectStmt{
 		Columns: []*ast.SelectColumn{{Star: true}},
 		From:    []*ast.TableRef{tableRef(primary(ident("users"), "u"))},
-	})
+	}, Session{ActiveDatabase: "shop"}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
