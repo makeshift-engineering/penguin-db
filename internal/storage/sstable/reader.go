@@ -360,7 +360,7 @@ func (r *Reader) findOffsetAtOrAfter(startOffset uint64, startKey []byte) (uint6
 	for curr < r.indexOffset {
 		var header [entryHeaderSize]byte
 		if _, err := r.file.ReadAt(header[:], int64(curr)); err != nil {
-			return 0, fmt.Errorf("%w: failed to read entry header at offset %d: %v", ErrCorrupted, curr, err)
+			return 0, fmt.Errorf("%w: failed to read entry header at offset %d: %w", ErrCorrupted, curr, err)
 		}
 
 		keyLen := uint64(binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset]))
@@ -374,7 +374,7 @@ func (r *Reader) findOffsetAtOrAfter(startOffset uint64, startKey []byte) (uint6
 		keyBuf := make([]byte, keyLen)
 		if keyLen > 0 {
 			if _, err := r.file.ReadAt(keyBuf, int64(curr+uint64(entryHeaderSize))); err != nil {
-				return 0, fmt.Errorf("%w: failed to read key at offset %d: %v", ErrCorrupted, curr, err)
+				return 0, fmt.Errorf("%w: failed to read key at offset %d: %w", ErrCorrupted, curr, err)
 			}
 		}
 
