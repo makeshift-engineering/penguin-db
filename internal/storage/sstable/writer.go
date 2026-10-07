@@ -16,6 +16,21 @@ type indexEntry struct {
 	offset uint64
 }
 
+// WriterOptions holds optional parameters for configuring an SSTable Writer.
+type WriterOptions struct {
+	IndexBlockSize uint64
+}
+
+// WriterOption is a functional option for configuring an SSTable Writer.
+type WriterOption func(*WriterOptions)
+
+// WithIndexBlockSize configures the sparse index block size interval in bytes.
+func WithIndexBlockSize(size uint64) WriterOption {
+	return func(o *WriterOptions) {
+		o.IndexBlockSize = size
+	}
+}
+
 // Writer writes a sorted stream of key-value entries to an SSTable file.
 // Entries must be added in sorted key order via Add. After all entries have
 // been added, Close must be called to write the Index Block, Bloom Block,
@@ -29,6 +44,7 @@ type Writer struct {
 	entryCount      uint32       // total number of entries written
 	index           []indexEntry // in-memory index built during Add calls
 	lastKey         []byte       // last key added, used to enforce sorted order
+	indexBlockSize  uint64       // byte interval for recording sparse index entries
 }
 
 // MaxWriterExpectedKeys is the upper bound limit for the estimated keys parameter
@@ -39,9 +55,22 @@ const MaxWriterExpectedKeys = 100000000
 // NewWriter creates a new SSTable Writer for the specified file path.
 // It initializes a bloom filter and an index based on expectedKeys to minimize
 // memory reallocations. expectedKeys must be between 0 and MaxWriterExpectedKeys.
-func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
+func NewWriter(filePath string, expectedKeys int, opts ...WriterOption) (*Writer, error) {
 	if expectedKeys < 0 || expectedKeys > MaxWriterExpectedKeys {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidExpectedKeys, expectedKeys)
+	}
+
+	cfg := WriterOptions{
+		IndexBlockSize: IndexBlockSize,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	if cfg.IndexBlockSize == 0 {
+		return nil, fmt.Errorf("%w: got %d", ErrInvalidIndexBlockSize, cfg.IndexBlockSize)
 	}
 
 	file, err := os.OpenFile(
@@ -53,21 +82,27 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 		return nil, err
 	}
 
-	// For a sparse index with IndexBlockSize=4096, the number of index entries is
-	// significantly less than expectedKeys. We estimate capacity conservatively.
+	// For a sparse index, the number of index entries is significantly less than
+	// expectedKeys. We estimate capacity conservatively.
 	estimatedIndexCap := expectedKeys/16 + 1
 
 	return &Writer{
-		file:        file,
-		writer:      bufio.NewWriter(file),
-		bloomFilter: NewBloomFilter(expectedKeys, 10),
-		index:       make([]indexEntry, 0, estimatedIndexCap),
+		file:           file,
+		writer:         bufio.NewWriter(file),
+		bloomFilter:    NewBloomFilter(expectedKeys, 10),
+		index:          make([]indexEntry, 0, estimatedIndexCap),
+		indexBlockSize: cfg.IndexBlockSize,
 	}, nil
+}
+
+// IndexBlockSize returns the configured sparse index block size interval for this writer.
+func (w *Writer) IndexBlockSize() uint64 {
+	return w.indexBlockSize
 }
 
 // Add writes a single data entry to the SSTable. Entries must be added in
 // sorted key order. Each call appends to the Data Block, sparsely records index
-// entries at IndexBlockSize interval boundaries, and inserts the key into the Bloom Filter.
+// entries at indexBlockSize interval boundaries, and inserts the key into the Bloom Filter.
 //
 // Data Entry Layout:
 //
@@ -87,8 +122,8 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 	}
 
 	// Record an index entry for the first key of the SSTable, and subsequently
-	// only when the current data offset has advanced past the IndexBlockSize boundary.
-	if len(w.index) == 0 || w.offset-w.lastIndexOffset >= IndexBlockSize {
+	// only when the current data offset has advanced past the indexBlockSize boundary.
+	if len(w.index) == 0 || w.offset-w.lastIndexOffset >= w.indexBlockSize {
 		keyCopy := make([]byte, len(key))
 		copy(keyCopy, key)
 		w.index = append(w.index, indexEntry{

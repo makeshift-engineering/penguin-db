@@ -185,8 +185,7 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 				return fmt.Errorf("memtable rejected recovered delete operation: %w", delErr)
 			}
 		default:
-			slog.Warn("skipping WAL record with unknown opcode during replay",
-				"opcode", record.Opcode, "key", string(record.Key))
+			return fmt.Errorf("unknown opcode 0x%02x in WAL segment %s", record.Opcode, filepath.Base(filePath))
 		}
 
 		validBytes += int64(totalFrameSizeBytes)

@@ -1843,3 +1843,45 @@ func TestWriter_SparseIndexingIntervals(t *testing.T) {
 		t.Errorf("NewIteratorAt seek key: got %s, want %s", iter.Key(), midKey)
 	}
 }
+
+func TestWriter_ConfigurableIndexBlockSize(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "custom_index_block.sst")
+
+	// Test zero block size error
+	_, err := NewWriter(path, 10, WithIndexBlockSize(0))
+	if !errors.Is(err, ErrInvalidIndexBlockSize) {
+		t.Fatalf("expected ErrInvalidIndexBlockSize, got: %v", err)
+	}
+
+	// Test custom block size (e.g. 64 bytes)
+	customSize := uint64(64)
+	w, err := NewWriter(path, 10, WithIndexBlockSize(customSize))
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+	if w.IndexBlockSize() != customSize {
+		t.Errorf("IndexBlockSize: got %d, want %d", w.IndexBlockSize(), customSize)
+	}
+
+	for i := 0; i < 20; i++ {
+		k := []byte(fmt.Sprintf("key-%02d", i))
+		v := []byte(fmt.Sprintf("value-%02d", i))
+		if err := w.Add(k, v, OpcodePut); err != nil {
+			t.Fatalf("Add failed: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer r.Close()
+
+	if len(r.index) <= 1 {
+		t.Errorf("expected multiple index entries for custom block size 64 bytes, got %d", len(r.index))
+	}
+}
