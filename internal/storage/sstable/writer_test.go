@@ -173,20 +173,22 @@ func TestWriter_SortedEntries(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 
-	// Parse footer to get index offset and entry count
+	// Parse footer to get index offset, bloom offset, and entry count
 	footer := data[len(data)-footerSize:]
 	indexOff := binary.LittleEndian.Uint64(footer[footerIndexOffsetOffset:footerBloomOffsetOffset])
+	bloomOff := binary.LittleEndian.Uint64(footer[footerBloomOffsetOffset:footerBloomNumHashesOffset])
 	entryCount := binary.LittleEndian.Uint32(footer[footerEntryCountOffset:footerMagicOffset])
 
 	if entryCount != uint32(n) {
 		t.Fatalf("entry count: got %d, want %d", entryCount, n)
 	}
 
-	// Walk the index block and verify each entry's data offset resolves correctly
+	// Walk the sparse index block and verify each index entry's data offset resolves correctly
 	pos := int(indexOff)
-	for i := range n {
-		if pos+indexEntryHeaderSize > len(data)-footerSize {
-			t.Fatalf("index entry %d: overflows file at pos %d", i, pos)
+	idxCount := 0
+	for pos < int(bloomOff) {
+		if pos+indexEntryHeaderSize > int(bloomOff) {
+			t.Fatalf("index entry %d: overflows index block at pos %d", idxCount, pos)
 		}
 		idxKeyLen := binary.LittleEndian.Uint16(data[pos : pos+indexKeyLenSize])
 		pos += indexKeyLenSize
@@ -194,11 +196,6 @@ func TestWriter_SortedEntries(t *testing.T) {
 		pos += indexOffsetSize
 		idxKey := data[pos : pos+int(idxKeyLen)]
 		pos += int(idxKeyLen)
-
-		// Verify this index key matches the expected sorted key
-		if !bytes.Equal(idxKey, entries[i].key) {
-			t.Errorf("index[%d] key: got %q, want %q", i, idxKey, entries[i].key)
-		}
 
 		// Read the actual data entry at dataOff and verify key+value
 		dPos := int(dataOff)
@@ -211,16 +208,19 @@ func TestWriter_SortedEntries(t *testing.T) {
 		dKey := data[dPos : dPos+int(dKeyLen)]
 		dPos += int(dKeyLen)
 		dVal := data[dPos : dPos+int(dValLen)]
+		_ = dVal
 
-		if !bytes.Equal(dKey, entries[i].key) {
-			t.Errorf("data[%d] key: got %q, want %q", i, dKey, entries[i].key)
-		}
-		if !bytes.Equal(dVal, entries[i].val) {
-			t.Errorf("data[%d] val: got %q, want %q", i, dVal, entries[i].val)
+		if !bytes.Equal(dKey, idxKey) {
+			t.Errorf("data key at offset %d: got %q, want index key %q", dataOff, dKey, idxKey)
 		}
 		if dOpcode != OpcodePut {
-			t.Errorf("data[%d] opcode: got 0x%02X, want 0x%02X", i, dOpcode, OpcodePut)
+			t.Errorf("data opcode at offset %d: got 0x%02X, want 0x%02X", dataOff, dOpcode, OpcodePut)
 		}
+		idxCount++
+	}
+
+	if idxCount == 0 {
+		t.Fatal("expected at least 1 sparse index entry")
 	}
 }
 
@@ -563,18 +563,19 @@ func TestWriter_OffsetTracking(t *testing.T) {
 		running += uint64(entryHeaderSize) + uint64(len(e.key)) + uint64(len(e.val))
 	}
 
-	// Read index entries and compare offsets
+	// Read first sparse index entry and compare offset (must be 0 for first key "a")
 	pos := int(indexOff)
-	for i := 0; i < len(entries); i++ {
-		kl := binary.LittleEndian.Uint16(data[pos : pos+indexKeyLenSize])
-		pos += indexKeyLenSize
-		off := binary.LittleEndian.Uint64(data[pos : pos+indexOffsetSize])
-		pos += indexOffsetSize
-		pos += int(kl) // skip key data
+	kl := binary.LittleEndian.Uint16(data[pos : pos+indexKeyLenSize])
+	pos += indexKeyLenSize
+	off := binary.LittleEndian.Uint64(data[pos : pos+indexOffsetSize])
+	pos += indexOffsetSize
+	key := string(data[pos : pos+int(kl)])
 
-		if off != expectedOffsets[i] {
-			t.Errorf("index[%d] offset: got %d, want %d", i, off, expectedOffsets[i])
-		}
+	if off != 0 {
+		t.Errorf("first index offset: got %d, want 0", off)
+	}
+	if key != "a" {
+		t.Errorf("first index key: got %q, want %q", key, "a")
 	}
 }
 
@@ -807,13 +808,12 @@ func TestWriter_FileSizeConsistency(t *testing.T) {
 	}
 	fileSize := info.Size()
 
-	// Calculate expected size
+	// Calculate expected size (with sparse index, only the first entry key generates an index entry for small datasets)
 	dataSize := int64(0)
-	indexSize := int64(0)
 	for _, e := range entries {
 		dataSize += int64(entryHeaderSize + len(e.key) + len(e.val))
-		indexSize += int64(indexEntryHeaderSize + len(e.key))
 	}
+	indexSize := int64(indexEntryHeaderSize + len(entries[0].key))
 
 	// Bloom size: NewBloomFilter(3, 10) → 3*10 = 30 bits < 64 → 64 bits → 8 bytes
 	bloomBitsTotal := len(entries) * 10
@@ -1063,13 +1063,10 @@ func TestWriter_IndexBlockStructure(t *testing.T) {
 	indexOff := binary.LittleEndian.Uint64(footer[footerIndexOffsetOffset:footerBloomOffsetOffset])
 	bloomOff := binary.LittleEndian.Uint64(footer[footerBloomOffsetOffset:footerBloomNumHashesOffset])
 
-	// Walk the index block (between indexOff and bloomOff)
+	// Walk the sparse index block (between indexOff and bloomOff)
 	pos := int(indexOff)
-	for i := 0; i < len(keys); i++ {
-		if pos >= int(bloomOff) {
-			t.Fatalf("index entry %d: exceeded bloom boundary at pos %d", i, pos)
-		}
-
+	idxCount := 0
+	for pos < int(bloomOff) {
 		kl := binary.LittleEndian.Uint16(data[pos : pos+indexKeyLenSize])
 		pos += indexKeyLenSize
 		_ = binary.LittleEndian.Uint64(data[pos : pos+indexOffsetSize]) // data offset
@@ -1078,9 +1075,14 @@ func TestWriter_IndexBlockStructure(t *testing.T) {
 		gotKey := data[pos : pos+int(kl)]
 		pos += int(kl)
 
-		if !bytes.Equal(gotKey, keys[i]) {
-			t.Errorf("index key[%d]: got %q, want %q", i, gotKey, keys[i])
+		if idxCount == 0 && !bytes.Equal(gotKey, keys[0]) {
+			t.Errorf("first index key: got %q, want %q", gotKey, keys[0])
 		}
+		idxCount++
+	}
+
+	if idxCount == 0 {
+		t.Fatal("expected at least 1 sparse index entry")
 	}
 
 	// After reading all index entries, pos should be exactly at bloomOff
@@ -1760,4 +1762,84 @@ func TestWriter_DataSizeAndEntryCount(t *testing.T) {
 	}
 
 	_ = w.Close()
+}
+
+// TestWriter_SparseIndexingIntervals verifies that index entries are written sparsely
+// at 4 KiB boundaries and that all entries are retrievable via Get, MinKey, MaxKey, and Iterator.
+func TestWriter_SparseIndexingIntervals(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "sparse_index.sst")
+
+	n := 1000
+	w, err := NewWriter(path, n)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	for i := 0; i < n; i++ {
+		k := []byte(fmt.Sprintf("key-%06d", i))
+		v := bytes.Repeat([]byte("v"), 20) // ~34 bytes per entry, total ~34 KB data
+		if err := w.Add(k, v, OpcodePut); err != nil {
+			t.Fatalf("Add at %d: %v", i, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	if r.EntryCount() != uint32(n) {
+		t.Errorf("EntryCount: got %d, want %d", r.EntryCount(), n)
+	}
+
+	// For ~34 KB of data with 4 KB IndexBlockSize, index entries should be around 8-10, far fewer than 1000.
+	if len(r.index) >= n/10 {
+		t.Errorf("expected sparse index length << %d, got %d", n, len(r.index))
+	}
+	if len(r.index) < 2 {
+		t.Errorf("expected at least 2 sparse index blocks for 34KB data, got %d", len(r.index))
+	}
+
+	// Verify MinKey and MaxKey
+	firstKey := []byte(fmt.Sprintf("key-%06d", 0))
+	lastKey := []byte(fmt.Sprintf("key-%06d", n-1))
+	if !bytes.Equal(r.MinKey(), firstKey) {
+		t.Errorf("MinKey: got %s, want %s", r.MinKey(), firstKey)
+	}
+	if !bytes.Equal(r.MaxKey(), lastKey) {
+		t.Errorf("MaxKey: got %s, want %s", r.MaxKey(), lastKey)
+	}
+
+	// Verify Point Lookups across all entries
+	for i := 0; i < n; i++ {
+		k := []byte(fmt.Sprintf("key-%06d", i))
+		val, found, deleted, err := r.Get(k)
+		if err != nil || !found || deleted {
+			t.Fatalf("Get(%s): found=%v, deleted=%v, err=%v", k, found, deleted, err)
+		}
+		if len(val) != 20 {
+			t.Errorf("value length mismatch for %s: got %d, want 20", k, len(val))
+		}
+	}
+
+	// Verify Range Seeking via NewIteratorAt
+	midKey := []byte(fmt.Sprintf("key-%06d", 500))
+	iter, err := r.NewIteratorAt(midKey)
+	if err != nil {
+		t.Fatalf("NewIteratorAt: %v", err)
+	}
+	defer iter.Close()
+
+	iter.Next()
+	if !iter.Valid() {
+		t.Fatal("expected valid iterator after seek")
+	}
+	if !bytes.Equal(iter.Key(), midKey) {
+		t.Errorf("NewIteratorAt seek key: got %s, want %s", iter.Key(), midKey)
+	}
 }

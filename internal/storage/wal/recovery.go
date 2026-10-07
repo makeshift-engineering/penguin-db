@@ -184,6 +184,9 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 			if delErr := recordConsumer.Delete(record.Key); delErr != nil {
 				return fmt.Errorf("memtable rejected recovered delete operation: %w", delErr)
 			}
+		default:
+			slog.Warn("skipping WAL record with unknown opcode during replay",
+				"opcode", record.Opcode, "key", string(record.Key))
 		}
 
 		validBytes += int64(totalFrameSizeBytes)

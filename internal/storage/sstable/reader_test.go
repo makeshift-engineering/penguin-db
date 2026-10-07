@@ -1270,14 +1270,12 @@ func TestReader_IndexKeysMatchData(t *testing.T) {
 	}
 	defer r.Close()
 
-	if len(r.index) != len(entries) {
-		t.Fatalf("index size: got %d, want %d", len(r.index), len(entries))
+	if len(r.index) == 0 || len(r.index) > len(entries) {
+		t.Fatalf("unexpected sparse index size: got %d, want between 1 and %d", len(r.index), len(entries))
 	}
 
-	for i, e := range entries {
-		if !bytes.Equal(r.index[i].key, e.key) {
-			t.Errorf("index[%d].key: got %q, want %q", i, r.index[i].key, e.key)
-		}
+	if !bytes.Equal(r.index[0].key, entries[0].key) {
+		t.Errorf("first index key: got %q, want %q", r.index[0].key, entries[0].key)
 	}
 }
 

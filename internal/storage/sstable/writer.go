@@ -21,13 +21,14 @@ type indexEntry struct {
 // been added, Close must be called to write the Index Block, Bloom Block,
 // and Footer, then fsync and close the underlying file.
 type Writer struct {
-	file        *os.File
-	writer      *bufio.Writer
-	bloomFilter *BloomFilter
-	offset      uint64       // running byte offset within the data block
-	entryCount  uint32       // total number of entries written
-	index       []indexEntry // in-memory index built during Add calls
-	lastKey     []byte       // last key added, used to enforce sorted order
+	file            *os.File
+	writer          *bufio.Writer
+	bloomFilter     *BloomFilter
+	offset          uint64       // running byte offset within the data block
+	lastIndexOffset uint64       // byte offset of the last recorded index entry
+	entryCount      uint32       // total number of entries written
+	index           []indexEntry // in-memory index built during Add calls
+	lastKey         []byte       // last key added, used to enforce sorted order
 }
 
 // MaxWriterExpectedKeys is the upper bound limit for the estimated keys parameter
@@ -52,17 +53,21 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 		return nil, err
 	}
 
+	// For a sparse index with IndexBlockSize=4096, the number of index entries is
+	// significantly less than expectedKeys. We estimate capacity conservatively.
+	estimatedIndexCap := expectedKeys/16 + 1
+
 	return &Writer{
 		file:        file,
 		writer:      bufio.NewWriter(file),
 		bloomFilter: NewBloomFilter(expectedKeys, 10),
-		index:       make([]indexEntry, 0, expectedKeys),
+		index:       make([]indexEntry, 0, estimatedIndexCap),
 	}, nil
 }
 
 // Add writes a single data entry to the SSTable. Entries must be added in
-// sorted key order. Each call appends to the Data Block, records the offset
-// in the in-memory index, and inserts the key into the Bloom Filter.
+// sorted key order. Each call appends to the Data Block, sparsely records index
+// entries at IndexBlockSize interval boundaries, and inserts the key into the Bloom Filter.
 //
 // Data Entry Layout:
 //
@@ -81,13 +86,17 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 		return fmt.Errorf("%w: last %q >= new %q", ErrKeysOutOfOrder, w.lastKey, key)
 	}
 
-	// Record the offset for the index before writing.
-	keyCopy := make([]byte, len(key))
-	copy(keyCopy, key)
-	w.index = append(w.index, indexEntry{
-		key:    keyCopy,
-		offset: w.offset,
-	})
+	// Record an index entry for the first key of the SSTable, and subsequently
+	// only when the current data offset has advanced past the IndexBlockSize boundary.
+	if len(w.index) == 0 || w.offset-w.lastIndexOffset >= IndexBlockSize {
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		w.index = append(w.index, indexEntry{
+			key:    keyCopy,
+			offset: w.offset,
+		})
+		w.lastIndexOffset = w.offset
+	}
 
 	var header [entryHeaderSize]byte
 	binary.LittleEndian.PutUint16(header[keyLenOffset:valueLenOffset], uint16(len(key)))
