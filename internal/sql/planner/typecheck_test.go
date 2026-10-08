@@ -6,8 +6,6 @@ import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
 
-// ---------- helpers --------------------------------------------------------
-
 // typedExpr returns a ResolvedExpr with the given type. For TypeNull it
 // returns a *ResolvedNullLiteral so isNullExpr recognises it.
 func typedExpr(t ast.DataTypeKind) ResolvedExpr {
@@ -16,8 +14,6 @@ func typedExpr(t ast.DataTypeKind) ResolvedExpr {
 	}
 	return &ResolvedIntLiteral{ResolvedExprBase: newExprBase(t)}
 }
-
-// ---------- isNumericType --------------------------------------------------
 
 func TestIsNumericType(t *testing.T) {
 	tests := []struct {
@@ -45,8 +41,6 @@ func TestIsNumericType(t *testing.T) {
 	}
 }
 
-// ---------- isStringType ---------------------------------------------------
-
 func TestIsStringType(t *testing.T) {
 	tests := []struct {
 		name string
@@ -69,8 +63,6 @@ func TestIsStringType(t *testing.T) {
 	}
 }
 
-// ---------- isNullExpr -----------------------------------------------------
-
 func TestIsNullExpr(t *testing.T) {
 	if !isNullExpr(&ResolvedNullLiteral{}) {
 		t.Error("expected isNullExpr to return true for *ResolvedNullLiteral")
@@ -79,8 +71,6 @@ func TestIsNullExpr(t *testing.T) {
 		t.Error("expected isNullExpr to return false for *ResolvedIntLiteral")
 	}
 }
-
-// ---------- typeName -------------------------------------------------------
 
 func TestTypeName(t *testing.T) {
 	tests := []struct {
@@ -108,8 +98,6 @@ func TestTypeName(t *testing.T) {
 	}
 }
 
-// ---------- exprTypeName ---------------------------------------------------
-
 func TestExprTypeName(t *testing.T) {
 	if got := exprTypeName(&ResolvedNullLiteral{}); got != "NULL" {
 		t.Errorf("exprTypeName(NULL literal) = %q, want %q", got, "NULL")
@@ -118,8 +106,6 @@ func TestExprTypeName(t *testing.T) {
 		t.Errorf("exprTypeName(INT expr) = %q, want %q", got, "INT")
 	}
 }
-
-// ---------- typesCompatible ------------------------------------------------
 
 func TestTypesCompatible(t *testing.T) {
 	tests := []struct {
@@ -153,8 +139,6 @@ func TestTypesCompatible(t *testing.T) {
 	}
 }
 
-// ---------- isOrderableType ------------------------------------------------
-
 func TestIsOrderableType(t *testing.T) {
 	tests := []struct {
 		name string
@@ -179,8 +163,6 @@ func TestIsOrderableType(t *testing.T) {
 		})
 	}
 }
-
-// ---------- typesOrderable -------------------------------------------------
 
 func TestTypesOrderable(t *testing.T) {
 	tests := []struct {
@@ -208,8 +190,6 @@ func TestTypesOrderable(t *testing.T) {
 	}
 }
 
-// ---------- exprsCompatible ------------------------------------------------
-
 func TestExprsCompatible(t *testing.T) {
 	// NULL is compatible with anything.
 	if !exprsCompatible(typedExpr(ast.TypeNull), typedExpr(ast.TypeInt)) {
@@ -230,8 +210,6 @@ func TestExprsCompatible(t *testing.T) {
 		t.Error("INT should not be compatible with VARCHAR")
 	}
 }
-
-// ---------- arithmeticResultType -------------------------------------------
 
 func TestArithmeticResultType(t *testing.T) {
 	tests := []struct {
@@ -274,8 +252,6 @@ func TestArithmeticResultType(t *testing.T) {
 	}
 }
 
-// ---------- unaryResultType ------------------------------------------------
-
 func TestUnaryResultType(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -305,8 +281,6 @@ func TestUnaryResultType(t *testing.T) {
 		})
 	}
 }
-
-// ---------- aggregateResultType --------------------------------------------
 
 func TestAggregateResultType(t *testing.T) {
 	tests := []struct {
