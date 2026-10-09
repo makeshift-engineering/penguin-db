@@ -198,16 +198,16 @@ func TestReplay_ReturnsHighestSegmentID(t *testing.T) {
 	}
 }
 
-// TestReplay_UnknownOpcode_Ignored verifies that records with invalid opcodes are ignored during replay.
-func TestReplay_UnknownOpcode_Ignored(t *testing.T) {
+// TestReplay_UnknownOpcode_ReturnsError verifies that records with invalid opcodes cause replay to return an error.
+func TestReplay_UnknownOpcode_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	writeRecordsToFile(t, segmentPath(dir, 1), []*Record{
 		{Opcode: 99, Key: []byte("k"), Value: []byte("v")},
 	})
 
 	mem := newMockRecordConsumer()
-	if _, err := Replay(dir, 0, mem); err != nil {
-		t.Errorf("unexpected error for unknown opcode: %v", err)
+	if _, err := Replay(dir, 0, mem); err == nil {
+		t.Error("expected error for unknown opcode, got nil")
 	}
 	if _, ok := mem.puts["k"]; ok {
 		t.Error("unknown opcode record should not be applied to memtable")

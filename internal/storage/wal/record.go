@@ -4,13 +4,15 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"math"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 const (
 	// OpcodePut represents a put/insert operation in the WAL.
-	OpcodePut uint8 = 0
+	OpcodePut = opcode.OpcodePut
 	// OpcodeDelete represents a delete operation in the WAL.
-	OpcodeDelete uint8 = 1
+	OpcodeDelete = opcode.OpcodeDelete
 )
 
 // Record represents a single change logged in the WAL, wrapping an operation

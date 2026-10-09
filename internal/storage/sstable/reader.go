@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 	"sync/atomic"
 )
 
@@ -20,6 +21,8 @@ type Reader struct {
 	file        *os.File
 	bloomFilter *BloomFilter
 	index       []indexEntry
+	maxKey      []byte
+	maxKeyOnce  sync.Once
 	entryCount  uint32
 	fileSize    int64
 	indexOffset uint64
@@ -84,6 +87,11 @@ func Open(filePath string) (*Reader, error) {
 		return nil, fmt.Errorf("%w: bloom offset %d precedes index offset %d", ErrCorrupted, bloomOffset, indexOffset)
 	}
 
+	if entryCount > 0 && uint64(entryCount)*uint64(entryHeaderSize) > indexOffset {
+		return nil, fmt.Errorf("%w: entry count %d is impossible for data block size %d bytes",
+			ErrCorrupted, entryCount, indexOffset)
+	}
+
 	// Load the Index Block.
 	indexSize := bloomOffset - indexOffset
 	indexData := make([]byte, indexSize)
@@ -123,14 +131,8 @@ func Open(filePath string) (*Reader, error) {
 
 // parseIndex decodes the raw index block bytes into a slice of indexEntry.
 func parseIndex(data []byte, expectedCount uint32, indexOffset uint64) ([]indexEntry, error) {
-	// Each entry requires at least indexEntryHeaderSize bytes.
-	// If the declared count can't possibly fit in the index block, the
-	// footer is corrupt — fail fast instead of silently capping.
-	if uint64(expectedCount)*uint64(indexEntryHeaderSize) > uint64(len(data)) {
-		return nil, fmt.Errorf("%w: expected %d entries but index block is only %d bytes",
-			ErrCorrupted, expectedCount, len(data))
-	}
-	entries := make([]indexEntry, 0, expectedCount)
+	maxPossibleEntries := len(data) / indexEntryHeaderSize
+	entries := make([]indexEntry, 0, maxPossibleEntries)
 	pos := 0
 
 	for pos < len(data) {
@@ -162,8 +164,20 @@ func parseIndex(data []byte, expectedCount uint32, indexOffset uint64) ([]indexE
 		})
 	}
 
-	if uint32(len(entries)) != expectedCount {
-		return nil, fmt.Errorf("%w: index has %d entries, footer says %d", ErrCorrupted, len(entries), expectedCount)
+	if expectedCount == 0 {
+		if len(entries) > 0 {
+			return nil, fmt.Errorf("%w: index has %d entries, footer says 0 entries", ErrCorrupted, len(entries))
+		}
+	} else {
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("%w: index has 0 entries, footer says %d entries", ErrCorrupted, expectedCount)
+		}
+		if uint32(len(entries)) > expectedCount {
+			return nil, fmt.Errorf("%w: index has %d entries, footer says %d entries", ErrCorrupted, len(entries), expectedCount)
+		}
+		if entries[0].offset != 0 {
+			return nil, fmt.Errorf("%w: first index entry offset %d must be 0", ErrCorrupted, entries[0].offset)
+		}
 	}
 
 	return entries, nil
@@ -179,8 +193,8 @@ func (r *Reader) BloomMayContain(key []byte) bool {
 }
 
 // Get searches the SSTable for the given key using binary search over the
-// in-memory index. If the key is found in the index, it seeks to the
-// corresponding data offset and reads the full entry.
+// in-memory sparse index to locate the candidate data block, then scans
+// the block sequentially from disk.
 //
 // Returns:
 //   - (value, true, false, nil)  : key found with a live value
@@ -196,60 +210,70 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 		return nil, false, false, nil
 	}
 
-	// Binary search over the sorted index.
-	i := sort.Search(len(r.index), func(i int) bool {
-		return bytes.Compare(r.index[i].key, key) >= 0
+	// Binary search over the sorted sparse index for the first entry with key > target key.
+	idx := sort.Search(len(r.index), func(i int) bool {
+		return bytes.Compare(r.index[i].key, key) > 0
 	})
 
-	if i >= len(r.index) || !bytes.Equal(r.index[i].key, key) {
+	if idx == 0 {
 		return nil, false, false, nil
 	}
 
-	// Found a candidate in the index, read the data entry from disk.
-	if r.index[i].offset >= r.indexOffset {
-		return nil, false, false, fmt.Errorf("%w: index entry offset %d exceeds index offset %d", ErrCorrupted, r.index[i].offset, r.indexOffset)
-	}
-	if r.index[i].offset > uint64(math.MaxInt64) {
-		return nil, false, false, fmt.Errorf("%w: index entry offset %d exceeds max int64", ErrCorrupted, r.index[i].offset)
-	}
-	dataOffset := int64(r.index[i].offset)
-
-	// Read the fixed-size entry header.
-	var header [entryHeaderSize]byte
-	if _, err := r.file.ReadAt(header[:], dataOffset); err != nil {
-		return nil, false, false, fmt.Errorf("reading data entry header: %w", err)
+	startOffset := r.index[idx-1].offset
+	var endOffset uint64
+	if idx < len(r.index) {
+		endOffset = r.index[idx].offset
+	} else {
+		endOffset = r.indexOffset
 	}
 
-	keyLen := binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset])
-	valLen := binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset])
-	opcode := header[opcodeOffset]
-
-	if uint64(dataOffset)+uint64(entryHeaderSize)+uint64(keyLen)+uint64(valLen) > r.indexOffset {
-		return nil, false, false, fmt.Errorf("%w: entry sizes exceed data block boundary", ErrCorrupted)
+	if startOffset > uint64(math.MaxInt64) || endOffset > uint64(math.MaxInt64) {
+		return nil, false, false, fmt.Errorf("%w: index entry offset exceeds max int64", ErrCorrupted)
 	}
 
-	// Read the key and value from disk in a single combined ReadAt.
-	entryData := make([]byte, int(keyLen)+int(valLen))
-	if len(entryData) > 0 {
-		if _, err := r.file.ReadAt(entryData, dataOffset+int64(entryHeaderSize)); err != nil {
-			return nil, false, false, fmt.Errorf("reading data entry key/value: %w", err)
+	if startOffset >= r.indexOffset || endOffset > r.indexOffset || startOffset >= endOffset {
+		return nil, false, false, fmt.Errorf("%w: invalid block range [%d, %d)", ErrCorrupted, startOffset, endOffset)
+	}
+
+	blockSize := endOffset - startOffset
+	blockBuf := make([]byte, blockSize)
+	if _, err := r.file.ReadAt(blockBuf, int64(startOffset)); err != nil {
+		return nil, false, false, fmt.Errorf("reading data block [%d, %d): %w", startOffset, endOffset, err)
+	}
+
+	pos := 0
+	for pos < len(blockBuf) {
+		if pos+entryHeaderSize > len(blockBuf) {
+			return nil, false, false, fmt.Errorf("%w: truncated entry header in block at offset %d", ErrCorrupted, startOffset+uint64(pos))
 		}
-	}
-	entryKey := entryData[:keyLen]
 
-	if !bytes.Equal(entryKey, key) {
-		// Index said this offset has our key but the on-disk key differs.
-		return nil, false, false, fmt.Errorf("%w: index key mismatch at offset %d", ErrCorrupted, dataOffset)
+		keyLen := uint64(binary.LittleEndian.Uint16(blockBuf[pos+keyLenOffset : pos+valueLenOffset]))
+		valLen := uint64(binary.LittleEndian.Uint32(blockBuf[pos+valueLenOffset : pos+opcodeOffset]))
+		opcode := blockBuf[pos+opcodeOffset]
+
+		if uint64(pos)+uint64(entryHeaderSize)+keyLen+valLen > uint64(len(blockBuf)) {
+			return nil, false, false, fmt.Errorf("%w: entry sizes exceed block boundary at offset %d", ErrCorrupted, startOffset+uint64(pos))
+		}
+
+		entryKey := blockBuf[pos+entryHeaderSize : pos+entryHeaderSize+int(keyLen)]
+		cmp := bytes.Compare(entryKey, key)
+		if cmp == 0 {
+			if opcode == OpcodeDelete {
+				return nil, true, true, nil
+			} else if opcode != OpcodePut {
+				return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, opcode, startOffset+uint64(pos))
+			}
+			val := make([]byte, valLen)
+			copy(val, blockBuf[pos+entryHeaderSize+int(keyLen):pos+entryHeaderSize+int(keyLen)+int(valLen)])
+			return val, true, false, nil
+		} else if cmp > 0 {
+			return nil, false, false, nil
+		}
+
+		pos += entryHeaderSize + int(keyLen) + int(valLen)
 	}
 
-	if opcode == OpcodeDelete {
-		return nil, true, true, nil
-	} else if opcode != OpcodePut {
-		return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, opcode, dataOffset)
-	}
-
-	val := entryData[keyLen:]
-	return val, true, false, nil
+	return nil, false, false, nil
 }
 
 // EntryCount returns the total number of entries in this SSTable as recorded in the footer.
@@ -285,16 +309,87 @@ func (r *Reader) MinKey() []byte {
 
 // MaxKey returns the largest key in this SSTable.
 func (r *Reader) MaxKey() []byte {
-	if len(r.index) == 0 {
+	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil
 	}
-	k := make([]byte, len(r.index[len(r.index)-1].key))
-	copy(k, r.index[len(r.index)-1].key)
+	r.maxKeyOnce.Do(func() {
+		if r.entryCount == 0 || len(r.index) == 0 {
+			return
+		}
+		lastBlockOffset := r.index[len(r.index)-1].offset
+		curr := lastBlockOffset
+		for curr < r.indexOffset {
+			var header [entryHeaderSize]byte
+			if _, err := r.file.ReadAt(header[:], int64(curr)); err != nil {
+				return
+			}
+			keyLen := uint64(binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset]))
+			valLen := uint64(binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset]))
+			entryLen := uint64(entryHeaderSize) + keyLen + valLen
+
+			if curr+entryLen > r.indexOffset {
+				return
+			}
+
+			if curr+entryLen == r.indexOffset {
+				buf := make([]byte, keyLen)
+				if keyLen > 0 {
+					if _, err := r.file.ReadAt(buf, int64(curr+uint64(entryHeaderSize))); err != nil {
+						return
+					}
+				}
+				r.maxKey = buf
+				break
+			}
+			curr += entryLen
+		}
+	})
+
+	if len(r.maxKey) == 0 && r.entryCount == 0 {
+		return nil
+	}
+	k := make([]byte, len(r.maxKey))
+	copy(k, r.maxKey)
 	return k
 }
 
+// findOffsetAtOrAfter scans forward from startOffset in the data block to locate
+// the exact byte offset of the first entry with a key greater than or equal to startKey.
+func (r *Reader) findOffsetAtOrAfter(startOffset uint64, startKey []byte) (uint64, error) {
+	curr := startOffset
+	for curr < r.indexOffset {
+		var header [entryHeaderSize]byte
+		if _, err := r.file.ReadAt(header[:], int64(curr)); err != nil {
+			return 0, fmt.Errorf("%w: failed to read entry header at offset %d: %w", ErrCorrupted, curr, err)
+		}
+
+		keyLen := uint64(binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset]))
+		valLen := uint64(binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset]))
+		entryLen := uint64(entryHeaderSize) + keyLen + valLen
+
+		if curr+entryLen > r.indexOffset {
+			return 0, fmt.Errorf("%w: entry at offset %d exceeds data block boundary", ErrCorrupted, curr)
+		}
+
+		keyBuf := make([]byte, keyLen)
+		if keyLen > 0 {
+			if _, err := r.file.ReadAt(keyBuf, int64(curr+uint64(entryHeaderSize))); err != nil {
+				return 0, fmt.Errorf("%w: failed to read key at offset %d: %w", ErrCorrupted, curr, err)
+			}
+		}
+
+		if bytes.Compare(keyBuf, startKey) >= 0 {
+			return curr, nil
+		}
+
+		curr += entryLen
+	}
+	return r.indexOffset, nil
+}
+
 // NewIteratorAt creates a new Iterator positioned at the first key greater than or equal to startKey.
-// It uses binary search on the reader's index to locate the starting file offset.
+// It uses binary search on the reader's sparse index to locate the candidate data block interval,
+// then scans forward to the target key position.
 func (r *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*Iterator, error) {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, ErrReaderClosed
@@ -311,13 +406,21 @@ func (r *Reader) NewIteratorAt(startKey []byte, opts ...IteratorOption) (*Iterat
 
 	var startOffset uint64 = 0
 	if len(startKey) > 0 && len(r.index) > 0 {
-		i := sort.Search(len(r.index), func(i int) bool {
-			return bytes.Compare(r.index[i].key, startKey) >= 0
+		idx := sort.Search(len(r.index), func(i int) bool {
+			return bytes.Compare(r.index[i].key, startKey) > 0
 		})
-		if i < len(r.index) {
-			startOffset = r.index[i].offset
+		if idx == 0 {
+			startOffset = 0
 		} else {
-			startOffset = r.indexOffset
+			startOffset = r.index[idx-1].offset
+		}
+
+		if startOffset < r.indexOffset {
+			targetOffset, err := r.findOffsetAtOrAfter(startOffset, startKey)
+			if err != nil {
+				return nil, err
+			}
+			startOffset = targetOffset
 		}
 	}
 

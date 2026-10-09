@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/wal"
@@ -42,11 +43,26 @@ var (
 type OpType uint8
 
 const (
-	// OpPut represents an insert or update operation.
-	OpPut OpType = 0x01
-	// OpDelete represents a logical deletion tombstone operation.
-	OpDelete OpType = 0x02
+	// OpPut represents an insert or update operation (0x00).
+	OpPut OpType = OpType(opcode.OpPut)
+	// OpDelete represents a logical deletion tombstone operation (0x01).
+	OpDelete OpType = OpType(opcode.OpDelete)
 )
+
+// IsDeleted reports whether the OpType represents a tombstone deletion.
+func (op OpType) IsDeleted() bool { return op == OpDelete }
+
+// Opcode returns the raw on-disk opcode byte for this operation type.
+// The result is safe to pass directly to wal.Record.Opcode and sstable.Writer.Add.
+func (op OpType) Opcode() uint8 { return uint8(op) }
+
+// OpTypeFromIsDeleted maps a boolean tombstone flag to the matching OpType.
+func OpTypeFromIsDeleted(deleted bool) OpType {
+	if deleted {
+		return OpDelete
+	}
+	return OpPut
+}
 
 // Op represents a single Put or Delete operation within a WriteBatch.
 type Op struct {
@@ -462,11 +478,7 @@ func writeMemTableToSSTableWithKeys(path string, mem *memtable.SkipList, expecte
 
 	iterator := mem.NewIterator()
 	for iterator.Valid() {
-		opcode := sstable.OpcodePut
-		if iterator.IsDeleted() {
-			opcode = sstable.OpcodeDelete
-		}
-		if err := sstableWriter.Add(iterator.Key(), iterator.Value(), opcode); err != nil {
+		if err := sstableWriter.Add(iterator.Key(), iterator.Value(), OpTypeFromIsDeleted(iterator.IsDeleted()).Opcode()); err != nil {
 			_ = sstableWriter.Close()
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				slog.Warn("failed to clean up partial sstable on write error", "path", path, "error", err)
@@ -701,12 +713,8 @@ func (engine *dbEngine) WriteBatch(ctx context.Context, operations []Op) error {
 	// Build the WAL records for this batch.
 	walRecords := make([]*wal.Record, 0, len(operations))
 	for _, operation := range operations {
-		walOpcode := wal.OpcodePut
-		if operation.Type == OpDelete {
-			walOpcode = wal.OpcodeDelete
-		}
 		walRecords = append(walRecords, &wal.Record{
-			Opcode: walOpcode,
+			Opcode: operation.Type.Opcode(),
 			Key:    operation.Key,
 			Value:  operation.Value,
 		})

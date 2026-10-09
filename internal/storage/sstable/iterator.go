@@ -126,7 +126,11 @@ func NewIterator(filePath string, opts ...IteratorOption) (*Iterator, error) {
 		return nil, fmt.Errorf("%w: invalid footer offsets in iterator initialization", ErrCorrupted)
 	}
 
-	if uint64(entryCount)*uint64(indexEntryHeaderSize) > bloomOffset-indexOffset {
+	if expectedDataSize := uint64(entryCount) * uint64(entryHeaderSize); expectedDataSize > indexOffset {
+		return nil, fmt.Errorf("%w: index block offset %d too small for %d entries", ErrCorrupted, indexOffset, entryCount)
+	}
+
+	if entryCount > 0 && bloomOffset-indexOffset < uint64(indexEntryHeaderSize) {
 		return nil, fmt.Errorf("%w: index block too small for %d entries", ErrCorrupted, entryCount)
 	}
 
