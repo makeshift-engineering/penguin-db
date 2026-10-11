@@ -143,4 +143,9 @@ var (
 
 	// ErrEmptyUpdateAssignments is returned when UPDATE specifies no assignments.
 	ErrEmptyUpdateAssignments = errors.New("UPDATE must specify at least one assignment")
+
+	// ErrTypeNullNotAllowed is returned when a DataType uses TypeNull, which
+	// is an internal sentinel for resolved expressions and not a valid
+	// user-facing column type.
+	ErrTypeNullNotAllowed = errors.New("NULL is not a valid column data type")
 )
