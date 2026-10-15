@@ -28,6 +28,9 @@ var (
 	// expectedKeys argument.
 	ErrInvalidExpectedKeys = errors.New("sstable: expectedKeys must be non-negative")
 
+	// ErrInvalidIndexBlockSize is returned when NewWriter receives an invalid (zero) index block size.
+	ErrInvalidIndexBlockSize = errors.New("sstable: indexBlockSize must be greater than zero")
+
 	// ErrKeysOutOfOrder is returned when Add is called with a key that is
 	// less than or equal to the previously added key.
 	ErrKeysOutOfOrder = errors.New("sstable: keys must be added in strictly ascending order")

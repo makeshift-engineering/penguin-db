@@ -184,6 +184,8 @@ func replayFile(filePath string, recordConsumer RecordConsumer) (err error) {
 			if delErr := recordConsumer.Delete(record.Key); delErr != nil {
 				return fmt.Errorf("memtable rejected recovered delete operation: %w", delErr)
 			}
+		default:
+			return fmt.Errorf("unknown opcode 0x%02x in WAL segment %s", record.Opcode, filepath.Base(filePath))
 		}
 
 		validBytes += int64(totalFrameSizeBytes)

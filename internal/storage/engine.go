@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/storage/memtable"
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/utils"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/wal"
@@ -47,6 +48,26 @@ const (
 	// OpDelete represents a logical deletion tombstone operation.
 	OpDelete OpType = 0x02
 )
+
+// IsDeleted reports whether the OpType represents a tombstone deletion.
+func (op OpType) IsDeleted() bool { return op == OpDelete }
+
+// Opcode returns the raw on-disk opcode for this operation type.
+// The result is safe to pass directly to wal.Record.Opcode and sstable.Writer.Add.
+func (op OpType) Opcode() opcode.Opcode {
+	if op == OpDelete {
+		return opcode.OpDelete
+	}
+	return opcode.OpPut
+}
+
+// OpTypeFromIsDeleted maps a boolean tombstone flag to the matching OpType.
+func OpTypeFromIsDeleted(deleted bool) OpType {
+	if deleted {
+		return OpDelete
+	}
+	return OpPut
+}
 
 // Op represents a single Put or Delete operation within a WriteBatch.
 type Op struct {
@@ -462,11 +483,7 @@ func writeMemTableToSSTableWithKeys(path string, mem *memtable.SkipList, expecte
 
 	iterator := mem.NewIterator()
 	for iterator.Valid() {
-		opcode := sstable.OpcodePut
-		if iterator.IsDeleted() {
-			opcode = sstable.OpcodeDelete
-		}
-		if err := sstableWriter.Add(iterator.Key(), iterator.Value(), opcode); err != nil {
+		if err := sstableWriter.Add(iterator.Key(), iterator.Value(), OpTypeFromIsDeleted(iterator.IsDeleted()).Opcode()); err != nil {
 			_ = sstableWriter.Close()
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				slog.Warn("failed to clean up partial sstable on write error", "path", path, "error", err)
@@ -701,12 +718,8 @@ func (engine *dbEngine) WriteBatch(ctx context.Context, operations []Op) error {
 	// Build the WAL records for this batch.
 	walRecords := make([]*wal.Record, 0, len(operations))
 	for _, operation := range operations {
-		walOpcode := wal.OpcodePut
-		if operation.Type == OpDelete {
-			walOpcode = wal.OpcodeDelete
-		}
 		walRecords = append(walRecords, &wal.Record{
-			Opcode: walOpcode,
+			Opcode: operation.Type.Opcode(),
 			Key:    operation.Key,
 			Value:  operation.Value,
 		})

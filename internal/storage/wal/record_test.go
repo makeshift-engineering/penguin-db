@@ -44,7 +44,7 @@ func TestMarshal_FrameLayout(t *testing.T) {
 		t.Errorf("stored size field = %d, want %d", storedSize, wantSize)
 	}
 
-	if frame[opcodeOffset] != OpcodePut {
+	if frame[opcodeOffset] != OpcodePut.Byte() {
 		t.Errorf("opcode byte = %d, want %d", frame[opcodeOffset], OpcodePut)
 	}
 
@@ -78,7 +78,7 @@ func TestMarshal_CRCCoversPayload(t *testing.T) {
 func TestMarshal_OpcodeDelete(t *testing.T) {
 	r := &Record{Opcode: OpcodeDelete, Key: []byte("mykey"), Value: nil}
 	frame := mustMarshal(t, r)
-	if frame[opcodeOffset] != OpcodeDelete {
+	if frame[opcodeOffset] != OpcodeDelete.Byte() {
 		t.Errorf("opcode = %d, want OpcodeDelete (%d)", frame[opcodeOffset], OpcodeDelete)
 	}
 }

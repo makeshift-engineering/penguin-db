@@ -227,10 +227,10 @@ func TestAppend_InvalidOpcode_Rejected(t *testing.T) {
 	}
 	defer w.Close()
 
-	for _, opcode := range []uint8{2, 99, 255} {
-		r := &Record{Opcode: opcode, Key: []byte("k"), Value: []byte("v")}
+	for _, op := range []uint8{2, 99, 255} {
+		r := &Record{Opcode: Opcode(op), Key: []byte("k"), Value: []byte("v")}
 		if err := w.Append(r); !errors.Is(err, ErrInvalidOpcode) {
-			t.Errorf("opcode %d: expected ErrInvalidOpcode, got %v", opcode, err)
+			t.Errorf("opcode %d: expected ErrInvalidOpcode, got %v", op, err)
 		}
 	}
 }

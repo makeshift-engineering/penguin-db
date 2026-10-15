@@ -4,19 +4,24 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"math"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
+
+// Opcode represents a WAL record operation code.
+type Opcode = opcode.Opcode
 
 const (
 	// OpcodePut represents a put/insert operation in the WAL.
-	OpcodePut uint8 = 0
+	OpcodePut = opcode.OpPut
 	// OpcodeDelete represents a delete operation in the WAL.
-	OpcodeDelete uint8 = 1
+	OpcodeDelete = opcode.OpDelete
 )
 
 // Record represents a single change logged in the WAL, wrapping an operation
 // type (Opcode), key, and value payload.
 type Record struct {
-	Opcode uint8
+	Opcode opcode.Opcode
 	Key    []byte
 	Value  []byte
 }
@@ -71,7 +76,7 @@ func (record *Record) Marshal() ([]byte, error) {
 	frameBuffer := make([]byte, totalFrameSizeBytes)
 
 	binary.LittleEndian.PutUint32(frameBuffer[frameSizeOffset:opcodeOffset], uint32(totalFrameSizeBytes))
-	frameBuffer[opcodeOffset] = record.Opcode
+	frameBuffer[opcodeOffset] = record.Opcode.Byte()
 	binary.LittleEndian.PutUint16(frameBuffer[keyLengthOffset:keyOffset], uint16(keyLen))
 
 	copy(frameBuffer[keyOffset:], record.Key)
@@ -99,7 +104,7 @@ func UnmarshalRecord(frameData []byte) (*Record, error) {
 		return nil, ErrInvalidCRC
 	}
 
-	extractedOpcode := frameData[opcodeOffset]
+	extractedOpcode := opcode.Opcode(frameData[opcodeOffset])
 	extractedKeyLength := binary.LittleEndian.Uint16(frameData[keyLengthOffset:keyOffset])
 
 	if len(frameData) < fixedHeaderSize+int(extractedKeyLength) {

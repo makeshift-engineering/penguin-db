@@ -1,5 +1,9 @@
 package sstable
 
+import (
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
+)
+
 // Data entry field sizes
 const (
 	keyLenSize      = 2
@@ -16,11 +20,12 @@ const (
 	keyDataOffset  = opcodeOffset + opcodeSize
 )
 
-// Index entry field sizes
+// Index entry field sizes and configuration
 const (
-	indexKeyLenSize      = 2
-	indexOffsetSize      = 8
-	indexEntryHeaderSize = indexKeyLenSize + indexOffsetSize
+	indexKeyLenSize       = 2
+	indexOffsetSize       = 8
+	indexEntryHeaderSize  = indexKeyLenSize + indexOffsetSize
+	DefaultIndexBlockSize = 4096 // 4 KiB block interval for sparse index entries
 )
 
 // Index entry field offsets
@@ -50,8 +55,11 @@ const (
 	footerMagicOffset          = footerEntryCountOffset + footerEntryCountSize
 )
 
+// Opcode represents an SSTable entry operation code.
+type Opcode = opcode.Opcode
+
 // Opcodes
 const (
-	OpcodePut    uint8 = 0x00
-	OpcodeDelete uint8 = 0x01
+	OpcodePut    = opcode.OpPut
+	OpcodeDelete = opcode.OpDelete
 )

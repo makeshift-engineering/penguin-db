@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 // Default and maximum constraint limits for iterator buffers and key/value allocations.
@@ -65,7 +67,7 @@ type Iterator struct {
 	currOffset  uint64
 	key         []byte
 	value       []byte
-	opcode      uint8
+	opcode      opcode.Opcode
 	err         error
 	closed      bool
 	hasCurrent  bool
@@ -126,7 +128,11 @@ func NewIterator(filePath string, opts ...IteratorOption) (*Iterator, error) {
 		return nil, fmt.Errorf("%w: invalid footer offsets in iterator initialization", ErrCorrupted)
 	}
 
-	if uint64(entryCount)*uint64(indexEntryHeaderSize) > bloomOffset-indexOffset {
+	if expectedDataSize := uint64(entryCount) * uint64(entryHeaderSize); expectedDataSize > indexOffset {
+		return nil, fmt.Errorf("%w: index block offset %d too small for %d entries", ErrCorrupted, indexOffset, entryCount)
+	}
+
+	if entryCount > 0 && bloomOffset-indexOffset < uint64(indexEntryHeaderSize) {
 		return nil, fmt.Errorf("%w: index block too small for %d entries", ErrCorrupted, entryCount)
 	}
 
@@ -189,7 +195,7 @@ func (iterator *Iterator) Next() {
 
 	keyLen := binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset])
 	valLen := binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset])
-	iterator.opcode = header[opcodeOffset]
+	iterator.opcode = opcode.Opcode(header[opcodeOffset])
 
 	switch iterator.opcode {
 	case OpcodePut, OpcodeDelete:
@@ -274,7 +280,7 @@ func (iterator *Iterator) IsDeleted() bool {
 }
 
 // Opcode returns the operation code (Put/Delete) of the current entry.
-func (iterator *Iterator) Opcode() uint8 {
+func (iterator *Iterator) Opcode() opcode.Opcode {
 	if iterator == nil {
 		return 0
 	}

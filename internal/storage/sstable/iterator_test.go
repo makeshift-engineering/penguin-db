@@ -223,7 +223,7 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 	var header2 [7]byte
 	binary.LittleEndian.PutUint16(header2[0:2], 10)
 	binary.LittleEndian.PutUint32(header2[2:6], 0)
-	header2[6] = OpcodePut
+	header2[6] = OpcodePut.Byte()
 	if err := os.WriteFile(path2, append(header2[:], []byte("abc")...), 0666); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestIterator_NextErrorPaths(t *testing.T) {
 	var header3 [7]byte
 	binary.LittleEndian.PutUint16(header3[0:2], 0)
 	binary.LittleEndian.PutUint32(header3[2:6], 10)
-	header3[6] = OpcodePut
+	header3[6] = OpcodePut.Byte()
 	if err := os.WriteFile(path3, append(header3[:], []byte("abc")...), 0666); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

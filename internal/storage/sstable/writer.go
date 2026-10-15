@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 // indexEntry records the key and byte offset of a single data entry
@@ -16,18 +18,35 @@ type indexEntry struct {
 	offset uint64
 }
 
+// WriterOptions holds optional parameters for configuring an SSTable Writer.
+type WriterOptions struct {
+	IndexBlockSize uint64
+}
+
+// WriterOption is a functional option for configuring an SSTable Writer.
+type WriterOption func(*WriterOptions)
+
+// WithIndexBlockSize configures the sparse index block size interval in bytes.
+func WithIndexBlockSize(size uint64) WriterOption {
+	return func(o *WriterOptions) {
+		o.IndexBlockSize = size
+	}
+}
+
 // Writer writes a sorted stream of key-value entries to an SSTable file.
 // Entries must be added in sorted key order via Add. After all entries have
 // been added, Close must be called to write the Index Block, Bloom Block,
 // and Footer, then fsync and close the underlying file.
 type Writer struct {
-	file        *os.File
-	writer      *bufio.Writer
-	bloomFilter *BloomFilter
-	offset      uint64       // running byte offset within the data block
-	entryCount  uint32       // total number of entries written
-	index       []indexEntry // in-memory index built during Add calls
-	lastKey     []byte       // last key added, used to enforce sorted order
+	file            *os.File
+	writer          *bufio.Writer
+	bloomFilter     *BloomFilter
+	offset          uint64       // running byte offset within the data block
+	lastIndexOffset uint64       // byte offset of the last recorded index entry
+	entryCount      uint32       // total number of entries written
+	index           []indexEntry // in-memory index built during Add calls
+	lastKey         []byte       // last key added, used to enforce sorted order
+	indexBlockSize  uint64       // byte interval for recording sparse index entries
 }
 
 // MaxWriterExpectedKeys is the upper bound limit for the estimated keys parameter
@@ -35,12 +54,29 @@ type Writer struct {
 // the in-memory bloom filter and index structures.
 const MaxWriterExpectedKeys = 100000000
 
+// estimatedAvgEntrySizeBytes is a conservative lower-bound estimate of the average
+// size of a key-value data entry (7-byte header + key bytes + value bytes).
+const estimatedAvgEntrySizeBytes = 256
+
 // NewWriter creates a new SSTable Writer for the specified file path.
 // It initializes a bloom filter and an index based on expectedKeys to minimize
 // memory reallocations. expectedKeys must be between 0 and MaxWriterExpectedKeys.
-func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
+func NewWriter(filePath string, expectedKeys int, opts ...WriterOption) (*Writer, error) {
 	if expectedKeys < 0 || expectedKeys > MaxWriterExpectedKeys {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidExpectedKeys, expectedKeys)
+	}
+
+	cfg := WriterOptions{
+		IndexBlockSize: DefaultIndexBlockSize,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	if cfg.IndexBlockSize == 0 {
+		return nil, fmt.Errorf("%w: got %d", ErrInvalidIndexBlockSize, cfg.IndexBlockSize)
 	}
 
 	file, err := os.OpenFile(
@@ -52,17 +88,36 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 		return nil, err
 	}
 
+	// For a sparse index, an index entry is recorded only once per block boundary
+	// (plus the mandatory entry for the very first key).
+	// We estimate capacity using a conservative average entry size (estimatedAvgEntrySizeBytes):
+	//   entriesPerBlock = max(1, IndexBlockSize / estimatedAvgEntrySizeBytes)
+	//   estimatedIndexCap = (expectedKeys / entriesPerBlock) + 1
+	// The "+ 1" accounts for the mandatory first index entry and prevents zero capacity
+	// when expectedKeys < entriesPerBlock.
+	entriesPerBlock := int(cfg.IndexBlockSize / estimatedAvgEntrySizeBytes)
+	if entriesPerBlock < 1 {
+		entriesPerBlock = 1
+	}
+	estimatedIndexCap := (expectedKeys / entriesPerBlock) + 1
+
 	return &Writer{
-		file:        file,
-		writer:      bufio.NewWriter(file),
-		bloomFilter: NewBloomFilter(expectedKeys, 10),
-		index:       make([]indexEntry, 0, expectedKeys),
+		file:           file,
+		writer:         bufio.NewWriter(file),
+		bloomFilter:    NewBloomFilter(expectedKeys, 10),
+		index:          make([]indexEntry, 0, estimatedIndexCap),
+		indexBlockSize: cfg.IndexBlockSize,
 	}, nil
 }
 
+// IndexBlockSize returns the configured sparse index block size interval for this writer.
+func (w *Writer) IndexBlockSize() uint64 {
+	return w.indexBlockSize
+}
+
 // Add writes a single data entry to the SSTable. Entries must be added in
-// sorted key order. Each call appends to the Data Block, records the offset
-// in the in-memory index, and inserts the key into the Bloom Filter.
+// sorted key order. Each call appends to the Data Block, sparsely records index
+// entries at indexBlockSize interval boundaries, and inserts the key into the Bloom Filter.
 //
 // Data Entry Layout:
 //
@@ -70,7 +125,7 @@ func NewWriter(filePath string, expectedKeys int) (*Writer, error) {
 //	| Key Length | Value Length | Opcode   | Key       | Value     |
 //	| (2 bytes)  | (4 bytes)    | (1 byte) | (n bytes) | (m bytes) |
 //	+------------+--------------+----------+-----------+-----------+
-func (w *Writer) Add(key, value []byte, opcode uint8) error {
+func (w *Writer) Add(key, value []byte, op opcode.Opcode) error {
 	if len(key) > math.MaxUint16 {
 		return ErrKeyTooLarge
 	}
@@ -81,18 +136,22 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 		return fmt.Errorf("%w: last %q >= new %q", ErrKeysOutOfOrder, w.lastKey, key)
 	}
 
-	// Record the offset for the index before writing.
-	keyCopy := make([]byte, len(key))
-	copy(keyCopy, key)
-	w.index = append(w.index, indexEntry{
-		key:    keyCopy,
-		offset: w.offset,
-	})
+	// Record an index entry for the first key of the SSTable, and subsequently
+	// only when the current data offset has advanced past the indexBlockSize boundary.
+	if len(w.index) == 0 || w.offset-w.lastIndexOffset >= w.indexBlockSize {
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		w.index = append(w.index, indexEntry{
+			key:    keyCopy,
+			offset: w.offset,
+		})
+		w.lastIndexOffset = w.offset
+	}
 
 	var header [entryHeaderSize]byte
 	binary.LittleEndian.PutUint16(header[keyLenOffset:valueLenOffset], uint16(len(key)))
 	binary.LittleEndian.PutUint32(header[valueLenOffset:opcodeOffset], uint32(len(value)))
-	header[opcodeOffset] = opcode
+	header[opcodeOffset] = op.Byte()
 
 	if _, err := w.writer.Write(header[:]); err != nil {
 		return err

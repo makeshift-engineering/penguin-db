@@ -3,6 +3,7 @@ package compactor
 import (
 	"bytes"
 
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 	"github.com/makeshift-engineering/penguin-db/internal/storage/sstable"
 )
 
@@ -12,7 +13,7 @@ import (
 type MergeNode struct {
 	Key      []byte
 	Value    []byte
-	Opcode   uint8
+	Opcode   opcode.Opcode
 	FileID   int
 	Iterator *sstable.Iterator
 }
