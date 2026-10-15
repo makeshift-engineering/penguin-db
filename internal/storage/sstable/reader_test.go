@@ -2039,3 +2039,52 @@ func TestReader_ParseIndex_StrictlyIncreasingValidation(t *testing.T) {
 		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }
+
+// TestReader_Get_LargeBlockSpanBoundedRead tests point lookups in an SSTable
+// with a single large block span to ensure bounded entry-by-entry reading.
+func TestReader_Get_LargeBlockSpanBoundedRead(t *testing.T) {
+	dir := t.TempDir()
+	largeVal := bytes.Repeat([]byte("X"), 64*1024) // 64 KiB value
+	entries := []testEntry{
+		{key: []byte("k-01"), value: []byte("val-01"), opcode: OpcodePut},
+		{key: []byte("k-02"), value: largeVal, opcode: OpcodePut},
+		{key: []byte("k-03"), value: []byte("val-03"), opcode: OpcodePut},
+	}
+	// Use a very large block size so all entries are in a single block
+	path := writeTestSSTable(t, dir, "large_span.sst", entries, WithIndexBlockSize(1024*1024))
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	// Verify lookups on every key
+	val1, found, deleted, err := r.Get([]byte("k-01"))
+	if err != nil || !found || deleted || !bytes.Equal(val1, []byte("val-01")) {
+		t.Fatalf("Get(k-01): got (%s, %v, %v, %v), want (val-01, true, false, nil)", val1, found, deleted, err)
+	}
+
+	val2, found, deleted, err := r.Get([]byte("k-02"))
+	if err != nil || !found || deleted || !bytes.Equal(val2, largeVal) {
+		t.Fatalf("Get(k-02): got len %d, found %v, err %v", len(val2), found, err)
+	}
+
+	val3, found, deleted, err := r.Get([]byte("k-03"))
+	if err != nil || !found || deleted || !bytes.Equal(val3, []byte("val-03")) {
+		t.Fatalf("Get(k-03): got (%s, %v, %v, %v), want (val-03, true, false, nil)", val3, found, deleted, err)
+	}
+
+	// Missing key between entries
+	_, found, _, err = r.Get([]byte("k-015"))
+	if err != nil || found {
+		t.Fatalf("Get(k-015): expected not found, got found=%v, err=%v", found, err)
+	}
+
+	// Missing key before end of block
+	_, found, _, err = r.Get([]byte("k-025"))
+	if err != nil || found {
+		t.Fatalf("Get(k-025): expected not found, got found=%v, err=%v", found, err)
+	}
+}
+

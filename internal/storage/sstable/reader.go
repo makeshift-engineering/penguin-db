@@ -281,42 +281,59 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 		return nil, false, false, fmt.Errorf("%w: invalid block range [%d, %d)", ErrCorrupted, startOffset, endOffset)
 	}
 
-	blockSize := endOffset - startOffset
-	blockBuf := make([]byte, blockSize)
-	if _, err := r.file.ReadAt(blockBuf, int64(startOffset)); err != nil {
-		return nil, false, false, fmt.Errorf("reading data block [%d, %d): %w", startOffset, endOffset, err)
-	}
-
-	pos := 0
-	for pos < len(blockBuf) {
-		if pos+entryHeaderSize > len(blockBuf) {
-			return nil, false, false, fmt.Errorf("%w: truncated entry header in block at offset %d", ErrCorrupted, startOffset+uint64(pos))
+	curr := startOffset
+	var keyStack [64]byte
+	for curr < endOffset {
+		if curr+uint64(entryHeaderSize) > endOffset {
+			return nil, false, false, fmt.Errorf("%w: truncated entry header in block at offset %d", ErrCorrupted, curr)
 		}
 
-		keyLen := uint64(binary.LittleEndian.Uint16(blockBuf[pos+keyLenOffset : pos+valueLenOffset]))
-		valLen := uint64(binary.LittleEndian.Uint32(blockBuf[pos+valueLenOffset : pos+opcodeOffset]))
-		entryOp := opcode.Opcode(blockBuf[pos+opcodeOffset])
-
-		if uint64(pos)+uint64(entryHeaderSize)+keyLen+valLen > uint64(len(blockBuf)) {
-			return nil, false, false, fmt.Errorf("%w: entry sizes exceed block boundary at offset %d", ErrCorrupted, startOffset+uint64(pos))
+		var header [entryHeaderSize]byte
+		if _, err := r.file.ReadAt(header[:], int64(curr)); err != nil {
+			return nil, false, false, fmt.Errorf("%w: reading entry header at offset %d: %w", ErrCorrupted, curr, err)
 		}
 
-		entryKey := blockBuf[pos+entryHeaderSize : pos+entryHeaderSize+int(keyLen)]
-		cmp := bytes.Compare(entryKey, key)
+		keyLen := uint64(binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset]))
+		valLen := uint64(binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset]))
+		entryOp := opcode.Opcode(header[opcodeOffset])
+		entryLen := uint64(entryHeaderSize) + keyLen + valLen
+
+		if curr+entryLen > endOffset {
+			return nil, false, false, fmt.Errorf("%w: entry sizes exceed block boundary at offset %d", ErrCorrupted, curr)
+		}
+
+		var keyBuf []byte
+		if keyLen <= uint64(len(keyStack)) {
+			keyBuf = keyStack[:keyLen]
+		} else {
+			keyBuf = make([]byte, keyLen)
+		}
+
+		if keyLen > 0 {
+			if _, err := r.file.ReadAt(keyBuf, int64(curr+uint64(entryHeaderSize))); err != nil {
+				return nil, false, false, fmt.Errorf("%w: reading key at offset %d: %w", ErrCorrupted, curr, err)
+			}
+		}
+
+		cmp := bytes.Compare(keyBuf, key)
 		if cmp == 0 {
 			if entryOp == OpcodeDelete {
 				return nil, true, true, nil
 			} else if entryOp != OpcodePut {
-				return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, entryOp, startOffset+uint64(pos))
+				return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, entryOp, curr)
 			}
 			val := make([]byte, valLen)
-			copy(val, blockBuf[pos+entryHeaderSize+int(keyLen):pos+entryHeaderSize+int(keyLen)+int(valLen)])
+			if valLen > 0 {
+				if _, err := r.file.ReadAt(val, int64(curr+uint64(entryHeaderSize)+keyLen)); err != nil {
+					return nil, false, false, fmt.Errorf("%w: reading value at offset %d: %w", ErrCorrupted, curr, err)
+				}
+			}
 			return val, true, false, nil
 		} else if cmp > 0 {
 			return nil, false, false, nil
 		}
 
-		pos += entryHeaderSize + int(keyLen) + int(valLen)
+		curr += entryLen
 	}
 
 	return nil, false, false, nil
