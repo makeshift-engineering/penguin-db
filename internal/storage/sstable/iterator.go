@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 // Default and maximum constraint limits for iterator buffers and key/value allocations.
@@ -65,7 +67,7 @@ type Iterator struct {
 	currOffset  uint64
 	key         []byte
 	value       []byte
-	opcode      uint8
+	opcode      opcode.Opcode
 	err         error
 	closed      bool
 	hasCurrent  bool
@@ -193,7 +195,7 @@ func (iterator *Iterator) Next() {
 
 	keyLen := binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset])
 	valLen := binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset])
-	iterator.opcode = header[opcodeOffset]
+	iterator.opcode = opcode.Opcode(header[opcodeOffset])
 
 	switch iterator.opcode {
 	case OpcodePut, OpcodeDelete:
@@ -278,7 +280,7 @@ func (iterator *Iterator) IsDeleted() bool {
 }
 
 // Opcode returns the operation code (Put/Delete) of the current entry.
-func (iterator *Iterator) Opcode() uint8 {
+func (iterator *Iterator) Opcode() opcode.Opcode {
 	if iterator == nil {
 		return 0
 	}

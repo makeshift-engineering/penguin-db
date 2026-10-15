@@ -43,18 +43,23 @@ var (
 type OpType uint8
 
 const (
-	// OpPut represents an insert or update operation (0x00).
-	OpPut OpType = OpType(opcode.OpPut)
-	// OpDelete represents a logical deletion tombstone operation (0x01).
-	OpDelete OpType = OpType(opcode.OpDelete)
+	// OpPut represents an insert or update operation.
+	OpPut OpType = 0x01
+	// OpDelete represents a logical deletion tombstone operation.
+	OpDelete OpType = 0x02
 )
 
 // IsDeleted reports whether the OpType represents a tombstone deletion.
 func (op OpType) IsDeleted() bool { return op == OpDelete }
 
-// Opcode returns the raw on-disk opcode byte for this operation type.
+// Opcode returns the raw on-disk opcode for this operation type.
 // The result is safe to pass directly to wal.Record.Opcode and sstable.Writer.Add.
-func (op OpType) Opcode() uint8 { return uint8(op) }
+func (op OpType) Opcode() opcode.Opcode {
+	if op == OpDelete {
+		return opcode.OpDelete
+	}
+	return opcode.OpPut
+}
 
 // OpTypeFromIsDeleted maps a boolean tombstone flag to the matching OpType.
 func OpTypeFromIsDeleted(deleted bool) OpType {

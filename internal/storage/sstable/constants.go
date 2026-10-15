@@ -22,10 +22,10 @@ const (
 
 // Index entry field sizes and configuration
 const (
-	indexKeyLenSize      = 2
-	indexOffsetSize      = 8
-	indexEntryHeaderSize = indexKeyLenSize + indexOffsetSize
-	IndexBlockSize       = 4096 // 4 KiB block interval for sparse index entries
+	indexKeyLenSize       = 2
+	indexOffsetSize       = 8
+	indexEntryHeaderSize  = indexKeyLenSize + indexOffsetSize
+	DefaultIndexBlockSize = 4096 // 4 KiB block interval for sparse index entries
 )
 
 // Index entry field offsets
@@ -55,8 +55,11 @@ const (
 	footerMagicOffset          = footerEntryCountOffset + footerEntryCountSize
 )
 
+// Opcode represents an SSTable entry operation code.
+type Opcode = opcode.Opcode
+
 // Opcodes
 const (
-	OpcodePut    = opcode.OpcodePut
-	OpcodeDelete = opcode.OpcodeDelete
+	OpcodePut    = opcode.OpPut
+	OpcodeDelete = opcode.OpDelete
 )

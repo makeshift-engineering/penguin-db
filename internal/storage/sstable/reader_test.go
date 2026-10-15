@@ -11,18 +11,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 type testEntry struct {
 	key    []byte
 	value  []byte
-	opcode uint8
+	opcode opcode.Opcode
 }
 
-func writeTestSSTable(t *testing.T, dir, name string, entries []testEntry) string {
+func writeTestSSTable(t *testing.T, dir, name string, entries []testEntry, opts ...WriterOption) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	w, err := NewWriter(path, len(entries))
+	w, err := NewWriter(path, len(entries), opts...)
 	if err != nil {
 		t.Fatalf("NewWriter(%q): %v", name, err)
 	}
@@ -254,8 +256,9 @@ func TestOpen_CorruptedEntryCount_OOM(t *testing.T) {
 func TestReader_Get_CorruptedEntrySize(t *testing.T) {
 	dir := t.TempDir()
 	path := writeTestSSTable(t, dir, "corrupted_size.sst", []testEntry{
-		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
-	})
+		{key: []byte("a"), value: []byte("v"), opcode: OpcodePut},
+		{key: []byte("z"), value: []byte("v"), opcode: OpcodePut},
+	}, WithIndexBlockSize(8))
 
 	r, err := Open(path)
 	if err != nil {
@@ -285,7 +288,7 @@ func TestReader_Get_CorruptedEntrySize(t *testing.T) {
 	}
 	defer r.Close()
 
-	_, _, _, err = r.Get([]byte("k"))
+	_, _, _, err = r.Get([]byte("a"))
 	if err == nil {
 		t.Fatal("expected error for corrupted entry size, got nil")
 	}
@@ -1541,8 +1544,9 @@ func TestReader_Get_CorruptedIndexOffsetInMemory(t *testing.T) {
 func TestReader_Get_CorruptedValLen_OOMPrevention(t *testing.T) {
 	dir := t.TempDir()
 	path := writeTestSSTable(t, dir, "corrupt_vallen.sst", []testEntry{
-		{key: []byte("k"), value: []byte("v"), opcode: OpcodePut},
-	})
+		{key: []byte("a"), value: []byte("v"), opcode: OpcodePut},
+		{key: []byte("z"), value: []byte("v"), opcode: OpcodePut},
+	}, WithIndexBlockSize(8))
 
 	r, err := Open(path)
 	if err != nil {
@@ -1576,7 +1580,7 @@ func TestReader_Get_CorruptedValLen_OOMPrevention(t *testing.T) {
 	}
 	defer r.Close()
 
-	_, _, _, err = r.Get([]byte("k"))
+	_, _, _, err = r.Get([]byte("a"))
 	if err == nil {
 		t.Fatal("expected error for corrupted valLen, got nil")
 	}
@@ -1683,5 +1687,355 @@ func TestReader_MinMaxAndIteratorAt(t *testing.T) {
 	}
 	if rEmpty.MaxKey() != nil {
 		t.Errorf("expected nil MaxKey for empty, got %s", rEmpty.MaxKey())
+	}
+}
+
+// TestReader_MultiBlock_GetAndIteratorAt exercises multi-block lookups:
+// on block boundary keys, between block keys, non-existent mid-block keys, and past-the-end keys.
+func TestReader_MultiBlock_GetAndIteratorAt(t *testing.T) {
+	dir := t.TempDir()
+	n := 12
+	entries := make([]testEntry, n)
+	for i := 0; i < n; i++ {
+		entries[i] = testEntry{
+			key:    []byte(fmt.Sprintf("key-%02d", i*2)), // key-00, key-02, key-04, ..., key-22
+			value:  []byte(fmt.Sprintf("val-%02d", i*2)),
+			opcode: OpcodePut,
+		}
+	}
+
+	// 64-byte blocks ensure ~25-byte entries span ~4-5 blocks
+	path := writeTestSSTable(t, dir, "multi_block.sst", entries, WithIndexBlockSize(64))
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	if len(r.index) < 3 {
+		t.Fatalf("expected at least 3 blocks, got %d", len(r.index))
+	}
+
+	// Get on a block's first key (exact sparse index boundary)
+	block1FirstKey := r.index[1].key
+	val, found, deleted, err := r.Get(block1FirstKey)
+	if err != nil || !found || deleted {
+		t.Fatalf("Get on block boundary %s: found=%v, deleted=%v, err=%v", block1FirstKey, found, deleted, err)
+	}
+	if !strings.HasPrefix(string(val), "val-") {
+		t.Errorf("unexpected value on block boundary: %s", val)
+	}
+
+	// Get between blocks (inside block 0, not the first key of the SSTable)
+	val, found, deleted, err = r.Get([]byte("key-02"))
+	if err != nil || !found || deleted {
+		t.Fatalf("Get between blocks: found=%v, deleted=%v, err=%v", found, deleted, err)
+	}
+	if string(val) != "val-02" {
+		t.Errorf("expected val-02, got %s", val)
+	}
+
+	// Get non-existent key between blocks
+	_, found, _, err = r.Get([]byte("key-03"))
+	if err != nil {
+		t.Fatalf("Get non-existent: %v", err)
+	}
+	if found {
+		t.Error("expected key-03 not found, but found was true")
+	}
+
+	// Get past the end of the SSTable
+	_, found, _, err = r.Get([]byte("key-99"))
+	if err != nil {
+		t.Fatalf("Get past end: %v", err)
+	}
+	if found {
+		t.Error("expected key-99 not found, but found was true")
+	}
+
+	// Get before the beginning of the SSTable
+	_, found, _, err = r.Get([]byte("key-"))
+	if err != nil {
+		t.Fatalf("Get before start: %v", err)
+	}
+	if found {
+		t.Error("expected key- not found, but found was true")
+	}
+
+	// NewIteratorAt on a block's first key
+	it1, err := r.NewIteratorAt(block1FirstKey)
+	if err != nil {
+		t.Fatalf("NewIteratorAt on boundary: %v", err)
+	}
+	defer it1.Close()
+	it1.Next()
+	if !it1.Valid() || !bytes.Equal(it1.Key(), block1FirstKey) {
+		t.Errorf("NewIteratorAt on boundary: got %s, want %s", it1.Key(), block1FirstKey)
+	}
+
+	// NewIteratorAt between existing keys (seek "key-03" should land on "key-04")
+	it2, err := r.NewIteratorAt([]byte("key-03"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt mid-block: %v", err)
+	}
+	defer it2.Close()
+	it2.Next()
+	if !it2.Valid() || !bytes.Equal(it2.Key(), []byte("key-04")) {
+		t.Errorf("NewIteratorAt mid-block: got %s, want key-04", it2.Key())
+	}
+
+	// NewIteratorAt past the end
+	it3, err := r.NewIteratorAt([]byte("key-99"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt past end: %v", err)
+	}
+	defer it3.Close()
+	it3.Next()
+	if it3.Valid() {
+		t.Errorf("NewIteratorAt past end should be invalid, got %s", it3.Key())
+	}
+
+	// NewIteratorAt before start
+	it4, err := r.NewIteratorAt([]byte("a"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt before start: %v", err)
+	}
+	defer it4.Close()
+	it4.Next()
+	if !it4.Valid() || !bytes.Equal(it4.Key(), []byte("key-00")) {
+		t.Errorf("NewIteratorAt before start: got %s, want key-00", it4.Key())
+	}
+}
+
+// TestReader_MidBlock_Tombstones verifies that tombstone entries located in the
+// middle of a data block are correctly reported by Get and Iterator.
+func TestReader_MidBlock_Tombstones(t *testing.T) {
+	dir := t.TempDir()
+	entries := []testEntry{
+		{key: []byte("k-00"), value: []byte("v-00"), opcode: OpcodePut},
+		{key: []byte("k-01"), value: nil, opcode: OpcodeDelete}, // tombstone mid-block
+		{key: []byte("k-02"), value: []byte("v-02"), opcode: OpcodePut},
+		{key: []byte("k-03"), value: nil, opcode: OpcodeDelete}, // tombstone mid-block
+		{key: []byte("k-04"), value: []byte("v-04"), opcode: OpcodePut},
+	}
+	path := writeTestSSTable(t, dir, "tombstones.sst", entries)
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	// Get tombstone k-01
+	val, found, deleted, err := r.Get([]byte("k-01"))
+	if err != nil {
+		t.Fatalf("Get(k-01): %v", err)
+	}
+	if !found || !deleted || val != nil {
+		t.Errorf("Get(k-01): got found=%v, deleted=%v, val=%v; want found=true, deleted=true, val=nil", found, deleted, val)
+	}
+
+	// Get live key k-02
+	val, found, deleted, err = r.Get([]byte("k-02"))
+	if err != nil || !found || deleted || string(val) != "v-02" {
+		t.Errorf("Get(k-02): got found=%v, deleted=%v, val=%s; want found=true, deleted=false, val=v-02", found, deleted, val)
+	}
+
+	// Seek iterator directly to tombstone k-01
+	iter, err := r.NewIteratorAt([]byte("k-01"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt: %v", err)
+	}
+	defer iter.Close()
+	iter.Next()
+	if !iter.Valid() {
+		t.Fatal("expected iter to be valid at k-01")
+	}
+	if !bytes.Equal(iter.Key(), []byte("k-01")) {
+		t.Errorf("expected k-01, got %s", iter.Key())
+	}
+	if !iter.IsDeleted() {
+		t.Error("expected IsDeleted to be true for k-01")
+	}
+	if iter.Opcode() != OpcodeDelete {
+		t.Errorf("expected OpcodeDelete, got %v", iter.Opcode())
+	}
+}
+
+// TestReader_ValueLargerThanBlockSize tests reading an entry whose value
+// size exceeds the sparse index block interval.
+func TestReader_ValueLargerThanBlockSize(t *testing.T) {
+	dir := t.TempDir()
+	largeVal := bytes.Repeat([]byte("X"), 1024) // 1 KiB value with 64-byte block size
+	entries := []testEntry{
+		{key: []byte("k-01"), value: []byte("small-before"), opcode: OpcodePut},
+		{key: []byte("k-02"), value: largeVal, opcode: OpcodePut},
+		{key: []byte("k-03"), value: []byte("small-after"), opcode: OpcodePut},
+	}
+	path := writeTestSSTable(t, dir, "large_val.sst", entries, WithIndexBlockSize(64))
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	// Verify Get on large entry
+	val, found, deleted, err := r.Get([]byte("k-02"))
+	if err != nil || !found || deleted {
+		t.Fatalf("Get(k-02): found=%v, deleted=%v, err=%v", found, deleted, err)
+	}
+	if !bytes.Equal(val, largeVal) {
+		t.Errorf("large value mismatch: got %d bytes, want %d bytes", len(val), len(largeVal))
+	}
+
+	// Verify Get on entry after large entry
+	valAfter, found, deleted, err := r.Get([]byte("k-03"))
+	if err != nil || !found || deleted {
+		t.Fatalf("Get(k-03): found=%v, deleted=%v, err=%v", found, deleted, err)
+	}
+	if string(valAfter) != "small-after" {
+		t.Errorf("valAfter: got %s, want small-after", valAfter)
+	}
+
+	// Verify Iterator scanning across large entry
+	iter, err := r.NewIteratorAt([]byte("k-01"))
+	if err != nil {
+		t.Fatalf("NewIteratorAt: %v", err)
+	}
+	defer iter.Close()
+
+	iter.Next()
+	if !iter.Valid() || string(iter.Key()) != "k-01" {
+		t.Fatalf("iter step 1: got %s", iter.Key())
+	}
+	iter.Next()
+	if !iter.Valid() || string(iter.Key()) != "k-02" || !bytes.Equal(iter.Value(), largeVal) {
+		t.Fatalf("iter step 2: got %s, len=%d", iter.Key(), len(iter.Value()))
+	}
+	iter.Next()
+	if !iter.Valid() || string(iter.Key()) != "k-03" {
+		t.Fatalf("iter step 3: got %s", iter.Key())
+	}
+}
+
+// TestReader_OldDenseFiles verifies that SSTable files with dense indexing
+// (1 index entry per data entry) open and query correctly.
+func TestReader_OldDenseFiles(t *testing.T) {
+	dir := t.TempDir()
+	n := 10
+	entries := make([]testEntry, n)
+	for i := 0; i < n; i++ {
+		entries[i] = testEntry{
+			key:    []byte(fmt.Sprintf("dense-%02d", i)),
+			value:  []byte(fmt.Sprintf("val-%02d", i)),
+			opcode: OpcodePut,
+		}
+	}
+
+	// WithIndexBlockSize(1) forces an index entry for every single key (dense file)
+	path := writeTestSSTable(t, dir, "dense.sst", entries, WithIndexBlockSize(1))
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	if len(r.index) != n {
+		t.Errorf("dense index length: got %d, want %d", len(r.index), n)
+	}
+	if !bytes.Equal(r.MinKey(), []byte("dense-00")) {
+		t.Errorf("MinKey: got %s, want dense-00", r.MinKey())
+	}
+	if !bytes.Equal(r.MaxKey(), []byte("dense-09")) {
+		t.Errorf("MaxKey: got %s, want dense-09", r.MaxKey())
+	}
+
+	// Check all Get lookups
+	for i := 0; i < n; i++ {
+		k := []byte(fmt.Sprintf("dense-%02d", i))
+		wantV := fmt.Sprintf("val-%02d", i)
+		val, found, deleted, err := r.Get(k)
+		if err != nil || !found || deleted || string(val) != wantV {
+			t.Errorf("Get(%s): got (%s, %v, %v, %v), want %s", k, val, found, deleted, err, wantV)
+		}
+	}
+}
+
+// TestReader_MaxKey_ReadFailure verifies that corruption in the last data block
+// is caught and surfaced immediately as ErrCorrupted during Open.
+func TestReader_MaxKey_ReadFailure(t *testing.T) {
+	dir := t.TempDir()
+	entries := []testEntry{
+		{key: []byte("k1"), value: []byte("v1"), opcode: OpcodePut},
+		{key: []byte("k2"), value: []byte("v2"), opcode: OpcodePut},
+	}
+	path := writeTestSSTable(t, dir, "corrupted_maxkey.sst", entries)
+
+	// Corrupt the header of the last entry by overwriting its keyLen to an impossible value
+	f, err := os.OpenFile(path, os.O_RDWR, 0o666)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	// The second entry starts at offset 9 (7 header + 1 key + 1 val)
+	var corruptHeader [entryHeaderSize]byte
+	binary.LittleEndian.PutUint16(corruptHeader[keyLenOffset:valueLenOffset], 9999) // exceeds block
+	if _, err := f.WriteAt(corruptHeader[:], 9); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	f.Close()
+
+	_, err = Open(path)
+	if err == nil {
+		t.Fatal("expected Open to fail for corrupted last entry, got nil")
+	}
+	if !errors.Is(err, ErrCorrupted) {
+		t.Errorf("expected ErrCorrupted, got: %v", err)
+	}
+}
+
+// TestReader_ParseIndex_StrictlyIncreasingValidation verifies that parseIndex
+// rejects out-of-order keys or non-increasing offsets.
+func TestReader_ParseIndex_StrictlyIncreasingValidation(t *testing.T) {
+	// Out-of-order keys: "b" at 0, then "a" at 20
+	outOfOrderBuf := make([]byte, 0, (indexEntryHeaderSize+1)*2)
+	// entry 1: key="b", offset=0
+	h1 := make([]byte, indexEntryHeaderSize)
+	binary.LittleEndian.PutUint16(h1[indexKeyLenOffset:], 1)
+	binary.LittleEndian.PutUint64(h1[indexOffsetOffset:], 0)
+	outOfOrderBuf = append(outOfOrderBuf, h1...)
+	outOfOrderBuf = append(outOfOrderBuf, []byte("b")...)
+
+	// entry 2: key="a", offset=20 (key "a" < "b")
+	h2 := make([]byte, indexEntryHeaderSize)
+	binary.LittleEndian.PutUint16(h2[indexKeyLenOffset:], 1)
+	binary.LittleEndian.PutUint64(h2[indexOffsetOffset:], 20)
+	outOfOrderBuf = append(outOfOrderBuf, h2...)
+	outOfOrderBuf = append(outOfOrderBuf, []byte("a")...)
+
+	_, err := parseIndex(outOfOrderBuf, 2, 50)
+	if err == nil {
+		t.Error("expected error for out-of-order index keys, got nil")
+	} else if !errors.Is(err, ErrCorrupted) {
+		t.Errorf("expected ErrCorrupted, got: %v", err)
+	}
+
+	// Non-increasing offset: "a" at 20, "b" at 10
+	badOffsetBuf := make([]byte, 0, (indexEntryHeaderSize+1)*2)
+	binary.LittleEndian.PutUint64(h1[indexOffsetOffset:], 0)
+	badOffsetBuf = append(badOffsetBuf, h1...)
+	badOffsetBuf = append(badOffsetBuf, []byte("a")...)
+
+	binary.LittleEndian.PutUint64(h2[indexOffsetOffset:], 0) // offset 0 <= 0 (not strictly increasing)
+	badOffsetBuf = append(badOffsetBuf, h2...)
+	badOffsetBuf = append(badOffsetBuf, []byte("b")...)
+
+	_, err = parseIndex(badOffsetBuf, 2, 50)
+	if err == nil {
+		t.Error("expected error for non-increasing index offsets, got nil")
+	} else if !errors.Is(err, ErrCorrupted) {
+		t.Errorf("expected ErrCorrupted, got: %v", err)
 	}
 }

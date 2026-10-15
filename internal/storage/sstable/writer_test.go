@@ -110,7 +110,7 @@ func TestWriter_SingleEntry(t *testing.T) {
 	if valLen != uint32(len(val)) {
 		t.Errorf("data valLen: got %d, want %d", valLen, len(val))
 	}
-	if opcode != OpcodePut {
+	if opcode != OpcodePut.Byte() {
 		t.Errorf("data opcode: got 0x%02X, want 0x%02X", opcode, OpcodePut)
 	}
 
@@ -213,7 +213,7 @@ func TestWriter_SortedEntries(t *testing.T) {
 		if !bytes.Equal(dKey, idxKey) {
 			t.Errorf("data key at offset %d: got %q, want index key %q", dataOff, dKey, idxKey)
 		}
-		if dOpcode != OpcodePut {
+		if dOpcode != OpcodePut.Byte() {
 			t.Errorf("data opcode at offset %d: got 0x%02X, want 0x%02X", dataOff, dOpcode, OpcodePut)
 		}
 		idxCount++
@@ -254,7 +254,7 @@ func TestWriter_TombstoneEntry(t *testing.T) {
 	valLen := binary.LittleEndian.Uint32(data[keyLenSize : keyLenSize+valueLenSize])
 	opcode := data[keyLenSize+valueLenSize]
 
-	if opcode != OpcodeDelete {
+	if opcode != OpcodeDelete.Byte() {
 		t.Errorf("opcode: got 0x%02X, want 0x%02X (OpcodeDelete)", opcode, OpcodeDelete)
 	}
 	if valLen != 0 {
@@ -279,7 +279,7 @@ func TestWriter_MixedPutAndDelete(t *testing.T) {
 	type entry struct {
 		key    []byte
 		value  []byte
-		opcode uint8
+		opcode Opcode
 	}
 
 	entries := []entry{
@@ -321,7 +321,7 @@ func TestWriter_MixedPutAndDelete(t *testing.T) {
 		op := data[pos]
 		pos += opcodeSize
 
-		if op != e.opcode {
+		if op != e.opcode.Byte() {
 			t.Errorf("entry %d opcode: got 0x%02X, want 0x%02X", i, op, e.opcode)
 		}
 
@@ -482,7 +482,7 @@ func TestWriter_EmptyValue(t *testing.T) {
 	if valLen != 0 {
 		t.Errorf("value length: got %d, want 0", valLen)
 	}
-	if opcode != OpcodePut {
+	if opcode != OpcodePut.Byte() {
 		t.Errorf("opcode: got 0x%02X, want 0x%02X (OpcodePut)", opcode, OpcodePut)
 	}
 }
@@ -1419,7 +1419,7 @@ func TestWriter_AllTombstones(t *testing.T) {
 		opcode := data[pos]
 		pos++
 
-		if opcode != OpcodeDelete {
+		if opcode != OpcodeDelete.Byte() {
 			t.Errorf("entry[%d] opcode: got 0x%02X, want 0x%02X", i, opcode, OpcodeDelete)
 		}
 		if vl != 0 {

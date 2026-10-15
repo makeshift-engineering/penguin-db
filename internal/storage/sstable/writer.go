@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 // indexEntry records the key and byte offset of a single data entry
@@ -52,6 +54,10 @@ type Writer struct {
 // the in-memory bloom filter and index structures.
 const MaxWriterExpectedKeys = 100000000
 
+// estimatedAvgEntrySizeBytes is a conservative lower-bound estimate of the average
+// size of a key-value data entry (7-byte header + key bytes + value bytes).
+const estimatedAvgEntrySizeBytes = 256
+
 // NewWriter creates a new SSTable Writer for the specified file path.
 // It initializes a bloom filter and an index based on expectedKeys to minimize
 // memory reallocations. expectedKeys must be between 0 and MaxWriterExpectedKeys.
@@ -61,7 +67,7 @@ func NewWriter(filePath string, expectedKeys int, opts ...WriterOption) (*Writer
 	}
 
 	cfg := WriterOptions{
-		IndexBlockSize: IndexBlockSize,
+		IndexBlockSize: DefaultIndexBlockSize,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -82,9 +88,18 @@ func NewWriter(filePath string, expectedKeys int, opts ...WriterOption) (*Writer
 		return nil, err
 	}
 
-	// For a sparse index, the number of index entries is significantly less than
-	// expectedKeys. We estimate capacity conservatively.
-	estimatedIndexCap := expectedKeys/16 + 1
+	// For a sparse index, an index entry is recorded only once per block boundary
+	// (plus the mandatory entry for the very first key).
+	// We estimate capacity using a conservative average entry size (estimatedAvgEntrySizeBytes):
+	//   entriesPerBlock = max(1, IndexBlockSize / estimatedAvgEntrySizeBytes)
+	//   estimatedIndexCap = (expectedKeys / entriesPerBlock) + 1
+	// The "+ 1" accounts for the mandatory first index entry and prevents zero capacity
+	// when expectedKeys < entriesPerBlock.
+	entriesPerBlock := int(cfg.IndexBlockSize / estimatedAvgEntrySizeBytes)
+	if entriesPerBlock < 1 {
+		entriesPerBlock = 1
+	}
+	estimatedIndexCap := (expectedKeys / entriesPerBlock) + 1
 
 	return &Writer{
 		file:           file,
@@ -110,7 +125,7 @@ func (w *Writer) IndexBlockSize() uint64 {
 //	| Key Length | Value Length | Opcode   | Key       | Value     |
 //	| (2 bytes)  | (4 bytes)    | (1 byte) | (n bytes) | (m bytes) |
 //	+------------+--------------+----------+-----------+-----------+
-func (w *Writer) Add(key, value []byte, opcode uint8) error {
+func (w *Writer) Add(key, value []byte, op opcode.Opcode) error {
 	if len(key) > math.MaxUint16 {
 		return ErrKeyTooLarge
 	}
@@ -136,7 +151,7 @@ func (w *Writer) Add(key, value []byte, opcode uint8) error {
 	var header [entryHeaderSize]byte
 	binary.LittleEndian.PutUint16(header[keyLenOffset:valueLenOffset], uint16(len(key)))
 	binary.LittleEndian.PutUint32(header[valueLenOffset:opcodeOffset], uint32(len(value)))
-	header[opcodeOffset] = opcode
+	header[opcodeOffset] = op.Byte()
 
 	if _, err := w.writer.Write(header[:]); err != nil {
 		return err

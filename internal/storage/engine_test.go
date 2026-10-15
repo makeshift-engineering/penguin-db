@@ -237,6 +237,11 @@ func TestEngine_ValidationErrors(t *testing.T) {
 		t.Error("WriteBatch with invalid OpType: expected error, got nil")
 	}
 
+	// Unset OpType (zero value 0x00) in WriteBatch must be rejected.
+	if err := engine.WriteBatch(context.Background(), []Op{{Key: []byte("k"), Value: []byte("v")}}); err == nil {
+		t.Error("WriteBatch with unset OpType (0x00): expected error, got nil")
+	}
+
 	// Empty key inside WriteBatch.
 	if err := engine.WriteBatch(context.Background(), []Op{{Type: OpPut, Key: nil, Value: []byte("v")}}); err == nil {
 		t.Error("WriteBatch with nil key: expected error, got nil")

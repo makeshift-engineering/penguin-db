@@ -1,11 +1,10 @@
 package opcode
 
-// Opcode is the common uint8 type for all write operation codes across
-// PenguinDB storage engine components (WAL, MemTable, SSTable, Storage Engine).
-//
-// All three on-disk formats agree on the same byte values, so no translation
-// is required when crossing package boundaries.
-type Opcode = uint8
+import "fmt"
+
+// Opcode is the distinct uint8 type for all write operation codes across
+// PenguinDB on-disk storage engine formats (WAL, SSTable).
+type Opcode uint8
 
 // Canonical opcode values used by every on-disk format in this codebase.
 const (
@@ -13,12 +12,36 @@ const (
 	OpPut Opcode = 0x00
 	// OpDelete is the opcode for a tombstone deletion operation (0x01).
 	OpDelete Opcode = 0x01
-
-	// OpcodePut / OpcodeDelete are package-level aliases kept for
-	// readability when used inside package-local constant blocks.
-	OpcodePut    = OpPut
-	OpcodeDelete = OpDelete
 )
 
-// IsDelete returns true when the opcode represents a tombstone deletion.
-func IsDelete(opcode Opcode) bool { return opcode == OpcodeDelete }
+// IsValid reports whether the opcode is a recognized canonical operation.
+func (op Opcode) IsValid() bool {
+	return op == OpPut || op == OpDelete
+}
+
+// IsDeleted reports whether the opcode represents a tombstone deletion.
+func (op Opcode) IsDeleted() bool {
+	return op == OpDelete
+}
+
+// Byte returns the raw byte representation of the opcode.
+func (op Opcode) Byte() byte {
+	return byte(op)
+}
+
+// String returns a human-readable representation of the opcode.
+func (op Opcode) String() string {
+	switch op {
+	case OpPut:
+		return "PUT"
+	case OpDelete:
+		return "DELETE"
+	default:
+		return fmt.Sprintf("UNKNOWN(0x%02X)", uint8(op))
+	}
+}
+
+// IsDeleted returns true when the opcode represents a tombstone deletion.
+func IsDeleted(op Opcode) bool {
+	return op.IsDeleted()
+}

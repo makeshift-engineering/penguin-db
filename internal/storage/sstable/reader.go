@@ -9,8 +9,9 @@ import (
 	"math"
 	"os"
 	"sort"
-	"sync"
 	"sync/atomic"
+
+	"github.com/makeshift-engineering/penguin-db/internal/storage/opcode"
 )
 
 // Reader reads entries from an immutable SSTable file. On Open, the footer,
@@ -22,7 +23,6 @@ type Reader struct {
 	bloomFilter *BloomFilter
 	index       []indexEntry
 	maxKey      []byte
-	maxKeyOnce  sync.Once
 	entryCount  uint32
 	fileSize    int64
 	indexOffset uint64
@@ -117,12 +117,48 @@ func Open(filePath string) (*Reader, error) {
 
 	bloomFilter := NewBloomFilterFromBytes(bloomData, bloomNumHashes)
 
+	// Validate and compute maxKey from the last block during Open.
+	var maxKey []byte
+	if entryCount > 0 {
+		lastBlockOffset := index[len(index)-1].offset
+		curr := lastBlockOffset
+		for curr < indexOffset {
+			var header [entryHeaderSize]byte
+			if _, err := file.ReadAt(header[:], int64(curr)); err != nil {
+				return nil, fmt.Errorf("%w: reading last block header at %d: %w", ErrCorrupted, curr, err)
+			}
+			keyLen := uint64(binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset]))
+			valLen := uint64(binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset]))
+			entryLen := uint64(entryHeaderSize) + keyLen + valLen
+
+			if curr+entryLen > indexOffset {
+				return nil, fmt.Errorf("%w: last block entry at %d exceeds data block boundary %d", ErrCorrupted, curr, indexOffset)
+			}
+
+			if curr+entryLen == indexOffset {
+				buf := make([]byte, keyLen)
+				if keyLen > 0 {
+					if _, err := file.ReadAt(buf, int64(curr+uint64(entryHeaderSize))); err != nil {
+						return nil, fmt.Errorf("%w: reading last block key at %d: %w", ErrCorrupted, curr, err)
+					}
+				}
+				maxKey = buf
+				break
+			}
+			curr += entryLen
+		}
+		if maxKey == nil {
+			return nil, fmt.Errorf("%w: failed to find last key in data block", ErrCorrupted)
+		}
+	}
+
 	success = true
 
 	return &Reader{
 		file:        file,
 		bloomFilter: bloomFilter,
 		index:       index,
+		maxKey:      maxKey,
 		entryCount:  entryCount,
 		fileSize:    fileSize,
 		indexOffset: indexOffset,
@@ -157,6 +193,16 @@ func parseIndex(data []byte, expectedCount uint32, indexOffset uint64) ([]indexE
 		key := make([]byte, keyLen)
 		copy(key, data[pos:pos+int(keyLen)])
 		pos += int(keyLen)
+
+		if len(entries) > 0 {
+			prev := entries[len(entries)-1]
+			if bytes.Compare(prev.key, key) >= 0 {
+				return nil, fmt.Errorf("%w: index keys out of order (prev %q >= curr %q)", ErrCorrupted, prev.key, key)
+			}
+			if offset <= prev.offset {
+				return nil, fmt.Errorf("%w: index offsets not strictly increasing (prev %d >= curr %d)", ErrCorrupted, prev.offset, offset)
+			}
+		}
 
 		entries = append(entries, indexEntry{
 			key:    key,
@@ -249,7 +295,7 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 
 		keyLen := uint64(binary.LittleEndian.Uint16(blockBuf[pos+keyLenOffset : pos+valueLenOffset]))
 		valLen := uint64(binary.LittleEndian.Uint32(blockBuf[pos+valueLenOffset : pos+opcodeOffset]))
-		opcode := blockBuf[pos+opcodeOffset]
+		entryOp := opcode.Opcode(blockBuf[pos+opcodeOffset])
 
 		if uint64(pos)+uint64(entryHeaderSize)+keyLen+valLen > uint64(len(blockBuf)) {
 			return nil, false, false, fmt.Errorf("%w: entry sizes exceed block boundary at offset %d", ErrCorrupted, startOffset+uint64(pos))
@@ -258,10 +304,10 @@ func (r *Reader) Get(key []byte) (value []byte, found, deleted bool, err error) 
 		entryKey := blockBuf[pos+entryHeaderSize : pos+entryHeaderSize+int(keyLen)]
 		cmp := bytes.Compare(entryKey, key)
 		if cmp == 0 {
-			if opcode == OpcodeDelete {
+			if entryOp == OpcodeDelete {
 				return nil, true, true, nil
-			} else if opcode != OpcodePut {
-				return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, opcode, startOffset+uint64(pos))
+			} else if entryOp != OpcodePut {
+				return nil, false, false, fmt.Errorf("%w: unknown opcode %d at offset %d", ErrCorrupted, entryOp, startOffset+uint64(pos))
 			}
 			val := make([]byte, valLen)
 			copy(val, blockBuf[pos+entryHeaderSize+int(keyLen):pos+entryHeaderSize+int(keyLen)+int(valLen)])
@@ -309,43 +355,7 @@ func (r *Reader) MinKey() []byte {
 
 // MaxKey returns the largest key in this SSTable.
 func (r *Reader) MaxKey() []byte {
-	if atomic.LoadInt32(&r.closed) != 0 {
-		return nil
-	}
-	r.maxKeyOnce.Do(func() {
-		if r.entryCount == 0 || len(r.index) == 0 {
-			return
-		}
-		lastBlockOffset := r.index[len(r.index)-1].offset
-		curr := lastBlockOffset
-		for curr < r.indexOffset {
-			var header [entryHeaderSize]byte
-			if _, err := r.file.ReadAt(header[:], int64(curr)); err != nil {
-				return
-			}
-			keyLen := uint64(binary.LittleEndian.Uint16(header[keyLenOffset:valueLenOffset]))
-			valLen := uint64(binary.LittleEndian.Uint32(header[valueLenOffset:opcodeOffset]))
-			entryLen := uint64(entryHeaderSize) + keyLen + valLen
-
-			if curr+entryLen > r.indexOffset {
-				return
-			}
-
-			if curr+entryLen == r.indexOffset {
-				buf := make([]byte, keyLen)
-				if keyLen > 0 {
-					if _, err := r.file.ReadAt(buf, int64(curr+uint64(entryHeaderSize))); err != nil {
-						return
-					}
-				}
-				r.maxKey = buf
-				break
-			}
-			curr += entryLen
-		}
-	})
-
-	if len(r.maxKey) == 0 && r.entryCount == 0 {
+	if atomic.LoadInt32(&r.closed) != 0 || len(r.maxKey) == 0 {
 		return nil
 	}
 	k := make([]byte, len(r.maxKey))
