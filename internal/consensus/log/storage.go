@@ -53,7 +53,7 @@ type PersistentLog struct {
 }
 
 func OpenPersistentLog(dir string) (*PersistentLog, error) {
-	if err := os.MkdirAll(dir, 0o75); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create log dir %s: %w", dir, err)
 	}
 

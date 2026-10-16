@@ -78,8 +78,8 @@ func (s *Segment) Append(entry *consensuspb.LogEntry) (int64, int64, error) {
 	buf := make([]byte, recordLen)
 
 	binary.LittleEndian.PutUint16(buf[0:2], segmentMagic)
-	binary.LittleEndian.PutUint16(buf[6:14], uint16(entry.Index))
-	binary.LittleEndian.PutUint16(buf[14:22], uint16(entry.Term))
+	binary.LittleEndian.PutUint64(buf[6:14], entry.Index)
+	binary.LittleEndian.PutUint64(buf[14:22], entry.Term)
 	buf[22] = uint8(entry.Type)
 	binary.LittleEndian.PutUint32(buf[23:27], payloadLen)
 	copy(buf[27:], entry.Data)

@@ -26,7 +26,7 @@ type MetaStore struct {
 }
 
 func NewMetaStore(dir string) (*MetaStore, error) {
-	if err := os.MkdirAll(dir, 0o7555); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create meta directory: %w", err)
 	}
 
