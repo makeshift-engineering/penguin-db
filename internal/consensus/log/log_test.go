@@ -281,7 +281,7 @@ func TestPersistentLog_LifecycleAndRecovery(t *testing.T) {
 			Index: uint64(i + 1),
 			Term:  2,
 			Type:  consensuspb.EntryType_ENTRY_TYPE_NORMAL,
-			Data:  []byte(fmt.Sprintf("command-payload-%d", i+1)),
+			Data:  fmt.Appendf(nil, "command-payload-%d", i+1),
 		}
 	}
 
@@ -322,7 +322,7 @@ func TestPersistentLog_LifecycleAndRecovery(t *testing.T) {
 	}
 
 	for i, entry := range fetchedEntries {
-		expectedData := []byte(fmt.Sprintf("command-payload-%d", i+1))
+		expectedData := fmt.Appendf(nil, "command-payload-%d", i+1)
 		if !bytes.Equal(entry.Data, expectedData) {
 			t.Errorf("entry %d payload mismatch: got %q, want %q", entry.Index, entry.Data, expectedData)
 		}
@@ -387,7 +387,7 @@ func TestPersistentLog_TruncateSuffix(t *testing.T) {
 			Index: uint64(i + 1),
 			Term:  1,
 			Type:  consensuspb.EntryType_ENTRY_TYPE_NORMAL,
-			Data:  []byte(fmt.Sprintf("initial-val-%d", i+1)),
+			Data:  fmt.Appendf(nil, "initial-val-%d", i+1),
 		}
 	}
 
@@ -507,7 +507,7 @@ func TestPersistentLog_ConcurrentOperations(t *testing.T) {
 			Index: uint64(i + 1),
 			Term:  1,
 			Type:  consensuspb.EntryType_ENTRY_TYPE_NORMAL,
-			Data:  []byte(fmt.Sprintf("initial-val-%d", i+1)),
+			Data:  fmt.Appendf(nil, "initial-val-%d", i+1),
 		}
 	}
 	if err := pl.Append(seedEntries); err != nil {
@@ -549,7 +549,7 @@ func TestPersistentLog_ConcurrentOperations(t *testing.T) {
 					Index: newIdx,
 					Term:  1,
 					Type:  consensuspb.EntryType_ENTRY_TYPE_NORMAL,
-					Data:  []byte(fmt.Sprintf("concurrent-append-%d-%d", appenderID, newIdx)),
+					Data:  fmt.Appendf(nil, "concurrent-append-%d-%d", appenderID, newIdx),
 				}
 				pl.activeSegment.Append(newEntry)
 				pl.index.Append(newIdx, 1, pl.activeSegment.baseIndex, 0, 0)
