@@ -67,7 +67,7 @@ func (f *LSMStateMachine) applyWriteBatch(data []byte) (any, error) {
 		return nil, nil
 	}
 
-	engineOps := make([]storage.Op, len(batch.Operations))
+	engineOps := make([]storage.Op, 0, len(batch.Operations))
 	for _, op := range batch.Operations {
 		var opType storage.OpType
 		switch op.Type {
