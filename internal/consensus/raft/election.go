@@ -105,6 +105,7 @@ func (r *RaftNode) becomeLeader() {
 	}
 
 	r.stopElectionTimer()
+	r.startHeartbeatTicker()
 	slog.Info("Won election and transitioned to Leader", "node", r.cfg.NodeID, "term", r.currentTerm, "noOpIndex", noOpIndex)
 }
 
@@ -169,7 +170,7 @@ func (r *RaftNode) handleVoteResponse(event voteResponseEvent) {
 	}
 
 	if event.isPreVote {
-		if r.role != RolePreCandidate || resp.Term != r.currentTerm+1 {
+		if r.role != RolePreCandidate || resp.Term < r.currentTerm {
 			return
 		}
 		if resp.VoteGranted {
@@ -198,7 +199,7 @@ func (r *RaftNode) handleVoteResponse(event voteResponseEvent) {
 
 func (r *RaftNode) HandleRequestVote(ctx context.Context, req *consensuspb.RequestVoteRequest) (*consensuspb.RequestVoteResponse, error) {
 	r.mu.Lock()
-	defer r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if req.Term < r.currentTerm {
 		return &consensuspb.RequestVoteResponse{

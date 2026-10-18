@@ -89,7 +89,7 @@ func (r *RaftNode) Stop() error {
 		close(ch)
 		delete(r.proposals, index)
 	}
-	r.proposalsMu.Lock()
+	r.proposalsMu.Unlock()
 
 	_ = r.transport.Close()
 	_ = r.log.Close()
@@ -113,7 +113,7 @@ func (r *RaftNode) run() {
 
 func (r *RaftNode) handleEvent(event any) {
 	r.mu.Lock()
-	defer r.mu.RUnlock()
+	defer r.mu.Unlock()
 
 	if r.stopped {
 		return

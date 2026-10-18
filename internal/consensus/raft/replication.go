@@ -43,6 +43,7 @@ func (r *RaftNode) replicateToPeer(peerID string) {
 
 	firstLogIndex := r.log.FirstIndex()
 	if peer.NextIndex < firstLogIndex {
+		r.sendSnapshotToPeer(peerID)
 		return
 	}
 
@@ -51,6 +52,9 @@ func (r *RaftNode) replicateToPeer(peerID string) {
 	if prevLogIndex > 0 {
 		prevEntry, err := r.log.GetEntry(prevLogIndex)
 		if err != nil {
+			if prevLogIndex < firstLogIndex {
+				r.sendSnapshotToPeer(peerID)
+			}
 			return
 		}
 		prevLogTerm = prevEntry.Term
@@ -100,11 +104,13 @@ func (r *RaftNode) handleAppendResponse(event appendResponseEvent) {
 	resp := event.resp
 
 	if resp.Term > r.currentTerm {
+		r.peerTracker.SetInFlight(event.from, false)
 		r.becomeFollower(resp.Term, "")
 		return
 	}
 
 	if r.role != RoleLeader || resp.Term != r.currentTerm {
+		r.peerTracker.SetInFlight(event.from, false)
 		return
 	}
 
@@ -211,11 +217,11 @@ func (r *RaftNode) HandleAppendEntries(ctx context.Context, req *consensuspb.App
 		r.notifyApply()
 	}
 
-	finalLastIndex, _ := r.log.LastIndexAndTerm()
+	matchIndex := req.PrevLogIndex + uint64(len(req.Entries))
 	return &consensuspb.AppendEntriesResponse{
 		Term:       r.currentTerm,
 		Success:    true,
-		MatchIndex: finalLastIndex,
+		MatchIndex: matchIndex,
 	}, nil
 }
 

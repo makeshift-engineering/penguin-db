@@ -61,6 +61,8 @@ func (r *RaftNode) applyWorker() {
 				r.lastApplied = nextToApply
 				r.mu.Unlock()
 
+				r.maybeTriggerSnapshot()
+
 				r.proposalsMu.Lock()
 				if ch, exists := r.proposals[nextToApply]; exists {
 					ch <- applyErr

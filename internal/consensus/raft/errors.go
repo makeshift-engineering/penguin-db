@@ -6,11 +6,12 @@ import (
 )
 
 var (
-	ErrStopped          = errors.New("raft node is stopped or closing")
-	ErrProposalDropped  = errors.New("proposal dropped because leadership was lost before commit")
-	ErrStaleTerm        = errors.New("request term is older than current term")
-	ErrSnapshotRequired = errors.New("peer requires snapshot catch-up because requested logs were compacted")
-	ErrUnknownPeer      = errors.New("target peer is not registered in cluster topology")
+	ErrStopped            = errors.New("raft node is stopped or closing")
+	ErrProposalDropped    = errors.New("proposal dropped because leadership was lost before commit")
+	ErrStaleTerm          = errors.New("request term is older than current term")
+	ErrSnapshotRequired   = errors.New("peer requires snapshot catch-up because requested logs were compacted")
+	ErrUnknownPeer        = errors.New("target peer is not registered in cluster topology")
+	ErrSnapshotInProgress = errors.New("snapshot operation already in progress")
 )
 
 type NotLeaderError struct {
