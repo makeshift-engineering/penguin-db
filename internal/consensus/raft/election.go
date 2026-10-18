@@ -160,7 +160,7 @@ func (r *RaftNode) broadcastRequestVote(isPreVote bool) {
 	}
 }
 
-func (r *RaftNode) handleVoteRequest(event voteResponseEvent) {
+func (r *RaftNode) handleVoteResponse(event voteResponseEvent) {
 	resp := event.resp
 
 	if resp.Term > r.currentTerm {
