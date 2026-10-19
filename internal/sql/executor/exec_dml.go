@@ -21,6 +21,9 @@ type kvPair struct {
 
 // execInsert executes an INSERT plan by delegating to INSERT ... VALUES or INSERT ... SELECT handlers.
 func (e *Executor) execInsert(ctx context.Context, plan *planner.InsertPlan) (*Result, error) {
+	e.insertMu.Lock()
+	defer e.insertMu.Unlock()
+
 	if plan.Source != nil {
 		return e.execInsertSelect(ctx, plan)
 	}

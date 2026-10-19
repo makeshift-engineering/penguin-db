@@ -17,6 +17,7 @@ import (
 type Executor struct {
 	kv         kv.KV
 	catalog    *catalog.Catalog
+	insertMu   sync.Mutex
 	sequenceMu sync.Mutex
 }
 

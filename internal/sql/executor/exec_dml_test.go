@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -528,6 +529,52 @@ func TestDuplicateKeyError(t *testing.T) {
 	_, err := exec.Execute(context.Background(), insertPlan)
 	if err == nil {
 		t.Fatal("expected duplicate key error")
+	}
+}
+
+func TestConcurrentDuplicateKeyError(t *testing.T) {
+	exec := setupUsersTable(t)
+	cols := buildResolvedColumns()
+	schema := testTableMeta()
+	insertPlan := &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{{
+			&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+			&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+			&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "a@test.com"},
+			&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+		}},
+	}
+
+	var waitGroup sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			_, err := exec.Execute(context.Background(), insertPlan)
+			errs <- err
+		}()
+	}
+	waitGroup.Wait()
+	close(errs)
+
+	successes, duplicates := 0, 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrDuplicateKey):
+			duplicates++
+		default:
+			t.Fatalf("concurrent insert returned unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || duplicates != 1 {
+		t.Fatalf("concurrent inserts produced %d successes and %d duplicate errors, want 1 each", successes, duplicates)
 	}
 }
 
