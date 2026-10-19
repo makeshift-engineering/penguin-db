@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/kv"
@@ -14,8 +15,9 @@ import (
 // catalog. One Executor can safely serve many concurrent requests: each
 // Execute call is self-contained and does not mutate the Executor itself.
 type Executor struct {
-	kv      kv.KV
-	catalog *catalog.Catalog
+	kv         kv.KV
+	catalog    *catalog.Catalog
+	sequenceMu sync.Mutex
 }
 
 // New creates an Executor backed by the given KV store and catalog.

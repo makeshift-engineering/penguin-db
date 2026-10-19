@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -165,6 +166,66 @@ func TestReadSequence(t *testing.T) {
 	}
 	if seq != 1 {
 		t.Errorf("expected sequence 1, got %d", seq)
+	}
+}
+
+func TestConcurrentSnowflakeInsertsAllocateUniqueSequences(t *testing.T) {
+	exec, _, _ := setupExecutor(t)
+	mustExec(t, exec, &planner.CreateDatabasePlan{Name: "testdb"})
+
+	meta := &catalog.TableMeta{
+		Database:       "testdb",
+		Name:           "concurrent_seq",
+		HasSnowflakeID: true,
+		Columns: []catalog.ColumnMeta{
+			{Name: "id", Type: ast.TypeBigInt, PrimaryKey: true},
+			{Name: "val", Type: ast.TypeInt},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	mustExec(t, exec, &planner.CreateTablePlan{Database: "testdb", Table: meta.Name, Schema: meta})
+
+	plans := []*planner.InsertPlan{
+		{
+			Database: "testdb",
+			Table:    meta.Name,
+			Schema:   meta,
+			Columns:  []planner.ResolvedColumn{{Database: "testdb", Table: meta.Name, Name: "val", Index: 1, Type: ast.TypeInt}},
+			Rows:     [][]planner.ResolvedExpr{{&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1}}},
+		},
+		{
+			Database: "testdb",
+			Table:    meta.Name,
+			Schema:   meta,
+			Columns:  []planner.ResolvedColumn{{Database: "testdb", Table: meta.Name, Name: "val", Index: 1, Type: ast.TypeInt}},
+			Rows:     [][]planner.ResolvedExpr{{&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2}}},
+		},
+	}
+
+	var waitGroup sync.WaitGroup
+	errs := make(chan error, len(plans))
+	for _, plan := range plans {
+		waitGroup.Add(1)
+		go func(plan *planner.InsertPlan) {
+			defer waitGroup.Done()
+			_, err := exec.Execute(context.Background(), plan)
+			errs <- err
+		}(plan)
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent insert failed: %v", err)
+		}
+	}
+
+	seq, err := exec.readSequence(context.Background(), "testdb", meta.Name)
+	if err != nil {
+		t.Fatalf("readSequence failed: %v", err)
+	}
+	if seq != 2 {
+		t.Fatalf("expected sequence 2 after concurrent inserts, got %d", seq)
 	}
 }
 

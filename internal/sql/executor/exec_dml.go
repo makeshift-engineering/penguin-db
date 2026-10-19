@@ -40,6 +40,8 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 	// Handle snowflake ID sequence if needed.
 	var nextSeq uint64
 	if schema.HasSnowflakeID {
+		e.sequenceMu.Lock()
+		defer e.sequenceMu.Unlock()
 		nextSeq, err = e.readSequence(ctx, plan.Database, plan.Table)
 		if err != nil {
 			return nil, err
@@ -101,6 +103,8 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 
 	var nextSeq uint64
 	if schema.HasSnowflakeID {
+		e.sequenceMu.Lock()
+		defer e.sequenceMu.Unlock()
 		nextSeq, err = e.readSequence(ctx, plan.Database, plan.Table)
 		if err != nil {
 			return nil, err
