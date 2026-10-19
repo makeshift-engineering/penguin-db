@@ -50,14 +50,18 @@ func (r *RaftNode) replicateToPeer(peerID string) {
 	prevLogIndex := peer.NextIndex - 1
 	var prevLogTerm uint64
 	if prevLogIndex > 0 {
-		prevEntry, err := r.log.GetEntry(prevLogIndex)
-		if err != nil {
-			if prevLogIndex < firstLogIndex {
-				r.sendSnapshotToPeer(peerID)
+		if prevLogIndex >= firstLogIndex {
+			prevEntry, err := r.log.GetEntry(prevLogIndex)
+			if err != nil {
+				return
 			}
+			prevLogTerm = prevEntry.Term
+		} else if prevLogIndex == firstLogIndex-1 {
+			prevLogTerm = r.lastSnapshotTerm
+		} else {
+			r.sendSnapshotToPeer(peerID)
 			return
 		}
-		prevLogTerm = prevEntry.Term
 	}
 
 	lastLogIndex, _ := r.log.LastIndexAndTerm()
@@ -155,6 +159,7 @@ func (r *RaftNode) HandleAppendEntries(ctx context.Context, req *consensuspb.App
 	r.resetElectionTimer()
 
 	lastLogIndex, _ := r.log.LastIndexAndTerm()
+	firstLogIndex := r.log.FirstIndex()
 	if req.PrevLogIndex > 0 {
 		if req.PrevLogIndex > lastLogIndex {
 			return &consensuspb.AppendEntriesResponse{
@@ -165,28 +170,50 @@ func (r *RaftNode) HandleAppendEntries(ctx context.Context, req *consensuspb.App
 			}, nil
 		}
 
-		prevEntry, err := r.log.GetEntry(req.PrevLogIndex)
-		if err != nil {
+		if req.PrevLogIndex < firstLogIndex-1 {
 			return &consensuspb.AppendEntriesResponse{
 				Term:          r.currentTerm,
 				Success:       false,
-				ConflictIndex: lastLogIndex + 1,
+				ConflictIndex: firstLogIndex,
+				ConflictTerm:  0,
 			}, nil
 		}
 
-		if prevEntry.Term != req.PrevLogTerm {
-			conflictTerm := prevEntry.Term
-			firstIdxOfTerm := r.findFirstIndexOfTerm(conflictTerm)
-			return &consensuspb.AppendEntriesResponse{
-				Term:          r.currentTerm,
-				Success:       false,
-				ConflictTerm:  conflictTerm,
-				ConflictIndex: firstIdxOfTerm,
-			}, nil
+		if req.PrevLogIndex >= firstLogIndex {
+			prevEntry, err := r.log.GetEntry(req.PrevLogIndex)
+			if err != nil {
+				return &consensuspb.AppendEntriesResponse{
+					Term:          r.currentTerm,
+					Success:       false,
+					ConflictIndex: lastLogIndex + 1,
+				}, nil
+			}
+
+			if prevEntry.Term != req.PrevLogTerm {
+				conflictTerm := prevEntry.Term
+				firstIdxOfTerm := r.findFirstIndexOfTerm(conflictTerm)
+				return &consensuspb.AppendEntriesResponse{
+					Term:          r.currentTerm,
+					Success:       false,
+					ConflictTerm:  conflictTerm,
+					ConflictIndex: firstIdxOfTerm,
+				}, nil
+			}
+		} else if req.PrevLogIndex == firstLogIndex-1 {
+			if r.lastSnapshotTerm > 0 && req.PrevLogTerm != r.lastSnapshotTerm {
+				return &consensuspb.AppendEntriesResponse{
+					Term:          r.currentTerm,
+					Success:       false,
+					ConflictIndex: firstLogIndex,
+				}, nil
+			}
 		}
 	}
 
 	for i, entry := range req.Entries {
+		if entry.Index < firstLogIndex {
+			continue
+		}
 		if entry.Index <= lastLogIndex {
 			existingEntry, err := r.log.GetEntry(entry.Index)
 			if err == nil && existingEntry.Term != entry.Term {

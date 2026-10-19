@@ -43,6 +43,16 @@ func (r *RaftNode) applyWorker() {
 				}
 				nextToApply := r.lastApplied + 1
 				commitIndex := r.commitIndex
+				firstIndex := r.log.FirstIndex()
+				if nextToApply < firstIndex {
+					r.mu.RUnlock()
+					r.mu.Lock()
+					if r.lastApplied < firstIndex-1 {
+						r.lastApplied = firstIndex - 1
+					}
+					r.mu.Unlock()
+					continue
+				}
 				r.mu.RUnlock()
 
 				if nextToApply > commitIndex {

@@ -23,6 +23,11 @@ func NewRaftNode(
 	}
 	initialTerm := raftLog.CurrentTerm()
 	initialVote := raftLog.VotedFor()
+	firstIdx := raftLog.FirstIndex()
+	var snapshotIdx uint64
+	if firstIdx > 1 {
+		snapshotIdx = firstIdx - 1
+	}
 	node := &RaftNode{
 		cfg:               cfg,
 		log:               raftLog,
@@ -33,8 +38,9 @@ func NewRaftNode(
 		votedFor:          initialVote,
 		role:              RoleFollower,
 		leaderID:          "",
-		commitIndex:       0,
-		lastApplied:       0,
+		commitIndex:       snapshotIdx,
+		lastApplied:       snapshotIdx,
+		lastSnapshotIndex: snapshotIdx,
 		votesGranted:      make(map[string]bool),
 		lastHeartbeatTime: time.Now(),
 		eventChan:         make(chan any, 1024),

@@ -58,6 +58,9 @@ func (r *RaftNode) TakeSnapshot() error {
 		return fmt.Errorf("log prefix truncation failed: %w", err)
 	}
 
+	r.lastSnapshotIndex = lastApplied
+	r.lastSnapshotTerm = lastTerm
+
 	slog.Info("Completed snapshot log compaction",
 		"node", r.cfg.NodeID,
 		"lastIncludedIndex", lastApplied,
@@ -98,7 +101,7 @@ func (r *RaftNode) sendSnapshotToPeer(peerID string) {
 	go func(targetID string) {
 		r.mu.RLock()
 		if r.role != RoleLeader || r.stopped {
-			r.mu.RLock()
+			r.mu.RUnlock()
 			r.peerTracker.SetInFlight(targetID, false)
 			return
 		}
@@ -106,7 +109,7 @@ func (r *RaftNode) sendSnapshotToPeer(peerID string) {
 		currentTerm := r.currentTerm
 		leaderID := r.cfg.NodeID
 		lastApplied := r.lastApplied
-		r.mu.Unlock()
+		r.mu.RUnlock()
 
 		if lastApplied == 0 {
 			r.peerTracker.SetInFlight(targetID, false)
@@ -270,6 +273,9 @@ func (r *RaftNode) HandleInstallSnapshot(ctx context.Context, stream consensuspb
 	if err := r.log.TruncatePrefix(lastIncludedIndex); err != nil {
 		slog.Error("Failed truncating log prefix after snapshot install", "index", lastIncludedIndex, "error", err)
 	}
+
+	r.lastSnapshotIndex = lastIncludedIndex
+	r.lastSnapshotTerm = firstReq.LastIncludedTerm
 
 	currentTerm := r.currentTerm
 	r.mu.Unlock()

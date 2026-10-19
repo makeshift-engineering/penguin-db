@@ -49,6 +49,16 @@ func (r *RaftNode) becomeFollower(term uint64, leaderID string) {
 		r.heartbeatTicker.Stop()
 	}
 
+	if prevRole == RoleLeader {
+		r.proposalsMu.Lock()
+		for index, ch := range r.proposals {
+			ch <- &NotLeaderError{LeaderID: leaderID}
+			close(ch)
+			delete(r.proposals, index)
+		}
+		r.proposalsMu.Unlock()
+	}
+
 	r.resetElectionTimer()
 	slog.Info("Transitioned to Follower", "node", r.cfg.NodeID, "term", r.currentTerm, "leader", leaderID, "prevRole", prevRole.String())
 }
@@ -102,6 +112,11 @@ func (r *RaftNode) becomeLeader() {
 		slog.Error("Failed appending leader No-Op entry", "node", r.cfg.NodeID, "error", err)
 		r.becomeFollower(r.currentTerm, "")
 		return
+	}
+
+	if len(r.peerTracker.PeerIDs()) == 0 {
+		r.commitIndex = noOpIndex
+		r.notifyApply()
 	}
 
 	r.stopElectionTimer()

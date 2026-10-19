@@ -78,6 +78,9 @@ type RaftNode struct {
 	commitIndex uint64
 	lastApplied uint64
 
+	lastSnapshotIndex uint64
+	lastSnapshotTerm  uint64
+
 	fsm         statemachine.StateMachine
 	transport   Transport
 	peerTracker *PeerTracker
