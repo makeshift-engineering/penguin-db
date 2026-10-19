@@ -197,6 +197,7 @@ func evalCond(cond planner.ResolvedCond, r row) (bool, error) {
 	return result.value && !result.unknown, nil
 }
 
+// evalCondValue evaluates a condition while preserving SQL UNKNOWN.
 func evalCondValue(cond planner.ResolvedCond, r row) (condResult, error) {
 	switch c := cond.(type) {
 	case *planner.ResolvedComparison:
@@ -236,6 +237,7 @@ func evalCondValue(cond planner.ResolvedCond, r row) (condResult, error) {
 	}
 }
 
+// evalComparisonValue evaluates a comparison and preserves NULL as UNKNOWN.
 func evalComparisonValue(c *planner.ResolvedComparison, r row) (condResult, error) {
 	left, err := evalExpr(c.Left, r)
 	if err != nil {
@@ -270,6 +272,7 @@ func evalComparisonValue(c *planner.ResolvedComparison, r row) (condResult, erro
 	}
 }
 
+// evalBinaryCondValue evaluates AND and OR using SQL three-valued logic.
 func evalBinaryCondValue(c *planner.ResolvedBinaryCond, r row) (condResult, error) {
 	left, err := evalCondValue(c.Left, r)
 	if err != nil {
@@ -301,6 +304,7 @@ func evalBinaryCondValue(c *planner.ResolvedBinaryCond, r row) (condResult, erro
 	}
 }
 
+// evalLikeValue evaluates a LIKE predicate and preserves NULL as UNKNOWN.
 func evalLikeValue(c *planner.ResolvedLike, r row) (condResult, error) {
 	leftVal, err := evalExpr(c.Left, r)
 	if err != nil {
@@ -382,6 +386,7 @@ func evalIsNull(c *planner.ResolvedIsNull, r row) (bool, error) {
 	return isNull, nil
 }
 
+// evalInValue evaluates an IN predicate and preserves NULL as UNKNOWN.
 func evalInValue(c *planner.ResolvedIn, r row) (condResult, error) {
 	left, err := evalExpr(c.Expr, r)
 	if err != nil {
@@ -419,6 +424,7 @@ func evalInValue(c *planner.ResolvedIn, r row) (condResult, error) {
 	return condResult{value: found}, nil
 }
 
+// evalBetweenValue evaluates a BETWEEN predicate and preserves NULL as UNKNOWN.
 func evalBetweenValue(c *planner.ResolvedBetween, r row) (condResult, error) {
 	val, err := evalExpr(c.Expr, r)
 	if err != nil {
@@ -460,8 +466,8 @@ func isIntegerAny(v any) bool {
 	}
 }
 
-// coerceResultToIntKind converts a float64 arithmetic result back to the
-// integer type indicated by the planner's resolved type kind.
+// coerceIntegerResult converts an int64 arithmetic result to the integer type
+// indicated by the planner's resolved type kind.
 func coerceIntegerResult(value int64, kind ast.DataTypeKind) any {
 	switch kind {
 	case ast.TypeInt:
