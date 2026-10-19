@@ -190,12 +190,40 @@ func toFloat64(v any) (float64, error) {
 func compareValues(a, b any) (int, error) {
 	switch av := a.(type) {
 	case int32:
+		if _, ok := b.(float32); ok {
+			bv, err := toFloat64(b)
+			if err != nil {
+				return 0, err
+			}
+			return cmpOrdered(float64(av), bv), nil
+		}
+		if _, ok := b.(float64); ok {
+			bv, err := toFloat64(b)
+			if err != nil {
+				return 0, err
+			}
+			return cmpOrdered(float64(av), bv), nil
+		}
 		bv, err := toInt64(b)
 		if err != nil {
 			return 0, err
 		}
 		return cmpOrdered(int64(av), bv), nil
 	case int64:
+		if _, ok := b.(float32); ok {
+			bv, err := toFloat64(b)
+			if err != nil {
+				return 0, err
+			}
+			return cmpOrdered(float64(av), bv), nil
+		}
+		if _, ok := b.(float64); ok {
+			bv, err := toFloat64(b)
+			if err != nil {
+				return 0, err
+			}
+			return cmpOrdered(float64(av), bv), nil
+		}
 		bv, err := toInt64(b)
 		if err != nil {
 			return 0, err

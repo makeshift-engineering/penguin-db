@@ -231,6 +231,9 @@ func TestCompareValues(t *testing.T) {
 	}{
 		{int32(1), int64(2), -1, false},
 		{int64(2), int64(1), 1, false},
+		{int32(2), float64(2.7), -1, false},
+		{int64(3), float32(2.7), 1, false},
+		{int32(2), float64(2.0), 0, false},
 		{float32(1.0), float64(1.0), 0, false},
 		{float64(2.0), float64(1.0), 1, false},
 		{"a", "b", -1, false},
