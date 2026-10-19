@@ -236,12 +236,6 @@ func evalCondValue(cond planner.ResolvedCond, r row) (condResult, error) {
 	}
 }
 
-// evalComparison evaluates a comparison condition (=, !=, <>, <, >, <=, >=).
-func evalComparison(c *planner.ResolvedComparison, r row) (bool, error) {
-	result, err := evalComparisonValue(c, r)
-	return result.value && !result.unknown, err
-}
-
 func evalComparisonValue(c *planner.ResolvedComparison, r row) (condResult, error) {
 	left, err := evalExpr(c.Left, r)
 	if err != nil {
@@ -276,12 +270,6 @@ func evalComparisonValue(c *planner.ResolvedComparison, r row) (condResult, erro
 	}
 }
 
-// evalBinaryCond evaluates AND/OR.
-func evalBinaryCond(c *planner.ResolvedBinaryCond, r row) (bool, error) {
-	result, err := evalBinaryCondValue(c, r)
-	return result.value && !result.unknown, err
-}
-
 func evalBinaryCondValue(c *planner.ResolvedBinaryCond, r row) (condResult, error) {
 	left, err := evalCondValue(c.Left, r)
 	if err != nil {
@@ -311,13 +299,6 @@ func evalBinaryCondValue(c *planner.ResolvedBinaryCond, r row) (condResult, erro
 	default:
 		return condResult{}, fmt.Errorf("%w: unknown binary condition operator %d", ErrUnsupportedCond, c.Op)
 	}
-}
-
-// evalLike evaluates a [NOT] LIKE predicate using SQL LIKE semantics:
-// '%' matches any sequence, '_' matches any single character.
-func evalLike(c *planner.ResolvedLike, r row) (bool, error) {
-	result, err := evalLikeValue(c, r)
-	return result.value && !result.unknown, err
 }
 
 func evalLikeValue(c *planner.ResolvedLike, r row) (condResult, error) {
@@ -401,12 +382,6 @@ func evalIsNull(c *planner.ResolvedIsNull, r row) (bool, error) {
 	return isNull, nil
 }
 
-// evalIn evaluates a [NOT] IN predicate.
-func evalIn(c *planner.ResolvedIn, r row) (bool, error) {
-	result, err := evalInValue(c, r)
-	return result.value && !result.unknown, err
-}
-
 func evalInValue(c *planner.ResolvedIn, r row) (condResult, error) {
 	left, err := evalExpr(c.Expr, r)
 	if err != nil {
@@ -442,12 +417,6 @@ func evalInValue(c *planner.ResolvedIn, r row) (condResult, error) {
 		return condResult{value: !found}, nil
 	}
 	return condResult{value: found}, nil
-}
-
-// evalBetween evaluates a [NOT] BETWEEN predicate.
-func evalBetween(c *planner.ResolvedBetween, r row) (bool, error) {
-	result, err := evalBetweenValue(c, r)
-	return result.value && !result.unknown, err
 }
 
 func evalBetweenValue(c *planner.ResolvedBetween, r row) (condResult, error) {

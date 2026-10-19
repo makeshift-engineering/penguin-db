@@ -139,7 +139,7 @@ func TestEvalComparison(t *testing.T) {
 			expr.Right = &planner.ResolvedIntLiteral{Value: int64(v)}
 		}
 
-		got, err := evalComparison(expr, row{})
+		got, err := evalCond(expr, row{})
 		if err != nil {
 			t.Errorf("test %d: evalComparison() unexpected error: %v", i, err)
 			continue
@@ -221,7 +221,7 @@ func TestEvalBinaryCond(t *testing.T) {
 			},
 		}
 
-		got, err := evalBinaryCond(cond, row{})
+		got, err := evalCond(cond, row{})
 		if err != nil {
 			t.Errorf("test %d: evalBinaryCond() unexpected error: %v", i, err)
 			continue
@@ -266,7 +266,7 @@ func TestEvalLike(t *testing.T) {
 			cond.Pattern = &planner.ResolvedStringLiteral{Value: v}
 		}
 
-		got, err := evalLike(cond, row{})
+		got, err := evalCond(cond, row{})
 		if (err != nil) != tc.wantErr {
 			t.Errorf("test %d: evalLike() error = %v, wantErr %v", i, err, tc.wantErr)
 			continue
@@ -336,7 +336,7 @@ func TestEvalIn(t *testing.T) {
 			}
 		}
 
-		got, err := evalIn(cond, row{})
+		got, err := evalCond(cond, row{})
 		if err != nil {
 			t.Errorf("test %d: evalIn() unexpected error: %v", i, err)
 			continue
@@ -384,7 +384,7 @@ func TestEvalBetween(t *testing.T) {
 			cond.High = &planner.ResolvedIntLiteral{Value: int64(v)}
 		}
 
-		got, err := evalBetween(cond, row{})
+		got, err := evalCond(cond, row{})
 		if err != nil {
 			t.Errorf("test %d: evalBetween() unexpected error: %v", i, err)
 			continue
