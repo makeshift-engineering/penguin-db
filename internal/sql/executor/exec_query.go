@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -214,7 +216,7 @@ func (e *Executor) execAggregate(ctx context.Context, node *planner.AggregateNod
 			}
 			keyParts = append(keyParts, v)
 		}
-		keyStr := fmt.Sprintf("%v", keyParts)
+		keyStr := valuesKey(keyParts)
 		if idx, ok := groupIndex[keyStr]; ok {
 			groups[idx].rows = append(groups[idx].rows, r)
 		} else {
@@ -267,6 +269,15 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		if left == nil || right == nil {
 			return nil, nil
 		}
+		if isIntegerAny(left) && isIntegerAny(right) && e.Op != planner.OpDiv {
+			li, _ := toInt64(left)
+			ri, _ := toInt64(right)
+			result, err := computeIntegerArithmetic(e.Op, li, ri)
+			if err != nil {
+				return nil, err
+			}
+			return coerceIntegerResult(result, e.ResolvedType()), nil
+		}
 		lf, err := toFloat64(left)
 		if err != nil {
 			return nil, err
@@ -287,6 +298,14 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		}
 		if operand == nil {
 			return nil, nil
+		}
+		if isIntegerAny(operand) {
+			value, _ := toInt64(operand)
+			result, err := computeIntegerArithmetic(planner.OpSub, 0, value)
+			if err != nil {
+				return nil, err
+			}
+			return coerceIntegerResult(result, e.ResolvedType()), nil
 		}
 		f, err := toFloat64(operand)
 		if err != nil {
@@ -487,8 +506,12 @@ func (e *Executor) execLimit(ctx context.Context, node *planner.LimitNode) ([]ro
 		rows = rows[node.Offset:]
 	}
 
+	if node.Count == 0 {
+		return nil, nil
+	}
+
 	// Apply limit.
-	if node.Count > 0 && int(node.Count) < len(rows) {
+	if int(node.Count) < len(rows) {
 		rows = rows[:node.Count]
 	}
 
@@ -505,7 +528,7 @@ func (e *Executor) execDistinct(ctx context.Context, node *planner.DistinctNode)
 	seen := make(map[string]struct{})
 	var result []row
 	for _, r := range rows {
-		key := fmt.Sprintf("%v", r.values)
+		key := valuesKey(r.values)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -513,4 +536,21 @@ func (e *Executor) execDistinct(ctx context.Context, node *planner.DistinctNode)
 		result = append(result, r)
 	}
 	return result, nil
+}
+
+// valuesKey creates a collision-resistant key for grouping and DISTINCT.
+// Each value includes its type and length-delimited representation.
+func valuesKey(values []any) string {
+	var builder strings.Builder
+	for _, value := range values {
+		typeName := fmt.Sprintf("%T", value)
+		valueText := fmt.Sprintf("%v", value)
+		builder.WriteString(strconv.Itoa(len(typeName)))
+		builder.WriteByte(':')
+		builder.WriteString(typeName)
+		builder.WriteString(strconv.Itoa(len(valueText)))
+		builder.WriteByte(':')
+		builder.WriteString(valueText)
+	}
+	return builder.String()
 }

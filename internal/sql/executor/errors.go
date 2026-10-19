@@ -24,6 +24,10 @@ var (
 	// encounters a zero denominator.
 	ErrDivisionByZero = errors.New("executor: division by zero")
 
+	// ErrNumericOverflow is returned when arithmetic exceeds the supported
+	// range of its integer result type.
+	ErrNumericOverflow = errors.New("executor: numeric overflow")
+
 	// ErrUnsupportedPlan is returned when Execute receives a plan type
 	// it does not know how to handle.
 	ErrUnsupportedPlan = errors.New("executor: unsupported plan type")

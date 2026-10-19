@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -60,6 +61,47 @@ func TestEvalUnaryExpr(t *testing.T) {
 		if !tc.wantErr && got != tc.want {
 			t.Errorf("test %d: evalUnaryExpr() = %v, want %v", i, got, tc.want)
 		}
+	}
+}
+
+func TestIntegerArithmeticPreservesPrecision(t *testing.T) {
+	bigValue := int64(9007199254740993)
+	base := func(value int64) *planner.ResolvedIntLiteral {
+		return &planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBigInt}, Value: value}
+	}
+
+	for _, test := range []struct {
+		name  string
+		op    planner.Op
+		left  int64
+		right int64
+		want  any
+	}{
+		{"add", planner.OpAdd, bigValue, 1, int64(9007199254740994)},
+		{"mod", planner.OpMod, bigValue, 2, int64(1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr := &planner.ResolvedBinaryExpr{
+				ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBigInt},
+				Left:             base(test.left),
+				Op:               test.op,
+				Right:            base(test.right),
+			}
+			got, err := evalBinaryExpr(expr, row{})
+			if err != nil || got != test.want {
+				t.Fatalf("evalBinaryExpr() = (%v, %v), want (%v, nil)", got, err, test.want)
+			}
+		})
+	}
+
+	overflow := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBigInt},
+		Left:             base(int64(^uint64(0) >> 1)),
+		Op:               planner.OpAdd,
+		Right:            base(1),
+	}
+	if _, err := evalBinaryExpr(overflow, row{}); !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("overflow error = %v, want ErrNumericOverflow", err)
 	}
 }
 

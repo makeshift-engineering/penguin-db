@@ -52,6 +52,7 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 	}
 
 	var ops []kv.Op
+	seenKeys := make(map[string]struct{}, len(plan.Rows))
 
 	for _, rowExprs := range plan.Rows {
 		exprValues := make([]any, len(rowExprs))
@@ -63,7 +64,7 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 			exprValues[i] = v
 		}
 
-		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, exprValues, plan.Columns, &nextSeq)
+		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, exprValues, plan.Columns, &nextSeq, seenKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -115,6 +116,7 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 	}
 
 	var ops []kv.Op
+	seenKeys := make(map[string]struct{}, len(queryResult.Rows))
 
 	for _, srcRow := range queryResult.Rows {
 		if len(srcRow) != len(plan.Columns) {
@@ -122,7 +124,7 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 				ErrColumnCountMismatch, len(srcRow), len(plan.Columns))
 		}
 
-		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, srcRow, plan.Columns, &nextSeq)
+		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, srcRow, plan.Columns, &nextSeq, seenKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +172,16 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 		return nil, fmt.Errorf("executor: scanning for UPDATE: %w", err)
 	}
 
-	var ops []kv.Op
+	type updateCandidate struct {
+		oldKey []byte
+		newKey []byte
+		value  []byte
+	}
+	existingKeys := make(map[string]struct{}, len(allPairs))
+	for _, pair := range allPairs {
+		existingKeys[string(pair.key)] = struct{}{}
+	}
+	candidates := make([]updateCandidate, 0, len(allPairs))
 	var affected int64
 
 	for _, pair := range allPairs {
@@ -231,11 +242,39 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 			return nil, err
 		}
 
-		if !bytes.Equal(newKey, pair.key) {
-			ops = append(ops, kv.Op{Type: kv.OpDelete, Key: pair.key})
-		}
-		ops = append(ops, kv.Op{Type: kv.OpPut, Key: newKey, Value: newEncoded})
+		candidates = append(candidates, updateCandidate{oldKey: pair.key, newKey: newKey, value: newEncoded})
 		affected++
+	}
+
+	deletedKeys := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if !bytes.Equal(candidate.oldKey, candidate.newKey) {
+			deletedKeys[string(candidate.oldKey)] = struct{}{}
+		}
+	}
+
+	seenNewKeys := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		newKeyString := string(candidate.newKey)
+		if _, exists := seenNewKeys[newKeyString]; exists {
+			return nil, fmt.Errorf("%w: UPDATE produces duplicate primary key in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
+		}
+		seenNewKeys[newKeyString] = struct{}{}
+		if _, exists := existingKeys[newKeyString]; exists && !bytes.Equal(candidate.oldKey, candidate.newKey) {
+			if _, deleted := deletedKeys[newKeyString]; !deleted {
+				return nil, fmt.Errorf("%w: UPDATE target key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
+			}
+		}
+	}
+
+	var ops []kv.Op
+	for _, candidate := range candidates {
+		if !bytes.Equal(candidate.newKey, candidate.oldKey) {
+			ops = append(ops, kv.Op{Type: kv.OpDelete, Key: candidate.oldKey})
+		}
+	}
+	for _, candidate := range candidates {
+		ops = append(ops, kv.Op{Type: kv.OpPut, Key: candidate.newKey, Value: candidate.value})
 	}
 
 	if len(ops) > 0 {
@@ -361,7 +400,7 @@ func (e *Executor) buildRowKey(db, table string, colValues []codec.ColumnValue, 
 }
 
 // prepareInsertOp validates column values, encodes a row, checks for duplicate primary keys, and returns a put Op.
-func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta, pkTypes []ast.DataTypeKind, rowValues []any, targetCols []planner.ResolvedColumn, nextSeq *uint64) (kv.Op, error) {
+func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta, pkTypes []ast.DataTypeKind, rowValues []any, targetCols []planner.ResolvedColumn, nextSeq *uint64, seenKeys map[string]struct{}) (kv.Op, error) {
 	colValues := make([]codec.ColumnValue, len(activeColumns))
 
 	for i, col := range targetCols {
@@ -385,6 +424,16 @@ func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema
 		if colValues[i].Type == 0 && colValues[i].Raw == nil && !colValues[i].IsNull {
 			colValues[i] = codec.NullValue(activeColumns[i].Type)
 		}
+		if schema.HasSnowflakeID && i == 0 {
+			continue
+		}
+		value, err := columnValueToAny(colValues[i])
+		if err != nil {
+			return kv.Op{}, fmt.Errorf("executor: reading column %q: %w", activeColumns[i].Name, err)
+		}
+		if err := validateColumnValue(activeColumns[i].Name, activeColumns[i].Type, activeColumns[i].VarcharLen, !activeColumns[i].NotNull, value); err != nil {
+			return kv.Op{}, err
+		}
 	}
 
 	codecRow := &codec.Row{Values: colValues}
@@ -402,6 +451,10 @@ func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema
 	if err == nil {
 		return kv.Op{}, fmt.Errorf("%w: key already exists in %q.%q", ErrDuplicateKey, db, table)
 	}
+	if _, exists := seenKeys[string(rowKey)]; exists {
+		return kv.Op{}, fmt.Errorf("%w: key appears more than once in %q.%q", ErrDuplicateKey, db, table)
+	}
+	seenKeys[string(rowKey)] = struct{}{}
 	if !errors.Is(err, kv.ErrKeyNotFound) {
 		return kv.Op{}, fmt.Errorf("executor: checking PK existence: %w", err)
 	}

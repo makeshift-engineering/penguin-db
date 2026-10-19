@@ -84,6 +84,9 @@ func TestToInt64(t *testing.T) {
 		{int64(42), 42, false},
 		{float32(42.0), 42, false},
 		{float64(42.0), 42, false},
+		{float32(2.7), 2, false},
+		{float64(math.NaN()), 0, true},
+		{float64(1 << 63), 0, true},
 		{"not-a-number", 0, true},
 	}
 
@@ -110,6 +113,9 @@ func TestToInt32(t *testing.T) {
 		{int64(math.MaxInt64), 0, true}, // overflow
 		{float32(42.0), 42, false},
 		{float64(42.0), 42, false},
+		{float32(2.7), 2, false},
+		{float64(math.NaN()), 0, true},
+		{float64(math.MaxInt32) + 1, 0, true},
 		{"not-a-number", 0, true},
 	}
 

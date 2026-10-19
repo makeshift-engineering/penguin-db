@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -84,6 +85,34 @@ func computeBinaryArithmetic(op planner.Op, lf, rf float64) (float64, error) {
 	}
 }
 
+// computeIntegerArithmetic evaluates integer arithmetic without converting
+// operands through float64, preserving BIGINT precision and detecting overflow.
+func computeIntegerArithmetic(op planner.Op, left, right int64) (int64, error) {
+	if op == planner.OpMod {
+		if right == 0 {
+			return 0, ErrDivisionByZero
+		}
+		return left % right, nil
+	}
+
+	result := new(big.Int)
+	switch op {
+	case planner.OpAdd:
+		result.Add(big.NewInt(left), big.NewInt(right))
+	case planner.OpSub:
+		result.Sub(big.NewInt(left), big.NewInt(right))
+	case planner.OpMul:
+		result.Mul(big.NewInt(left), big.NewInt(right))
+	default:
+		return 0, fmt.Errorf("%w: unknown integer operator %d", ErrUnsupportedExpr, op)
+	}
+
+	if !result.IsInt64() {
+		return 0, ErrNumericOverflow
+	}
+	return result.Int64(), nil
+}
+
 // evalBinaryExpr evaluates a binary arithmetic expression.
 func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 	left, err := evalExpr(e.Left, r)
@@ -98,6 +127,15 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 	if left == nil || right == nil {
 		return nil, nil
 	}
+	if isIntegerAny(left) && isIntegerAny(right) && e.Op != planner.OpDiv {
+		li, _ := toInt64(left)
+		ri, _ := toInt64(right)
+		result, err := computeIntegerArithmetic(e.Op, li, ri)
+		if err != nil {
+			return nil, err
+		}
+		return coerceIntegerResult(result, e.ResolvedType()), nil
+	}
 
 	lf, err := toFloat64(left)
 	if err != nil {
@@ -111,12 +149,6 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 	result, err := computeBinaryArithmetic(e.Op, lf, rf)
 	if err != nil {
 		return nil, err
-	}
-
-	// Preserve integer type when both operands are integer and the
-	// operation is integer-safe.
-	if isIntegerAny(left) && isIntegerAny(right) && e.Op != planner.OpDiv {
-		return coerceResultToIntKind(result, e.ResolvedType()), nil
 	}
 
 	return coerceResultByKind(result, e.ResolvedType()), nil
@@ -135,143 +167,184 @@ func evalUnaryExpr(e *planner.ResolvedUnaryExpr, r row) (any, error) {
 		return operand, nil
 	}
 	// TOKEN_MINUS: negate.
+	if isIntegerAny(operand) {
+		value, _ := toInt64(operand)
+		result, err := computeIntegerArithmetic(planner.OpSub, 0, value)
+		if err != nil {
+			return nil, err
+		}
+		return coerceIntegerResult(result, e.ResolvedType()), nil
+	}
 	f, err := toFloat64(operand)
 	if err != nil {
 		return nil, err
 	}
 	neg := -f
-	if isIntegerAny(operand) {
-		return coerceResultToIntKind(neg, e.ResolvedType()), nil
-	}
 	return coerceResultByKind(neg, e.ResolvedType()), nil
 }
 
-// evalCond evaluates a resolved condition against a concrete row,
-// returning a Go bool. NULL comparisons follow SQL three-valued logic:
-// any comparison involving NULL returns false (the row does not match).
+type condResult struct {
+	value   bool
+	unknown bool
+}
+
+// evalCond converts SQL UNKNOWN to false at the WHERE boundary.
 func evalCond(cond planner.ResolvedCond, r row) (bool, error) {
+	result, err := evalCondValue(cond, r)
+	if err != nil {
+		return false, err
+	}
+	return result.value && !result.unknown, nil
+}
+
+func evalCondValue(cond planner.ResolvedCond, r row) (condResult, error) {
 	switch c := cond.(type) {
 	case *planner.ResolvedComparison:
-		return evalComparison(c, r)
+		return evalComparisonValue(c, r)
 	case *planner.ResolvedBinaryCond:
-		return evalBinaryCond(c, r)
+		return evalBinaryCondValue(c, r)
 	case *planner.ResolvedNotCond:
-		v, err := evalCond(c.Operand, r)
-		if err != nil {
-			return false, err
+		result, err := evalCondValue(c.Operand, r)
+		if err != nil || result.unknown {
+			return result, err
 		}
-		return !v, nil
+		return condResult{value: !result.value}, nil
 	case *planner.ResolvedLike:
-		return evalLike(c, r)
+		return evalLikeValue(c, r)
 	case *planner.ResolvedIsNull:
-		return evalIsNull(c, r)
+		value, err := evalIsNull(c, r)
+		return condResult{value: value}, err
 	case *planner.ResolvedIn:
-		return evalIn(c, r)
+		return evalInValue(c, r)
 	case *planner.ResolvedBetween:
-		return evalBetween(c, r)
+		return evalBetweenValue(c, r)
 	case *planner.ResolvedExprCond:
-		v, err := evalExpr(c.Expr, r)
+		value, err := evalExpr(c.Expr, r)
 		if err != nil {
-			return false, err
+			return condResult{}, err
 		}
-		if v == nil {
-			return false, nil
+		if value == nil {
+			return condResult{unknown: true}, nil
 		}
-		b, ok := v.(bool)
+		boolean, ok := value.(bool)
 		if !ok {
-			return false, fmt.Errorf("%w: expected bool from expression condition, got %T", ErrTypeMismatch, v)
+			return condResult{}, fmt.Errorf("%w: expected bool from expression condition, got %T", ErrTypeMismatch, value)
 		}
-		return b, nil
+		return condResult{value: boolean}, nil
 	default:
-		return false, fmt.Errorf("%w: %T", ErrUnsupportedCond, cond)
+		return condResult{}, fmt.Errorf("%w: %T", ErrUnsupportedCond, cond)
 	}
 }
 
 // evalComparison evaluates a comparison condition (=, !=, <>, <, >, <=, >=).
 func evalComparison(c *planner.ResolvedComparison, r row) (bool, error) {
+	result, err := evalComparisonValue(c, r)
+	return result.value && !result.unknown, err
+}
+
+func evalComparisonValue(c *planner.ResolvedComparison, r row) (condResult, error) {
 	left, err := evalExpr(c.Left, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	right, err := evalExpr(c.Right, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
-	// SQL NULL semantics: any comparison with NULL is false.
 	if left == nil || right == nil {
-		return false, nil
+		return condResult{unknown: true}, nil
 	}
 	cmp, err := compareValues(left, right)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	switch c.Op {
 	case planner.OpEq:
-		return cmp == 0, nil
+		return condResult{value: cmp == 0}, nil
 	case planner.OpNeq:
-		return cmp != 0, nil
+		return condResult{value: cmp != 0}, nil
 	case planner.OpLt:
-		return cmp < 0, nil
+		return condResult{value: cmp < 0}, nil
 	case planner.OpGt:
-		return cmp > 0, nil
+		return condResult{value: cmp > 0}, nil
 	case planner.OpLte:
-		return cmp <= 0, nil
+		return condResult{value: cmp <= 0}, nil
 	case planner.OpGte:
-		return cmp >= 0, nil
+		return condResult{value: cmp >= 0}, nil
 	default:
-		return false, fmt.Errorf("%w: unknown comparison operator %d", ErrUnsupportedCond, c.Op)
+		return condResult{}, fmt.Errorf("%w: unknown comparison operator %d", ErrUnsupportedCond, c.Op)
 	}
 }
 
 // evalBinaryCond evaluates AND/OR.
 func evalBinaryCond(c *planner.ResolvedBinaryCond, r row) (bool, error) {
-	left, err := evalCond(c.Left, r)
+	result, err := evalBinaryCondValue(c, r)
+	return result.value && !result.unknown, err
+}
+
+func evalBinaryCondValue(c *planner.ResolvedBinaryCond, r row) (condResult, error) {
+	left, err := evalCondValue(c.Left, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
+	}
+	right, err := evalCondValue(c.Right, r)
+	if err != nil {
+		return condResult{}, err
 	}
 	switch c.Op {
 	case planner.OpAnd:
-		if !left {
-			return false, nil // short-circuit
+		if (!left.unknown && !left.value) || (!right.unknown && !right.value) {
+			return condResult{value: false}, nil
 		}
-		return evalCond(c.Right, r)
+		if left.unknown || right.unknown {
+			return condResult{unknown: true}, nil
+		}
+		return condResult{value: true}, nil
 	case planner.OpOr:
-		if left {
-			return true, nil // short-circuit
+		if (!left.unknown && left.value) || (!right.unknown && right.value) {
+			return condResult{value: true}, nil
 		}
-		return evalCond(c.Right, r)
+		if left.unknown || right.unknown {
+			return condResult{unknown: true}, nil
+		}
+		return condResult{value: false}, nil
 	default:
-		return false, fmt.Errorf("%w: unknown binary condition operator %d", ErrUnsupportedCond, c.Op)
+		return condResult{}, fmt.Errorf("%w: unknown binary condition operator %d", ErrUnsupportedCond, c.Op)
 	}
 }
 
 // evalLike evaluates a [NOT] LIKE predicate using SQL LIKE semantics:
 // '%' matches any sequence, '_' matches any single character.
 func evalLike(c *planner.ResolvedLike, r row) (bool, error) {
+	result, err := evalLikeValue(c, r)
+	return result.value && !result.unknown, err
+}
+
+func evalLikeValue(c *planner.ResolvedLike, r row) (condResult, error) {
 	leftVal, err := evalExpr(c.Left, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	patternVal, err := evalExpr(c.Pattern, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	if leftVal == nil || patternVal == nil {
-		return false, nil
+		return condResult{unknown: true}, nil
 	}
 	str, ok := leftVal.(string)
 	if !ok {
-		return false, fmt.Errorf("%w: LIKE left operand must be a string, got %T", ErrTypeMismatch, leftVal)
+		return condResult{}, fmt.Errorf("%w: LIKE left operand must be a string, got %T", ErrTypeMismatch, leftVal)
 	}
 	pattern, ok := patternVal.(string)
 	if !ok {
-		return false, ErrInvalidLikePattern
+		return condResult{}, ErrInvalidLikePattern
 	}
 	matched := matchLike(str, pattern)
 	if c.Negated {
-		return !matched, nil
+		return condResult{value: !matched}, nil
 	}
-	return matched, nil
+	return condResult{value: matched}, nil
 }
 
 // matchLike implements SQL LIKE pattern matching.
@@ -330,67 +403,82 @@ func evalIsNull(c *planner.ResolvedIsNull, r row) (bool, error) {
 
 // evalIn evaluates a [NOT] IN predicate.
 func evalIn(c *planner.ResolvedIn, r row) (bool, error) {
+	result, err := evalInValue(c, r)
+	return result.value && !result.unknown, err
+}
+
+func evalInValue(c *planner.ResolvedIn, r row) (condResult, error) {
 	left, err := evalExpr(c.Expr, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	if left == nil {
-		return false, nil
+		return condResult{unknown: true}, nil
 	}
 	found := false
+	hasNull := false
 	for _, vExpr := range c.Values {
 		right, err := evalExpr(vExpr, r)
 		if err != nil {
-			return false, err
+			return condResult{}, err
 		}
 		if right == nil {
+			hasNull = true
 			continue
 		}
 		cmp, err := compareValues(left, right)
 		if err != nil {
-			return false, err
+			return condResult{}, err
 		}
 		if cmp == 0 {
 			found = true
 			break
 		}
 	}
-	if c.Negated {
-		return !found, nil
+	if !found && hasNull {
+		return condResult{unknown: true}, nil
 	}
-	return found, nil
+	if c.Negated {
+		return condResult{value: !found}, nil
+	}
+	return condResult{value: found}, nil
 }
 
 // evalBetween evaluates a [NOT] BETWEEN predicate.
 func evalBetween(c *planner.ResolvedBetween, r row) (bool, error) {
+	result, err := evalBetweenValue(c, r)
+	return result.value && !result.unknown, err
+}
+
+func evalBetweenValue(c *planner.ResolvedBetween, r row) (condResult, error) {
 	val, err := evalExpr(c.Expr, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	low, err := evalExpr(c.Low, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	high, err := evalExpr(c.High, r)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	if val == nil || low == nil || high == nil {
-		return false, nil
+		return condResult{unknown: true}, nil
 	}
 	cmpLow, err := compareValues(val, low)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	cmpHigh, err := compareValues(val, high)
 	if err != nil {
-		return false, err
+		return condResult{}, err
 	}
 	between := cmpLow >= 0 && cmpHigh <= 0
 	if c.Negated {
-		return !between, nil
+		return condResult{value: !between}, nil
 	}
-	return between, nil
+	return condResult{value: between}, nil
 }
 
 // isIntegerAny reports whether v is an integer type (int32 or int64).
@@ -405,14 +493,14 @@ func isIntegerAny(v any) bool {
 
 // coerceResultToIntKind converts a float64 arithmetic result back to the
 // integer type indicated by the planner's resolved type kind.
-func coerceResultToIntKind(f float64, kind ast.DataTypeKind) any {
+func coerceIntegerResult(value int64, kind ast.DataTypeKind) any {
 	switch kind {
 	case ast.TypeInt:
-		return int32(f)
+		return int32(value)
 	case ast.TypeBigInt:
-		return int64(f)
+		return value
 	default:
-		return coerceResultByKind(f, kind)
+		return coerceResultByKind(float64(value), kind)
 	}
 }
 

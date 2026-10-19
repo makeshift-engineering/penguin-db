@@ -128,8 +128,11 @@ func toInt32(v any) (int32, error) {
 		}
 		return int32(n), nil
 	case float32:
-		return int32(n), nil
+		return toInt32(float64(n))
 	case float64:
+		if math.IsNaN(n) || n < math.MinInt32 || n > math.MaxInt32 {
+			return 0, fmt.Errorf("%w: %v overflows INT", ErrTypeMismatch, n)
+		}
 		return int32(n), nil
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to INT", ErrTypeMismatch, v)
@@ -144,8 +147,11 @@ func toInt64(v any) (int64, error) {
 	case int64:
 		return n, nil
 	case float32:
-		return int64(n), nil
+		return toInt64(float64(n))
 	case float64:
+		if math.IsNaN(n) || n < math.MinInt64 || n >= float64(uint64(1)<<63) {
+			return 0, fmt.Errorf("%w: %v overflows BIGINT", ErrTypeMismatch, n)
+		}
 		return int64(n), nil
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to BIGINT", ErrTypeMismatch, v)

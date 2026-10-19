@@ -466,6 +466,19 @@ func TestSelectDistinct(t *testing.T) {
 	}
 }
 
+func TestValuesKeyDistinguishesTypesAndBoundaries(t *testing.T) {
+	tests := [][2][]any{
+		{{int32(1)}, {"1"}},
+		{{nil}, {"<nil>"}},
+		{{"a b"}, {"a", "b"}},
+	}
+	for _, values := range tests {
+		if valuesKey(values[0]) == valuesKey(values[1]) {
+			t.Errorf("valuesKey(%v) collides with valuesKey(%v)", values[0], values[1])
+		}
+	}
+}
+
 func TestSelectFromLessQuery(t *testing.T) {
 	exec, _, _ := setupExecutor(t)
 
@@ -493,6 +506,17 @@ func TestSelectFromLessQuery(t *testing.T) {
 	}
 	if result.Rows[0][0] != int32(3) {
 		t.Errorf("expected int32(3), got %v (%T)", result.Rows[0][0], result.Rows[0][0])
+	}
+}
+
+func TestLimitZero(t *testing.T) {
+	exec, _, _ := setupExecutor(t)
+	rows, err := exec.execLimit(context.Background(), &planner.LimitNode{Count: 0})
+	if err != nil {
+		t.Fatalf("execLimit failed: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("LIMIT 0 returned %d rows, want 0", len(rows))
 	}
 }
 

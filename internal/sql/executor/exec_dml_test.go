@@ -435,6 +435,45 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdatePrimaryKeyCollision(t *testing.T) {
+	exec := setupUsersTable(t)
+	cols := buildResolvedColumns()
+	schema := testTableMeta()
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "a@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Bob"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "b@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: false},
+			},
+		},
+	})
+
+	_, err := exec.Execute(context.Background(), &planner.UpdatePlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Assignments: []planner.Assignment{{
+			Column: cols[0],
+			Value:  &planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+		}},
+	})
+	if !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("UPDATE primary-key collision error = %v, want ErrDuplicateKey", err)
+	}
+}
+
 func TestDelete(t *testing.T) {
 	exec := setupUsersTable(t)
 	cols := buildResolvedColumns()
@@ -532,6 +571,37 @@ func TestDuplicateKeyError(t *testing.T) {
 	}
 }
 
+func TestDuplicateKeyWithinInsert(t *testing.T) {
+	exec := setupUsersTable(t)
+	cols := buildResolvedColumns()
+	schema := testTableMeta()
+	plan := &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "a@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Bob"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "b@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+		},
+	}
+
+	_, err := exec.Execute(context.Background(), plan)
+	if !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("duplicate key within insert error = %v, want ErrDuplicateKey", err)
+	}
+}
+
 func TestConcurrentDuplicateKeyError(t *testing.T) {
 	exec := setupUsersTable(t)
 	cols := buildResolvedColumns()
@@ -600,5 +670,25 @@ func TestNotNullViolation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected NOT NULL violation error")
+	}
+}
+
+func TestOmittedNotNullColumnViolation(t *testing.T) {
+	exec := setupUsersTable(t)
+	schema := testTableMeta()
+	columns := buildResolvedColumns()
+	_, err := exec.Execute(context.Background(), &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Columns:  columns[:3], // Omit the NOT NULL active column "active".
+		Rows: [][]planner.ResolvedExpr{{
+			&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+			&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+			&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "a@test.com"},
+		}},
+	})
+	if !errors.Is(err, ErrNotNullViolation) {
+		t.Fatalf("omitted NOT NULL column error = %v, want ErrNotNullViolation", err)
 	}
 }
