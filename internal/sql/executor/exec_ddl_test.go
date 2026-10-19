@@ -1,9 +1,12 @@
 package executor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
+	"github.com/makeshift-engineering/penguin-db/internal/bridge/encoding"
+	"github.com/makeshift-engineering/penguin-db/internal/bridge/kv"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/planner"
 )
@@ -114,6 +117,35 @@ func TestDropTable(t *testing.T) {
 	}
 	if _, err := cat.GetTable("testdb", "users"); err == nil {
 		t.Error("table should not exist after drop")
+	}
+}
+
+func TestDropTableDeletesSequenceKey(t *testing.T) {
+	exec, _, store := setupExecutor(t)
+	mustExec(t, exec, &planner.CreateDatabasePlan{Name: "testdb"})
+
+	meta := &catalog.TableMeta{
+		Database:       "testdb",
+		Name:           "events",
+		HasSnowflakeID: true,
+		Columns: []catalog.ColumnMeta{
+			{Name: "id", Type: ast.TypeBigInt, PrimaryKey: true},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	mustExec(t, exec, &planner.CreateTablePlan{Database: "testdb", Table: "events", Schema: meta})
+
+	seqKey, err := encoding.EncodeCatalogSeqKey("testdb", "events")
+	if err != nil {
+		t.Fatalf("encoding sequence key: %v", err)
+	}
+	if _, err := store.Get(context.Background(), seqKey); err != nil {
+		t.Fatalf("sequence key should exist after create: %v", err)
+	}
+
+	mustExec(t, exec, &planner.DropTablePlan{Database: "testdb", Table: "events"})
+	if _, err := store.Get(context.Background(), seqKey); err != kv.ErrKeyNotFound {
+		t.Errorf("sequence key after drop error = %v, want %v", err, kv.ErrKeyNotFound)
 	}
 }
 

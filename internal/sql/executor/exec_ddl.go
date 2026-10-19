@@ -143,6 +143,12 @@ func (e *Executor) execDropTable(ctx context.Context, plan *planner.DropTablePla
 		return nil, err
 	}
 
+	seqKey, err := encoding.EncodeCatalogSeqKey(plan.Database, plan.Table)
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding seq key: %w", err)
+	}
+	ops = append(ops, kv.Op{Type: kv.OpDelete, Key: seqKey})
+
 	if err := e.kv.WriteBatch(ctx, ops); err != nil {
 		return nil, fmt.Errorf("executor: writing DROP TABLE: %w", err)
 	}
