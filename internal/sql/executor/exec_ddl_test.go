@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -144,7 +145,7 @@ func TestDropTableDeletesSequenceKey(t *testing.T) {
 	}
 
 	mustExec(t, exec, &planner.DropTablePlan{Database: "testdb", Table: "events"})
-	if _, err := store.Get(context.Background(), seqKey); err != kv.ErrKeyNotFound {
+	if _, err := store.Get(context.Background(), seqKey); !errors.Is(err, kv.ErrKeyNotFound) {
 		t.Errorf("sequence key after drop error = %v, want %v", err, kv.ErrKeyNotFound)
 	}
 }
