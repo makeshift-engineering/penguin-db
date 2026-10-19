@@ -150,6 +150,49 @@ func TestEvalComparison(t *testing.T) {
 	}
 }
 
+func TestEvalConditionUnknownDoesNotMatchAfterNot(t *testing.T) {
+	intValue := func(value int64) planner.ResolvedExpr {
+		return &planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: value}
+	}
+	comparison := func() planner.ResolvedCond {
+		return &planner.ResolvedComparison{
+			Left:  &planner.ResolvedNullLiteral{},
+			Op:    planner.OpEq,
+			Right: intValue(1),
+		}
+	}
+
+	tests := []struct {
+		name string
+		cond planner.ResolvedCond
+	}{
+		{
+			name: "NOT comparison",
+			cond: &planner.ResolvedNotCond{Operand: comparison()},
+		},
+		{
+			name: "NOT IN with NULL left",
+			cond: &planner.ResolvedIn{Expr: &planner.ResolvedNullLiteral{}, Values: []planner.ResolvedExpr{intValue(1)}, Negated: true},
+		},
+		{
+			name: "NOT BETWEEN with NULL bound",
+			cond: &planner.ResolvedBetween{Expr: intValue(1), Low: &planner.ResolvedNullLiteral{}, High: intValue(2), Negated: true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			matched, err := evalCond(test.cond, row{})
+			if err != nil {
+				t.Fatalf("evalCond returned error: %v", err)
+			}
+			if matched {
+				t.Fatal("UNKNOWN condition matched; SQL WHERE should exclude it")
+			}
+		})
+	}
+}
+
 func TestEvalBinaryCond(t *testing.T) {
 	tests := []struct {
 		op    planner.Op
