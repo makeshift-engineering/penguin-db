@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -216,6 +217,11 @@ func compareValues(a, b any) (int, error) {
 		bv, ok := b.(string)
 		if !ok {
 			return 0, fmt.Errorf("%w: cannot compare string with %T", ErrTypeMismatch, b)
+		}
+		fa, errA := strconv.ParseFloat(av, 64)
+		fb, errB := strconv.ParseFloat(bv, 64)
+		if errA == nil && errB == nil {
+			return cmpOrdered(fa, fb), nil
 		}
 		return cmpOrdered(av, bv), nil
 	case bool:
