@@ -75,7 +75,8 @@ func (s Severity) String() string {
 //
 //	1000–1999  lexer
 //	2000–2999  parser
-//	3000–3999  semantic
+//	3000–3999  semantic / planner
+//	4000–4999  executor
 type Code int
 
 // Error implements the error interface so Code can act as sentinel errors.
@@ -158,6 +159,22 @@ func (l List) Error() string {
 			b.WriteByte('\n')
 		}
 		b.WriteString(d.Error())
+	}
+	return b.String()
+}
+
+// FullError returns a multi-line, human-readable representation of all
+// diagnostics including source snippets. Intended for CLI and log output.
+func (l List) FullError() string {
+	if len(l) == 0 {
+		return "(no diagnostics)"
+	}
+	var b strings.Builder
+	for i, d := range l {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(d.FullString())
 	}
 	return b.String()
 }

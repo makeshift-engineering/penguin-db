@@ -91,7 +91,7 @@ func setupIntegrationServer(t *testing.T) (net.Conn, string, func()) {
 	srv := wire.NewServer(pgLis.Addr().String(), exec, cat)
 	srvCtx, cancelSrv := context.WithCancel(context.Background())
 	go func() {
-		_ = srv.Start(srvCtx)
+		_ = srv.Serve(srvCtx, pgLis)
 	}()
 
 	clientConn, err := net.Dial("tcp", pgLis.Addr().String())
