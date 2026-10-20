@@ -209,8 +209,9 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	lex := lexer.NewLexer("query", query)
 	tokens := lex.Tokenize()
 	if lex.Diagnostics().HasErrors() {
+		we := diagListToWireError(lex.Diagnostics())
 		_ = sendResponse(conn,
-			encodeErrorResponse("ERROR", "42601", fmt.Sprintf("lexical error: %v", lex.Diagnostics().AsError())),
+			encodeRichErrorResponse(we),
 			encodeReadyForQuery('I'),
 		)
 		return
@@ -220,10 +221,17 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	p := parser.New(tokens, source)
 	prog, err := p.Parse()
 	if err != nil || prog == nil || len(prog.Statements) == 0 {
-		_ = sendResponse(conn,
-			encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)),
-			encodeReadyForQuery('I'),
-		)
+		var errPkt []byte
+		switch {
+		case p.Diagnostics().HasErrors():
+			we := diagListToWireError(p.Diagnostics())
+			errPkt = encodeRichErrorResponse(we)
+		case err != nil:
+			errPkt = encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err))
+		default:
+			errPkt = encodeErrorResponse("ERROR", "42601", "syntax error: empty query")
+		}
+		_ = sendResponse(conn, errPkt, encodeReadyForQuery('I'))
 		return
 	}
 
@@ -232,21 +240,22 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase}
 		plan, diagList, err := pl.Plan(ctx, statement, pSess, source)
 		if err != nil || diagList.HasErrors() {
-			var errDetail any = err
-			if err == nil {
-				errDetail = diagList.AsError()
+			var errPkt []byte
+			if diagList.HasErrors() {
+				we := diagListToWireError(diagList)
+				errPkt = encodeRichErrorResponse(we)
+			} else {
+				errPkt = encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", err))
 			}
-			_ = sendResponse(conn,
-				encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)),
-				encodeReadyForQuery('I'),
-		)
+			_ = sendResponse(conn, errPkt, encodeReadyForQuery('I'))
 			return
 		}
 
 		result, err := s.exec.Execute(ctx, plan)
 		if err != nil {
+			we := execErrToWireError(err)
 			_ = sendResponse(conn,
-				encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)),
+				encodeRichErrorResponse(we),
 				encodeReadyForQuery('I'),
 			)
 			return
