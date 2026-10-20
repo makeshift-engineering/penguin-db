@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strconv"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -252,11 +251,6 @@ func compareValues(a, b any) (int, error) {
 		if !ok {
 			return 0, fmt.Errorf("%w: cannot compare string with %T", ErrTypeMismatch, b)
 		}
-		fa, errA := strconv.ParseFloat(av, 64)
-		fb, errB := strconv.ParseFloat(bv, 64)
-		if errA == nil && errB == nil {
-			return cmpOrdered(fa, fb), nil
-		}
 		return cmpOrdered(av, bv), nil
 	case bool:
 		bv, ok := b.(bool)
@@ -382,10 +376,11 @@ func encodeSequenceValue(seq uint64) []byte {
 }
 
 // decodeSequenceValue deserializes a uint64 sequence counter from 8
-// big-endian bytes read from the sequence key.
-func decodeSequenceValue(data []byte) uint64 {
+// big-endian bytes read from the sequence key. Returns an error if the
+// data is malformed (fewer than 8 bytes).
+func decodeSequenceValue(data []byte) (uint64, error) {
 	if len(data) < 8 {
-		return 0
+		return 0, fmt.Errorf("executor: bad sequence data: expected at least 8 bytes, got %d", len(data))
 	}
-	return binary.BigEndian.Uint64(data)
+	return binary.BigEndian.Uint64(data), nil
 }

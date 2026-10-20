@@ -61,6 +61,12 @@ func (e *Executor) execDropDatabase(ctx context.Context, plan *planner.DropDatab
 		}, nil
 	}
 
+	for _, t := range plan.Tables {
+		mu := e.tableLock(plan.Name, t.Name)
+		mu.Lock()
+		defer mu.Unlock()
+	}
+
 	ops, err := catalog.BuildDropDatabaseOps(plan.Name, plan.Tables)
 	if err != nil {
 		return nil, fmt.Errorf("executor: building DROP DATABASE ops: %w", err)
@@ -132,6 +138,10 @@ func (e *Executor) execDropTable(ctx context.Context, plan *planner.DropTablePla
 		}, nil
 	}
 
+	mu := e.tableLock(plan.Database, plan.Table)
+	mu.Lock()
+	defer mu.Unlock()
+
 	ops, err := catalog.BuildDropTableOps(plan.Database, plan.Table)
 	if err != nil {
 		return nil, fmt.Errorf("executor: building DROP TABLE ops: %w", err)
@@ -162,6 +172,10 @@ func (e *Executor) execDropTable(ctx context.Context, plan *planner.DropTablePla
 
 // execAlterTable executes an ALTER TABLE plan (add/modify/drop column).
 func (e *Executor) execAlterTable(ctx context.Context, plan *planner.AlterTablePlan) (*Result, error) {
+	mu := e.tableLock(plan.OldSchema.Database, plan.OldSchema.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
 	ops, finalMeta, err := catalog.BuildAlterTableOps(plan.OldSchema, plan.NewSchema)
 	if err != nil {
 		return nil, fmt.Errorf("executor: building ALTER TABLE ops: %w", err)
@@ -179,6 +193,13 @@ func (e *Executor) execAlterTable(ctx context.Context, plan *planner.AlterTableP
 
 // execRenameTable executes an ALTER TABLE ... RENAME TO plan.
 func (e *Executor) execRenameTable(ctx context.Context, plan *planner.RenameTablePlan) (*Result, error) {
+	oldMu := e.tableLock(plan.Database, plan.OldName)
+	oldMu.Lock()
+	defer oldMu.Unlock()
+	newMu := e.tableLock(plan.Database, plan.NewName)
+	newMu.Lock()
+	defer newMu.Unlock()
+
 	// Read the current sequence counter value, if any.
 	seqKey, err := encoding.EncodeCatalogSeqKey(plan.Database, plan.OldName)
 	if err != nil {
@@ -194,6 +215,40 @@ func (e *Executor) execRenameTable(ctx context.Context, plan *planner.RenameTabl
 	if err != nil {
 		return nil, fmt.Errorf("executor: building RENAME TABLE ops: %w", err)
 	}
+
+	// Update existing row keys to the new table name prefix.
+	oldPrefix, err := encoding.EncodeScanPrefix(plan.Database, plan.OldName)
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding scan prefix for %q.%q: %w", plan.Database, plan.OldName, err)
+	}
+	newPrefix, err := encoding.EncodeScanPrefix(plan.Database, plan.NewName)
+	if err != nil {
+		return nil, fmt.Errorf("executor: encoding scan prefix for %q.%q: %w", plan.Database, plan.NewName, err)
+	}
+	iter, err := e.kv.Scan(ctx, oldPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("executor: scanning rows for rename: %w", err)
+	}
+	defer iter.Close()
+
+	for iter.Valid() {
+		key, val := iter.Next()
+		if key != nil {
+			pk := key[len(oldPrefix):]
+			newKey := make([]byte, len(newPrefix)+len(pk))
+			copy(newKey, newPrefix)
+			copy(newKey[len(newPrefix):], pk)
+
+			ops = append(ops,
+				kv.Op{Type: kv.OpDelete, Key: key},
+				kv.Op{Type: kv.OpPut, Key: newKey, Value: val},
+			)
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("executor: scanning rows for rename: %w", err)
+	}
+
 	if err := e.kv.WriteBatch(ctx, ops); err != nil {
 		return nil, fmt.Errorf("executor: writing RENAME TABLE: %w", err)
 	}

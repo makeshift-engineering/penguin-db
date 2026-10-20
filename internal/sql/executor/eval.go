@@ -50,11 +50,14 @@ func evalExpr(expr planner.ResolvedExpr, r row) (any, error) {
 		// context, which shouldn't happen after planning. Return an error.
 		return nil, fmt.Errorf("%w: aggregate function %q in non-aggregate context", ErrUnsupportedExpr, e.Name)
 	case *planner.ResolvedConditionExpr:
-		b, err := evalCond(e.Cond, r)
+		res, err := evalCondValue(e.Cond, r)
 		if err != nil {
 			return nil, err
 		}
-		return b, nil
+		if res.unknown {
+			return nil, nil
+		}
+		return res.value, nil
 	default:
 		return nil, fmt.Errorf("%w: %T", ErrUnsupportedExpr, expr)
 	}

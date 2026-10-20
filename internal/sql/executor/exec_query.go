@@ -299,6 +299,9 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		if operand == nil {
 			return nil, nil
 		}
+		if e.Op == planner.OpAdd {
+			return operand, nil
+		}
 		if isIntegerAny(operand) {
 			value, _ := toInt64(operand)
 			result, err := computeIntegerArithmetic(planner.OpSub, 0, value)

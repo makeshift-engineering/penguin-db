@@ -692,3 +692,55 @@ func TestOmittedNotNullColumnViolation(t *testing.T) {
 		t.Fatalf("omitted NOT NULL column error = %v, want ErrNotNullViolation", err)
 	}
 }
+
+func TestVarcharUnicodeLength(t *testing.T) {
+	exec, _, _ := setupExecutor(t)
+	mustExec(t, exec, &planner.CreateDatabasePlan{Name: "testdb"})
+
+	schema := &catalog.TableMeta{
+		Database: "testdb",
+		Name:     "unicodetest",
+		Columns: []catalog.ColumnMeta{
+			{Name: "id", Type: ast.TypeInt, PrimaryKey: true},
+			{Name: "val", Type: ast.TypeVarchar, VarcharLen: intPtr(3)},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	mustExec(t, exec, &planner.CreateTablePlan{Database: "testdb", Table: "unicodetest", Schema: schema})
+
+	cols := []planner.ResolvedColumn{
+		{Name: "id", Type: ast.TypeInt, Index: 0},
+		{Name: "val", Type: ast.TypeVarchar, Index: 1, VarcharLen: intPtr(3)},
+	}
+
+	// "世界" has 2 runes (6 bytes). Since max varchar len is 3, this MUST succeed.
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "unicodetest",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "世界"},
+			},
+		},
+	})
+
+	// "世界你好" has 4 runes (12 bytes). Since max varchar len is 3, this MUST fail with ErrVarcharTooLong.
+	_, err := exec.Execute(context.Background(), &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "unicodetest",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "世界你好"},
+			},
+		},
+	})
+	if !errors.Is(err, ErrVarcharTooLong) {
+		t.Fatalf("expected ErrVarcharTooLong, got %v", err)
+	}
+}

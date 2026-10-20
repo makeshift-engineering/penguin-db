@@ -235,6 +235,20 @@ func TestEvalAggregateExpr(t *testing.T) {
 	if res.(int32) != -30 {
 		t.Errorf("evalAggregateExpr = %v, want -30", res)
 	}
+
+	// +SUM(col0)
+	posExpr := &planner.ResolvedUnaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+		Op:               planner.OpAdd,
+		Operand:          sumFunc,
+	}
+	res, err = evalAggregateExpr(posExpr, groupRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.(int32) != 30 {
+		t.Errorf("evalAggregateExpr = %v, want 30", res)
+	}
 }
 
 func TestEmptyAggregates(t *testing.T) {

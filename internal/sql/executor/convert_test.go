@@ -217,15 +217,18 @@ func TestSequenceValueEncoding(t *testing.T) {
 		if len(encoded) != 8 {
 			t.Errorf("encodeSequenceValue(%d) length = %d, want 8", seq, len(encoded))
 		}
-		decoded := decodeSequenceValue(encoded)
+		decoded, err := decodeSequenceValue(encoded)
+		if err != nil {
+			t.Errorf("decodeSequenceValue failed: %v", err)
+		}
 		if decoded != seq {
 			t.Errorf("decodeSequenceValue(encodeSequenceValue(%d)) = %d, want %d", seq, decoded, seq)
 		}
 	}
 
-	// Test short buffer
-	if got := decodeSequenceValue([]byte{1, 2, 3}); got != 0 {
-		t.Errorf("decodeSequenceValue(short_buffer) = %d, want 0", got)
+	// Test short buffer returns an error
+	if _, err := decodeSequenceValue([]byte{1, 2, 3}); err == nil {
+		t.Error("decodeSequenceValue(short_buffer) expected error, got nil")
 	}
 }
 
@@ -245,9 +248,11 @@ func TestCompareValues(t *testing.T) {
 		{"a", "b", -1, false},
 		{"b", "a", 1, false},
 		{"a", "a", 0, false},
-		{"10.0", "2.5", 1, false},
-		{"2.5", "10.0", -1, false},
-		{"10.0", "10", 0, false},
+		{"10", "2", -1, false},
+		{"2", "10", 1, false},
+		{"10.0", "2.5", -1, false},
+		{"2.5", "10.0", 1, false},
+		{"10.0", "10", 1, false},
 		{"10.0", "2x", -1, false},
 		{true, false, 1, false},
 		{false, true, -1, false},

@@ -189,7 +189,7 @@ func TestAlterTable(t *testing.T) {
 }
 
 func TestRenameTable(t *testing.T) {
-	exec, cat, _ := setupExecutor(t)
+	exec, cat, store := setupExecutor(t)
 	mustExec(t, exec, &planner.CreateDatabasePlan{Name: "mydb"})
 
 	oldSchema := &catalog.TableMeta{
@@ -201,6 +201,21 @@ func TestRenameTable(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	}
 	mustExec(t, exec, &planner.CreateTablePlan{Database: "mydb", Table: "old_users", Schema: oldSchema})
+
+	cols := []planner.ResolvedColumn{
+		{Name: "id", Type: ast.TypeInt, Index: 0},
+	}
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "mydb",
+		Table:    "old_users",
+		Schema:   oldSchema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 42},
+			},
+		},
+	})
 
 	newSchema := *oldSchema
 	newSchema.Name = "new_users"
@@ -218,5 +233,44 @@ func TestRenameTable(t *testing.T) {
 	}
 	if _, err := cat.GetTable("mydb", "new_users"); err != nil {
 		t.Errorf("new table should exist after rename: %v", err)
+	}
+
+	// Verify rows are accessible under the new table name.
+	newCols := []planner.ResolvedColumn{
+		{Name: "id", Type: ast.TypeInt, Index: 0},
+	}
+	resolvedNewTable := &planner.ResolvedTable{
+		Database: "mydb",
+		Table:    "new_users",
+		Binding:  "new_users",
+		Schema:   &newSchema,
+	}
+	qResult := mustExec(t, exec, &planner.QueryPlan{
+		Root: &planner.ProjectNode{
+			Input: &planner.ScanNode{Table: resolvedNewTable},
+			Items: []planner.ProjectItem{
+				{Expr: &planner.ResolvedColumnRef{Column: newCols[0]}, Alias: "id"},
+			},
+		},
+		Columns: []planner.OutputColumn{{Name: "id", Type: ast.TypeInt}},
+	})
+	if len(qResult.Rows) != 1 {
+		t.Fatalf("expected 1 row in renamed table, got %d", len(qResult.Rows))
+	}
+	if qResult.Rows[0][0] != int32(42) {
+		t.Errorf("expected row value 42, got %v", qResult.Rows[0][0])
+	}
+
+	oldPrefix, err := encoding.EncodeScanPrefix("mydb", "old_users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIter, err := store.Scan(context.Background(), oldPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldIter.Close()
+	if oldIter.Valid() {
+		t.Error("old table prefix still has keys in KV store")
 	}
 }

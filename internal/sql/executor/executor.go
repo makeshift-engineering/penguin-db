@@ -19,6 +19,14 @@ type Executor struct {
 	catalog    *catalog.Catalog
 	insertMu   sync.Mutex
 	sequenceMu sync.Mutex
+	tableMu    sync.Map // map[string]*sync.RWMutex
+}
+
+// tableLock returns the table-level RWMutex for db.table, allocating one if not present.
+func (e *Executor) tableLock(db, table string) *sync.RWMutex {
+	key := db + "." + table
+	val, _ := e.tableMu.LoadOrStore(key, &sync.RWMutex{})
+	return val.(*sync.RWMutex)
 }
 
 // New creates an Executor backed by the given KV store and catalog.

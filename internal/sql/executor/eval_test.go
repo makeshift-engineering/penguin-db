@@ -445,3 +445,53 @@ func TestCoerceResultByKind(t *testing.T) {
 		}
 	}
 }
+
+func TestEvalConditionExpr_PreservesUnknown(t *testing.T) {
+	// SELECT NULL = NULL -> should return nil (UNKNOWN), not false
+	nullEqNull := &planner.ResolvedConditionExpr{
+		Cond: &planner.ResolvedComparison{
+			Left:  &planner.ResolvedNullLiteral{},
+			Op:    planner.OpEq,
+			Right: &planner.ResolvedNullLiteral{},
+		},
+	}
+	got, err := evalExpr(nullEqNull, row{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("evalExpr(NULL = NULL) = %v, want nil (UNKNOWN)", got)
+	}
+
+	// SELECT 1 = 1 -> should return true
+	oneEqOne := &planner.ResolvedConditionExpr{
+		Cond: &planner.ResolvedComparison{
+			Left:  &planner.ResolvedIntLiteral{Value: 1},
+			Op:    planner.OpEq,
+			Right: &planner.ResolvedIntLiteral{Value: 1},
+		},
+	}
+	got, err = evalExpr(oneEqOne, row{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != true {
+		t.Errorf("evalExpr(1 = 1) = %v, want true", got)
+	}
+
+	// SELECT 1 = 2 -> should return false
+	oneEqTwo := &planner.ResolvedConditionExpr{
+		Cond: &planner.ResolvedComparison{
+			Left:  &planner.ResolvedIntLiteral{Value: 1},
+			Op:    planner.OpEq,
+			Right: &planner.ResolvedIntLiteral{Value: 2},
+		},
+	}
+	got, err = evalExpr(oneEqTwo, row{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != false {
+		t.Errorf("evalExpr(1 = 2) = %v, want false", got)
+	}
+}

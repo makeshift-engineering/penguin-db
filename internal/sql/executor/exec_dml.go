@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -23,6 +24,10 @@ type kvPair struct {
 func (e *Executor) execInsert(ctx context.Context, plan *planner.InsertPlan) (*Result, error) {
 	e.insertMu.Lock()
 	defer e.insertMu.Unlock()
+
+	mu := e.tableLock(plan.Database, plan.Table)
+	mu.Lock()
+	defer mu.Unlock()
 
 	if plan.Source != nil {
 		return e.execInsertSelect(ctx, plan)
@@ -151,6 +156,10 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 
 // execUpdate executes an UPDATE plan against target table rows.
 func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*Result, error) {
+	mu := e.tableLock(plan.Database, plan.Table)
+	mu.Lock()
+	defer mu.Unlock()
+
 	schema := plan.Schema
 	activeColumns := schema.ActiveColumns()
 
@@ -291,6 +300,14 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 
 // execDelete executes a DELETE plan by deleting matching table rows.
 func (e *Executor) execDelete(ctx context.Context, plan *planner.DeletePlan) (*Result, error) {
+	mu := e.tableLock(plan.Database, plan.Table)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, err := e.catalog.GetTable(plan.Database, plan.Table); err != nil {
+		return nil, fmt.Errorf("executor: %w", err)
+	}
+
 	schema := plan.Schema
 	prefix, err := encoding.EncodeScanPrefix(plan.Database, plan.Table)
 	if err != nil {
@@ -348,9 +365,9 @@ func validateColumnValue(name string, typ ast.DataTypeKind, varcharLen *int, nul
 		return fmt.Errorf("%w: column %q", ErrNotNullViolation, name)
 	}
 	if typ == ast.TypeVarchar && varcharLen != nil && val != nil {
-		if s, ok := val.(string); ok && len(s) > *varcharLen {
+		if s, ok := val.(string); ok && utf8.RuneCountInString(s) > *varcharLen {
 			return fmt.Errorf("%w: column %q (max %d, got %d)",
-				ErrVarcharTooLong, name, *varcharLen, len(s))
+				ErrVarcharTooLong, name, *varcharLen, utf8.RuneCountInString(s))
 		}
 	}
 	return nil
@@ -512,5 +529,5 @@ func (e *Executor) readSequence(ctx context.Context, db, table string) (uint64, 
 	if err != nil {
 		return 0, fmt.Errorf("executor: reading seq counter: %w", err)
 	}
-	return decodeSequenceValue(seqBytes), nil
+	return decodeSequenceValue(seqBytes)
 }
