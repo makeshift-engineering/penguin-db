@@ -1,6 +1,27 @@
 package executor
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+)
+
+// Executor diagnostic codes occupy the 4000–4999 range.
+const (
+	CodeNullPrimaryKey      diagnostic.Code = 4001
+	CodeNotNullViolation    diagnostic.Code = 4002
+	CodeDuplicateKey        diagnostic.Code = 4003
+	CodeTypeMismatch        diagnostic.Code = 4004
+	CodeDivisionByZero      diagnostic.Code = 4005
+	CodeUnsupportedPlan     diagnostic.Code = 4006
+	CodeVarcharTooLong      diagnostic.Code = 4007
+	CodeUnsupportedExpr     diagnostic.Code = 4008
+	CodeUnsupportedCond     diagnostic.Code = 4009
+	CodeUnsupportedRelNode  diagnostic.Code = 4010
+	CodeUnsupportedAggFunc  diagnostic.Code = 4011
+	CodeColumnCountMismatch diagnostic.Code = 4012
+	CodeInvalidLikePattern  diagnostic.Code = 4013
+)
 
 // Sentinel errors returned by the executor.
 var (

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"strconv"
 )
 
 // Protocol constants and magic numbers for PostgreSQL Wire Protocol v3.
@@ -145,14 +146,52 @@ func encodeCommandComplete(tag string) []byte {
 	return buf.finish(MessageCommandComplete)
 }
 
-func encodeErrorResponse(severity, code, message string) []byte {
+// WireError holds all fields needed for a PostgreSQL ErrorResponse packet.
+// Only Severity, Code, and Message are required; the rest are optional.
+type WireError struct {
+	Severity string // S — "ERROR", "FATAL", "WARNING"
+	Code     string // C — SQLSTATE (e.g. "42601")
+	Message  string // M — primary human-readable message
+	Detail   string // D — optional elaboration (e.g. source snippet)
+	Hint     string // H — optional remediation suggestion
+	Position int    // P — 1-based character offset in query (0 = omit)
+}
+
+// encodeRichErrorResponse constructs a PostgreSQL ErrorResponse packet with
+// the full set of structured fields. Clients like psql render these
+// natively — in particular the Position field triggers psql's built-in
+// caret display on the original query line.
+func encodeRichErrorResponse(e *WireError) []byte {
 	buf := newMessageBuffer()
 	buf.writeByte('S')
-	buf.writeCString(severity)
+	buf.writeCString(e.Severity)
 	buf.writeByte('C')
-	buf.writeCString(code)
+	buf.writeCString(e.Code)
 	buf.writeByte('M')
-	buf.writeCString(message)
+	buf.writeCString(e.Message)
+	if e.Detail != "" {
+		buf.writeByte('D')
+		buf.writeCString(e.Detail)
+	}
+	if e.Hint != "" {
+		buf.writeByte('H')
+		buf.writeCString(e.Hint)
+	}
+	if e.Position > 0 {
+		buf.writeByte('P')
+		buf.writeCString(strconv.Itoa(e.Position))
+	}
 	buf.writeByte(0)
 	return buf.finish(MessageErrorResponse)
+}
+
+// encodeErrorResponse constructs a basic PostgreSQL ErrorResponse with only
+// Severity, SQLSTATE Code, and Message fields. It delegates to
+// encodeRichErrorResponse for consistent packet encoding.
+func encodeErrorResponse(severity, code, message string) []byte {
+	return encodeRichErrorResponse(&WireError{
+		Severity: severity,
+		Code:     code,
+		Message:  message,
+	})
 }

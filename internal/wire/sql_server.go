@@ -40,13 +40,8 @@ func NewServer(addr string, exec *executor.Executor, cat *catalog.Catalog) *Serv
 	}
 }
 
-// Start opens a TCP socket and accepts client connections until context cancellation.
-func (s *Server) Start(ctx context.Context) error {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", s.addr)
-	if err != nil {
-		return fmt.Errorf("penguinwire: failed to listen on %s: %w", s.addr, err)
-	}
+// Serve accepts client connections on the provided listener until context cancellation.
+func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	s.listener = l
 
 	go func() {
@@ -64,6 +59,16 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		go s.handleConnection(ctx, conn)
 	}
+}
+
+// Start opens a TCP socket and accepts client connections until context cancellation.
+func (s *Server) Start(ctx context.Context) error {
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", s.addr)
+	if err != nil {
+		return fmt.Errorf("penguinwire: failed to listen on %s: %w", s.addr, err)
+	}
+	return s.Serve(ctx, l)
 }
 
 // Close gracefully terminates the underlying TCP network listener.
@@ -187,7 +192,8 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	lex := lexer.NewLexer("query", query)
 	tokens := lex.Tokenize()
 	if lex.Diagnostics().HasErrors() {
-		conn.Write(encodeErrorResponse("ERROR", "42601", fmt.Sprintf("lexical error: %v", lex.Diagnostics().AsError())))
+		we := diagListToWireError(lex.Diagnostics())
+		conn.Write(encodeRichErrorResponse(we))
 		conn.Write(encodeReadyForQuery('I'))
 		return
 	}
@@ -196,28 +202,38 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	p := parser.New(tokens, source)
 	prog, err := p.Parse()
 	if err != nil || prog == nil || len(prog.Statements) == 0 {
-		conn.Write(encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)))
+		switch {
+		case p.Diagnostics().HasErrors():
+			we := diagListToWireError(p.Diagnostics())
+			conn.Write(encodeRichErrorResponse(we))
+		case err != nil:
+			conn.Write(encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)))
+		default:
+			conn.Write(encodeErrorResponse("ERROR", "42601", "syntax error: empty query"))
+		}
 		conn.Write(encodeReadyForQuery('I'))
 		return
 	}
 
 	for _, statement := range prog.Statements {
 		pl := planner.New(s.catalog)
-		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase, Ctx: ctx}
-		plan, diagList, err := pl.Plan(statement, pSess, source)
+		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase}
+		plan, diagList, err := pl.Plan(ctx, statement, pSess, source)
 		if err != nil || diagList.HasErrors() {
-			var errDetail interface{} = err
-			if err == nil {
-				errDetail = diagList.AsError()
+			if diagList.HasErrors() {
+				we := diagListToWireError(diagList)
+				conn.Write(encodeRichErrorResponse(we))
+			} else {
+				conn.Write(encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", err)))
 			}
-			conn.Write(encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)))
 			conn.Write(encodeReadyForQuery('I'))
 			return
 		}
 
 		result, err := s.exec.Execute(ctx, plan)
 		if err != nil {
-			conn.Write(encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)))
+			we := execErrToWireError(err)
+			conn.Write(encodeRichErrorResponse(we))
 			conn.Write(encodeReadyForQuery('I'))
 			return
 		}
@@ -271,10 +287,25 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 				tag = fmt.Sprintf("UPDATE %d", result.RowsAffected)
 			}
 		case executor.ResultDDL:
-			if result.Message != "" {
-				tag = result.Message
-			} else {
-				tag = "OK"
+			switch statement.(type) {
+			case *ast.CreateDatabaseStmt:
+				tag = "CREATE DATABASE"
+			case *ast.DropDatabaseStmt:
+				tag = "DROP DATABASE"
+			case *ast.CreateTableStmt:
+				tag = "CREATE TABLE"
+			case *ast.DropTableStmt:
+				tag = "DROP TABLE"
+			case *ast.AlterTableStmt:
+				tag = "ALTER TABLE"
+			case *ast.UseDatabaseStmt:
+				tag = "USE"
+			default:
+				if result.Message != "" {
+					tag = result.Message
+				} else {
+					tag = "OK"
+				}
 			}
 		}
 		conn.Write(encodeCommandComplete(tag))
