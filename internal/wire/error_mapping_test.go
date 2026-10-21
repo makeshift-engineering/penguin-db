@@ -219,4 +219,3 @@ func TestEncodeRichErrorResponse(t *testing.T) {
 		t.Errorf("expected P=8, got %q", fields['P'])
 	}
 }
-

@@ -218,13 +218,13 @@ func execErrToWireError(err error) *WireError {
 	switch {
 	case errors.Is(err, executor.ErrDuplicateKey):
 		we.Code = "23505" // unique_violation
-		we.Message = fmt.Sprintf("[E%d] duplicate primary key: %s", int(executor.CodeDuplicateKey), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeDuplicateKey), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrNotNullViolation):
 		we.Code = "23502" // not_null_violation
-		we.Message = fmt.Sprintf("[E%d] NOT NULL constraint violation: %s", int(executor.CodeNotNullViolation), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeNotNullViolation), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrNullPrimaryKey):
 		we.Code = "23502" // not_null_violation
-		we.Message = fmt.Sprintf("[E%d] primary key cannot be NULL: %s", int(executor.CodeNullPrimaryKey), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeNullPrimaryKey), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrDivisionByZero):
 		we.Code = "22012" // division_by_zero
 		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeDivisionByZero), cleanExecMessage(err))
