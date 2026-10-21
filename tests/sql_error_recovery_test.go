@@ -80,6 +80,7 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 		t.Fatalf("expected error for syntax mistake, got %+v", res)
 	}
 	errMsg := res[0].Err.Error()
+	t.Logf("\n[Syntax Error Response]:\n%s\n", errMsg)
 	// Must contain diagnostic code [E2009] (CodeMalformedStatement)
 	if !strings.Contains(errMsg, "[E2009]") {
 		t.Errorf("expected [E2009] in syntax error, got: %s", errMsg)
@@ -110,6 +111,7 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 		t.Fatalf("expected error for non-existent table, got %+v", res)
 	}
 	errMsg = res[0].Err.Error()
+	t.Logf("\n[Planning Error Response]:\n%s\n", errMsg)
 	if !strings.Contains(errMsg, "[E3003]") {
 		t.Errorf("expected [E3003] in planning error, got: %s", errMsg)
 	}
@@ -133,6 +135,7 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 		t.Fatalf("expected error on duplicate PK insert, got %+v", dupRes)
 	}
 	errMsg = dupRes[0].Err.Error()
+	t.Logf("\n[Execution Error Response]:\n%s\n", errMsg)
 	if !strings.Contains(errMsg, "[E4003]") {
 		t.Errorf("expected [E4003] in duplicate PK error, got: %s", errMsg)
 	}
