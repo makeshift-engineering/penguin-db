@@ -14,6 +14,11 @@ func init() {
 			keywords[def.name] = TokenType(i)
 		}
 	}
+	keywords["BOOL"] = TOKEN_BOOLEAN
+	keywords["INT4"] = TOKEN_INT
+	keywords["INT8"] = TOKEN_BIGINT
+	keywords["FLOAT4"] = TOKEN_FLOAT_TYPE
+	keywords["FLOAT8"] = TOKEN_DOUBLE
 }
 
 // LookupIdent maps an identifier string to its TokenType.
