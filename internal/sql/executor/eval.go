@@ -345,18 +345,19 @@ func matchLike(str, pattern string) bool {
 	sMatch := 0
 
 	for sIdx < len(s) {
-		if pIdx < len(p) && (p[pIdx] == '_' || p[pIdx] == s[sIdx]) {
+		switch {
+		case pIdx < len(p) && (p[pIdx] == '_' || p[pIdx] == s[sIdx]):
 			sIdx++
 			pIdx++
-		} else if pIdx < len(p) && p[pIdx] == '%' {
+		case pIdx < len(p) && p[pIdx] == '%':
 			starIdx = pIdx
 			sMatch = sIdx
 			pIdx++
-		} else if starIdx != -1 {
+		case starIdx != -1:
 			pIdx = starIdx + 1
 			sMatch++
 			sIdx = sMatch
-		} else {
+		default:
 			return false
 		}
 	}

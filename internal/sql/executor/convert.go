@@ -186,7 +186,7 @@ func toFloat32(v any) (float32, error) {
 	case decimalValue:
 		f, err := strconv.ParseFloat(string(n), 32)
 		if err != nil {
-			return 0, fmt.Errorf("%w: cannot convert decimal %q to FLOAT: %v", ErrTypeMismatch, n, err)
+			return 0, fmt.Errorf("%w: cannot convert decimal %q to FLOAT: %w", ErrTypeMismatch, n, err)
 		}
 		return float32(f), nil
 	default:
@@ -208,7 +208,7 @@ func toFloat64(v any) (float64, error) {
 	case decimalValue:
 		f, err := strconv.ParseFloat(string(n), 64)
 		if err != nil {
-			return 0, fmt.Errorf("%w: cannot convert decimal %q to numeric: %v", ErrTypeMismatch, n, err)
+			return 0, fmt.Errorf("%w: cannot convert decimal %q to numeric: %w", ErrTypeMismatch, n, err)
 		}
 		return f, nil
 	default:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -61,10 +62,16 @@ func (e *Executor) execDropDatabase(ctx context.Context, plan *planner.DropDatab
 		}, nil
 	}
 
+	locks := make([]*sync.RWMutex, 0, len(plan.Tables))
+	defer func() {
+		for _, mu := range locks {
+			mu.Unlock()
+		}
+	}()
 	for _, t := range plan.Tables {
 		mu := e.tableLock(plan.Name, t.Name)
 		mu.Lock()
-		defer mu.Unlock()
+		locks = append(locks, mu)
 	}
 
 	ops, err := catalog.BuildDropDatabaseOps(plan.Name, plan.Tables)
