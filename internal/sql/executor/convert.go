@@ -4,11 +4,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 )
+
+// decimalValue is the runtime representation of a DECIMAL column value.
+type decimalValue string
+
+func (d decimalValue) String() string {
+	return string(d)
+}
 
 // columnValueToAny converts a decoded codec.ColumnValue into a Go any
 // value. NULL columns become nil.
@@ -31,7 +40,10 @@ func columnValueToAny(cv codec.ColumnValue) (any, error) {
 		return v, err
 	case ast.TypeDecimal:
 		v, err := cv.AsDecimal()
-		return v, err
+		if err != nil {
+			return nil, err
+		}
+		return decimalValue(v), nil
 	case ast.TypeVarchar, ast.TypeText:
 		v, err := cv.AsString()
 		return v, err
@@ -82,11 +94,14 @@ func anyToColumnValue(v any, typ ast.DataTypeKind) (codec.ColumnValue, error) {
 		}
 		return codec.DoubleValue(f), nil
 	case ast.TypeDecimal:
-		s, ok := v.(string)
-		if !ok {
+		switch s := v.(type) {
+		case decimalValue:
+			return codec.DecimalValue(string(s))
+		case string:
+			return codec.DecimalValue(s)
+		default:
 			return codec.ColumnValue{}, fmt.Errorf("%w: cannot convert %T to DECIMAL", ErrTypeMismatch, v)
 		}
-		return codec.DecimalValue(s)
 	case ast.TypeVarchar:
 		s, ok := v.(string)
 		if !ok {
@@ -168,6 +183,12 @@ func toFloat32(v any) (float32, error) {
 		return n, nil
 	case float64:
 		return float32(n), nil
+	case decimalValue:
+		f, err := strconv.ParseFloat(string(n), 32)
+		if err != nil {
+			return 0, fmt.Errorf("%w: cannot convert decimal %q to FLOAT: %v", ErrTypeMismatch, n, err)
+		}
+		return float32(f), nil
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to FLOAT", ErrTypeMismatch, v)
 	}
@@ -184,6 +205,12 @@ func toFloat64(v any) (float64, error) {
 		return float64(n), nil
 	case float64:
 		return n, nil
+	case decimalValue:
+		f, err := strconv.ParseFloat(string(n), 64)
+		if err != nil {
+			return 0, fmt.Errorf("%w: cannot convert decimal %q to numeric: %v", ErrTypeMismatch, n, err)
+		}
+		return f, nil
 	default:
 		return 0, fmt.Errorf("%w: cannot convert %T to numeric", ErrTypeMismatch, v)
 	}
@@ -193,6 +220,13 @@ func toFloat64(v any) (float64, error) {
 // Returns -1, 0, or 1 like strings.Compare. Both values must be non-nil;
 // NULL handling is done by the caller.
 func compareValues(a, b any) (int, error) {
+	if _, ok := a.(decimalValue); ok {
+		return compareAsRat(a, b)
+	}
+	if _, ok := b.(decimalValue); ok {
+		return compareAsRat(a, b)
+	}
+
 	switch av := a.(type) {
 	case int32:
 		if _, ok := b.(float32); ok {
@@ -277,6 +311,49 @@ func compareValues(a, b any) (int, error) {
 	}
 }
 
+// compareAsRat compares two numeric operands as rational numbers using big.Rat.
+func compareAsRat(a, b any) (int, error) {
+	ra, err := toRat(a)
+	if err != nil {
+		return 0, err
+	}
+	rb, err := toRat(b)
+	if err != nil {
+		return 0, err
+	}
+	return ra.Cmp(rb), nil
+}
+
+// toRat converts a numeric value (int32, int64, float32, float64, decimalValue)
+// into a *big.Rat.
+func toRat(v any) (*big.Rat, error) {
+	switch val := v.(type) {
+	case decimalValue:
+		r := new(big.Rat)
+		if _, ok := r.SetString(string(val)); !ok {
+			return nil, fmt.Errorf("%w: invalid decimal %q", ErrTypeMismatch, val)
+		}
+		return r, nil
+	case int32:
+		return new(big.Rat).SetInt64(int64(val)), nil
+	case int64:
+		return new(big.Rat).SetInt64(val), nil
+	case float32:
+		f := float64(val)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, fmt.Errorf("%w: cannot convert %v to big.Rat", ErrTypeMismatch, f)
+		}
+		return new(big.Rat).SetFloat64(f), nil
+	case float64:
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			return nil, fmt.Errorf("%w: cannot convert %v to big.Rat", ErrTypeMismatch, val)
+		}
+		return new(big.Rat).SetFloat64(val), nil
+	default:
+		return nil, fmt.Errorf("%w: cannot compare decimal with %T", ErrTypeMismatch, v)
+	}
+}
+
 // cmpOrdered returns -1, 0, or 1 for ordered types.
 func cmpOrdered[T int | int64 | float64 | string](a, b T) int {
 	switch {
@@ -317,12 +394,21 @@ func anyToPKValue(v any, typ ast.DataTypeKind) (any, error) {
 	case ast.TypeDouble:
 		f, err := toFloat64(v)
 		return f, err
-	case ast.TypeVarchar, ast.TypeText, ast.TypeDecimal:
+	case ast.TypeVarchar, ast.TypeText:
 		s, ok := v.(string)
 		if !ok {
 			return nil, fmt.Errorf("%w: cannot convert %T to string for PK", ErrTypeMismatch, v)
 		}
 		return s, nil
+	case ast.TypeDecimal:
+		switch s := v.(type) {
+		case decimalValue:
+			return string(s), nil
+		case string:
+			return s, nil
+		default:
+			return nil, fmt.Errorf("%w: cannot convert %T to string for PK", ErrTypeMismatch, v)
+		}
 	case ast.TypeBoolean:
 		b, ok := v.(bool)
 		if !ok {

@@ -276,7 +276,7 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 			if err != nil {
 				return nil, err
 			}
-			return coerceIntegerResult(result, e.ResolvedType()), nil
+			return coerceIntegerResult(result, e.ResolvedType())
 		}
 		lf, err := toFloat64(left)
 		if err != nil {
@@ -290,7 +290,7 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		if err != nil {
 			return nil, err
 		}
-		return coerceResultByKind(result, e.ResolvedType()), nil
+		return coerceResultByKind(result, e.ResolvedType())
 	case *planner.ResolvedUnaryExpr:
 		operand, err := evalAggregateExpr(e.Operand, groupRows)
 		if err != nil {
@@ -308,13 +308,13 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 			if err != nil {
 				return nil, err
 			}
-			return coerceIntegerResult(result, e.ResolvedType()), nil
+			return coerceIntegerResult(result, e.ResolvedType())
 		}
 		f, err := toFloat64(operand)
 		if err != nil {
 			return nil, err
 		}
-		return coerceResultByKind(-f, e.ResolvedType()), nil
+		return coerceResultByKind(-f, e.ResolvedType())
 	default:
 		// For non-aggregate expressions (column refs, literals), evaluate
 		// against the first row. If the group is empty, return nil.
@@ -390,7 +390,7 @@ func evalSum(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 	if count == 0 {
 		return nil, nil
 	}
-	return coerceResultByKind(sum, fn.ResolvedType()), nil
+	return coerceResultByKind(sum, fn.ResolvedType())
 }
 
 // evalAvg implements AVG([DISTINCT] expr).

@@ -147,6 +147,7 @@ func TestAnyToPKValue(t *testing.T) {
 		{"hello", ast.TypeVarchar, "hello", false},
 		{"hello", ast.TypeText, "hello", false},
 		{"1.23", ast.TypeDecimal, "1.23", false},
+		{decimalValue("1.23"), ast.TypeDecimal, "1.23", false},
 		{123, ast.TypeVarchar, nil, true},
 		{true, ast.TypeBoolean, true, false},
 		{123, ast.TypeBoolean, nil, true},
@@ -183,6 +184,7 @@ func TestAnyToColumnValue(t *testing.T) {
 		{"hello", ast.TypeVarchar, mustVarchar("hello"), false},
 		{"hello", ast.TypeText, mustText("hello"), false},
 		{"1.23", ast.TypeDecimal, mustDecimal("1.23"), false},
+		{decimalValue("1.23"), ast.TypeDecimal, mustDecimal("1.23"), false},
 		{123, ast.TypeVarchar, codec.ColumnValue{}, true},
 		{123, ast.TypeText, codec.ColumnValue{}, true},
 		{123, ast.TypeDecimal, codec.ColumnValue{}, true},
@@ -257,6 +259,20 @@ func TestCompareValues(t *testing.T) {
 		{true, false, 1, false},
 		{false, true, -1, false},
 		{true, true, 0, false},
+		// DECIMAL comparisons
+		{decimalValue("10.0"), decimalValue("2.5"), 1, false},
+		{decimalValue("2.5"), decimalValue("10.0"), -1, false},
+		{decimalValue("10.0"), decimalValue("10"), 0, false},
+		{decimalValue("10.0"), float64(2.5), 1, false},
+		{float64(2.5), decimalValue("10.0"), -1, false},
+		{decimalValue("10.0"), int32(10), 0, false},
+		{int64(10), decimalValue("10.0"), 0, false},
+		// Precision preservation beyond float64
+		{decimalValue("100000000000000000000.00000000000000000001"), decimalValue("100000000000000000000.00000000000000000002"), -1, false},
+		// DECIMAL vs non-numeric
+		{decimalValue("10.0"), "10.0", 0, true},
+		{"10.0", decimalValue("10.0"), 0, true},
+		{decimalValue("10.0"), true, 0, true},
 		{int32(1), "1", 0, true},
 		{int64(1), "1", 0, true},
 		{float32(1.0), "1", 0, true},
@@ -283,26 +299,41 @@ func TestCompareValues(t *testing.T) {
 }
 
 func TestColumnValueToAny(t *testing.T) {
+	now := time.Now()
 	tests := []struct {
 		cv      codec.ColumnValue
+		want    any
 		wantErr bool
 	}{
-		{codec.NullValue(ast.TypeInt), false},
-		{codec.IntValue(42), false},
-		{codec.BigIntValue(42), false},
-		{codec.FloatValue(42.0), false},
-		{codec.DoubleValue(42.0), false},
-		{mustDecimal("1.23"), false},
-		{mustVarchar("hello"), false},
-		{codec.BoolValue(true), false},
-		{codec.TimestampValue(time.Now()), false},
-		{codec.ColumnValue{Type: 999}, true}, // unsupported type
+		{codec.NullValue(ast.TypeInt), nil, false},
+		{codec.IntValue(42), int32(42), false},
+		{codec.BigIntValue(42), int64(42), false},
+		{codec.FloatValue(42.0), float32(42.0), false},
+		{codec.DoubleValue(42.0), float64(42.0), false},
+		{mustDecimal("1.23"), decimalValue("1.23"), false},
+		{mustVarchar("hello"), "hello", false},
+		{codec.BoolValue(true), true, false},
+		{codec.TimestampValue(now), now, false},
+		{codec.ColumnValue{Type: 999}, nil, true}, // unsupported type
 	}
 
 	for _, tc := range tests {
-		_, err := columnValueToAny(tc.cv)
+		got, err := columnValueToAny(tc.cv)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("columnValueToAny(%v) error = %v, wantErr %v", tc.cv, err, tc.wantErr)
+			continue
+		}
+		if tc.wantErr {
+			continue
+		}
+		if gotT, ok := got.(time.Time); ok {
+			if wantT, ok := tc.want.(time.Time); !ok || !gotT.Equal(wantT) {
+				t.Errorf("columnValueToAny(%v) = %v, want %v", tc.cv, got, tc.want)
+			}
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("columnValueToAny(%v) = %v (%T), want %v (%T)", tc.cv, got, got, tc.want, tc.want)
 		}
 	}
 }

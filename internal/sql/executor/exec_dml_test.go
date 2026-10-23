@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 
@@ -742,5 +743,94 @@ func TestVarcharUnicodeLength(t *testing.T) {
 	})
 	if !errors.Is(err, ErrVarcharTooLong) {
 		t.Fatalf("expected ErrVarcharTooLong, got %v", err)
+	}
+}
+
+func TestUpdateIntegerArithmeticOverflow(t *testing.T) {
+	exec, _, _ := setupExecutor(t)
+	mustExec(t, exec, &planner.CreateDatabasePlan{Name: "testdb"})
+
+	schema := &catalog.TableMeta{
+		Database: "testdb",
+		Name:     "overflow_test",
+		Columns: []catalog.ColumnMeta{
+			{Name: "id", Type: ast.TypeInt, PrimaryKey: true},
+			{Name: "int_col", Type: ast.TypeInt},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	mustExec(t, exec, &planner.CreateTablePlan{Database: "testdb", Table: "overflow_test", Schema: schema})
+
+	cols := []planner.ResolvedColumn{
+		{Name: "id", Type: ast.TypeInt, Index: 0},
+		{Name: "int_col", Type: ast.TypeInt, Index: 1},
+	}
+
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "overflow_test",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: math.MaxInt32},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: math.MinInt32},
+			},
+		},
+	})
+
+	// UPDATE overflow_test SET int_col = int_col + 1 WHERE id = 1 -> must return ErrNumericOverflow
+	_, err := exec.Execute(context.Background(), &planner.UpdatePlan{
+		Database: "testdb",
+		Table:    "overflow_test",
+		Schema:   schema,
+		Assignments: []planner.Assignment{
+			{
+				Column: cols[1],
+				Value: &planner.ResolvedBinaryExpr{
+					ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+					Left:             &planner.ResolvedColumnRef{Column: cols[1]},
+					Op:               planner.OpAdd,
+					Right:            &planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				},
+			},
+		},
+		Where: &planner.ResolvedComparison{
+			Left:  &planner.ResolvedColumnRef{Column: cols[0]},
+			Op:    planner.OpEq,
+			Right: &planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+		},
+	})
+	if !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("expected ErrNumericOverflow on int32 addition overflow, got %v", err)
+	}
+
+	// UPDATE overflow_test SET int_col = -int_col WHERE id = 2 -> must return ErrNumericOverflow
+	_, err = exec.Execute(context.Background(), &planner.UpdatePlan{
+		Database: "testdb",
+		Table:    "overflow_test",
+		Schema:   schema,
+		Assignments: []planner.Assignment{
+			{
+				Column: cols[1],
+				Value: &planner.ResolvedUnaryExpr{
+					ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+					Op:               planner.OpSub,
+					Operand:          &planner.ResolvedColumnRef{Column: cols[1]},
+				},
+			},
+		},
+		Where: &planner.ResolvedComparison{
+			Left:  &planner.ResolvedColumnRef{Column: cols[0]},
+			Op:    planner.OpEq,
+			Right: &planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+		},
+	})
+	if !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("expected ErrNumericOverflow on int32 negation overflow, got %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -17,6 +18,7 @@ func TestEvalUnaryExpr(t *testing.T) {
 	}{
 		{planner.OpAdd, int32(42), int64(42), false},
 		{planner.OpSub, int32(42), int32(-42), false},
+		{planner.OpSub, int32(math.MinInt32), nil, true},
 		{planner.OpAdd, float64(3.14), float64(3.14), false},
 		{planner.OpSub, float64(3.14), float64(-3.14), false},
 		{planner.OpSub, nil, nil, false},
@@ -102,6 +104,50 @@ func TestIntegerArithmeticPreservesPrecision(t *testing.T) {
 	}
 	if _, err := evalBinaryExpr(overflow, row{}); !errors.Is(err, ErrNumericOverflow) {
 		t.Fatalf("overflow error = %v, want ErrNumericOverflow", err)
+	}
+
+	// 32-bit INT overflow on addition
+	overflowIntAdd := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+		Left:             base(math.MaxInt32),
+		Op:               planner.OpAdd,
+		Right:            base(1),
+	}
+	if _, err := evalBinaryExpr(overflowIntAdd, row{}); !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("overflowIntAdd error = %v, want ErrNumericOverflow", err)
+	}
+
+	// 32-bit INT overflow on subtraction
+	overflowIntSub := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+		Left:             base(math.MinInt32),
+		Op:               planner.OpSub,
+		Right:            base(1),
+	}
+	if _, err := evalBinaryExpr(overflowIntSub, row{}); !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("overflowIntSub error = %v, want ErrNumericOverflow", err)
+	}
+
+	// 32-bit INT overflow on multiplication
+	overflowIntMul := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+		Left:             base(math.MaxInt32),
+		Op:               planner.OpMul,
+		Right:            base(2),
+	}
+	if _, err := evalBinaryExpr(overflowIntMul, row{}); !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("overflowIntMul error = %v, want ErrNumericOverflow", err)
+	}
+
+	// 32-bit INT overflow on division: MinInt32 / -1
+	overflowIntDiv := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt},
+		Left:             base(math.MinInt32),
+		Op:               planner.OpDiv,
+		Right:            base(-1),
+	}
+	if _, err := evalBinaryExpr(overflowIntDiv, row{}); !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("overflowIntDiv error = %v, want ErrNumericOverflow", err)
 	}
 }
 
@@ -259,6 +305,12 @@ func TestEvalLike(t *testing.T) {
 		{"世界你好", "世%好", false, true, false},
 		{"世界你好", "%界%", false, true, false},
 		{"世界你好", "%x%", false, false, false},
+		// Rune matching with multi-byte characters
+		{"café", "caf_", false, true, false},
+		{"café", "caf__", false, false, false},
+		// Adversarial backtracking pattern - linear/polynomial time without timeout
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "%a%a%a%a%a%a%a%b", false, false, false},
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", "%a%a%a%a%a%a%a%b", false, true, false},
 	}
 
 	for i, tc := range tests {
@@ -439,21 +491,66 @@ func TestEvalCond(t *testing.T) {
 
 func TestCoerceResultByKind(t *testing.T) {
 	tests := []struct {
-		val  float64
-		kind ast.DataTypeKind
-		want any
+		val     float64
+		kind    ast.DataTypeKind
+		want    any
+		wantErr bool
 	}{
-		{1.5, ast.TypeInt, int32(1)},
-		{1.5, ast.TypeBigInt, int64(1)},
-		{1.5, ast.TypeFloat, float32(1.5)},
-		{1.5, ast.TypeDouble, float64(1.5)},
-		{1.5, ast.TypeDecimal, float64(1.5)},
+		{1.5, ast.TypeInt, int32(1), false},
+		{1.5, ast.TypeBigInt, int64(1), false},
+		{1.5, ast.TypeFloat, float32(1.5), false},
+		{1.5, ast.TypeDouble, float64(1.5), false},
+		{1.5, ast.TypeDecimal, float64(1.5), false},
+		// Overflow for TypeInt
+		{float64(math.MaxInt32) + 1, ast.TypeInt, nil, true},
+		{float64(math.MinInt32) - 1, ast.TypeInt, nil, true},
+		{math.NaN(), ast.TypeInt, nil, true},
+		{math.Inf(1), ast.TypeInt, nil, true},
+		{math.Inf(-1), ast.TypeInt, nil, true},
+		// Overflow for TypeBigInt
+		{float64(uint64(1) << 63), ast.TypeBigInt, nil, true},
+		{-float64(uint64(1)<<63) - 4096, ast.TypeBigInt, nil, true},
+		{math.NaN(), ast.TypeBigInt, nil, true},
+		{math.Inf(1), ast.TypeBigInt, nil, true},
 	}
 
 	for i, tc := range tests {
-		got := coerceResultByKind(tc.val, tc.kind)
-		if got != tc.want {
+		got, err := coerceResultByKind(tc.val, tc.kind)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("test %d: coerceResultByKind(%v, %v) error = %v, wantErr %v", i, tc.val, tc.kind, err, tc.wantErr)
+			continue
+		}
+		if !tc.wantErr && got != tc.want {
 			t.Errorf("test %d: coerceResultByKind() = %v, want %v", i, got, tc.want)
+		}
+	}
+}
+
+func TestCoerceIntegerResult(t *testing.T) {
+	tests := []struct {
+		val     int64
+		kind    ast.DataTypeKind
+		want    any
+		wantErr bool
+	}{
+		{42, ast.TypeInt, int32(42), false},
+		{math.MaxInt32, ast.TypeInt, int32(math.MaxInt32), false},
+		{math.MinInt32, ast.TypeInt, int32(math.MinInt32), false},
+		{math.MaxInt32 + 1, ast.TypeInt, nil, true},
+		{math.MinInt32 - 1, ast.TypeInt, nil, true},
+		{42, ast.TypeBigInt, int64(42), false},
+		{math.MaxInt64, ast.TypeBigInt, int64(math.MaxInt64), false},
+		{math.MinInt64, ast.TypeBigInt, int64(math.MinInt64), false},
+	}
+
+	for i, tc := range tests {
+		got, err := coerceIntegerResult(tc.val, tc.kind)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("test %d: coerceIntegerResult(%v, %v) error = %v, wantErr %v", i, tc.val, tc.kind, err, tc.wantErr)
+			continue
+		}
+		if !tc.wantErr && got != tc.want {
+			t.Errorf("test %d: coerceIntegerResult() = %v, want %v", i, got, tc.want)
 		}
 	}
 }

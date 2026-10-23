@@ -136,7 +136,7 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return coerceIntegerResult(result, e.ResolvedType()), nil
+		return coerceIntegerResult(result, e.ResolvedType())
 	}
 
 	lf, err := toFloat64(left)
@@ -153,7 +153,7 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 		return nil, err
 	}
 
-	return coerceResultByKind(result, e.ResolvedType()), nil
+	return coerceResultByKind(result, e.ResolvedType())
 }
 
 // evalUnaryExpr evaluates a prefix +/- expression.
@@ -175,14 +175,14 @@ func evalUnaryExpr(e *planner.ResolvedUnaryExpr, r row) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return coerceIntegerResult(result, e.ResolvedType()), nil
+		return coerceIntegerResult(result, e.ResolvedType())
 	}
 	f, err := toFloat64(operand)
 	if err != nil {
 		return nil, err
 	}
 	neg := -f
-	return coerceResultByKind(neg, e.ResolvedType()), nil
+	return coerceResultByKind(neg, e.ResolvedType())
 }
 
 type condResult struct {
@@ -462,31 +462,42 @@ func isIntegerAny(v any) bool {
 }
 
 // coerceIntegerResult converts an int64 arithmetic result to the integer type
-// indicated by the planner's resolved type kind.
-func coerceIntegerResult(value int64, kind ast.DataTypeKind) any {
+// indicated by the planner's resolved type kind. Returns ErrNumericOverflow if
+// the value overflows the target integer type.
+func coerceIntegerResult(value int64, kind ast.DataTypeKind) (any, error) {
 	switch kind {
 	case ast.TypeInt:
-		return int32(value)
+		if value < math.MinInt32 || value > math.MaxInt32 {
+			return nil, ErrNumericOverflow
+		}
+		return int32(value), nil
 	case ast.TypeBigInt:
-		return value
+		return value, nil
 	default:
 		return coerceResultByKind(float64(value), kind)
 	}
 }
 
 // coerceResultByKind converts a float64 result to the appropriate Go type.
-func coerceResultByKind(f float64, kind ast.DataTypeKind) any {
+// Returns ErrNumericOverflow if an integer target type overflows or if f is NaN/Inf.
+func coerceResultByKind(f float64, kind ast.DataTypeKind) (any, error) {
 	switch kind {
 	case ast.TypeInt:
-		return int32(f)
+		if math.IsNaN(f) || math.IsInf(f, 0) || f < math.MinInt32 || f > math.MaxInt32 {
+			return nil, ErrNumericOverflow
+		}
+		return int32(f), nil
 	case ast.TypeBigInt:
-		return int64(f)
+		if math.IsNaN(f) || math.IsInf(f, 0) || f < math.MinInt64 || f >= float64(uint64(1)<<63) {
+			return nil, ErrNumericOverflow
+		}
+		return int64(f), nil
 	case ast.TypeFloat:
-		return float32(f)
+		return float32(f), nil
 	case ast.TypeDouble:
-		return f
+		return f, nil
 	default:
-		return f
+		return f, nil
 	}
 }
 
