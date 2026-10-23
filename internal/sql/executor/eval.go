@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/planner"
@@ -335,45 +334,38 @@ func evalLikeValue(c *planner.ResolvedLike, r row) (condResult, error) {
 	return condResult{value: matched}, nil
 }
 
-// matchLike implements SQL LIKE pattern matching.
-// '%' matches zero or more characters, '_' matches exactly one character.
+// matchLike implements SQL LIKE pattern matching over Unicode runes.
+// '%' matches zero or more characters, '_' matches exactly one Unicode character.
+// SQL LIKE is case-sensitive according to the SQL standard.
 func matchLike(str, pattern string) bool {
-	return matchLikeRecursive(str, 0, pattern, 0)
-}
+	s := []rune(str)
+	p := []rune(pattern)
+	sIdx, pIdx := 0, 0
+	starIdx := -1
+	sMatch := 0
 
-// matchLikeRecursive recursively matches a string against a pattern slice.
-func matchLikeRecursive(str string, si int, pattern string, pi int) bool {
-	for pi < len(pattern) {
-		switch pattern[pi] {
-		case '%':
-			// Skip consecutive '%' characters.
-			for pi < len(pattern) && pattern[pi] == '%' {
-				pi++
-			}
-			if pi == len(pattern) {
-				return true // trailing '%' matches everything
-			}
-			for i := si; i <= len(str); i++ {
-				if matchLikeRecursive(str, i, pattern, pi) {
-					return true
-				}
-			}
+	for sIdx < len(s) {
+		if pIdx < len(p) && (p[pIdx] == '_' || p[pIdx] == s[sIdx]) {
+			sIdx++
+			pIdx++
+		} else if pIdx < len(p) && p[pIdx] == '%' {
+			starIdx = pIdx
+			sMatch = sIdx
+			pIdx++
+		} else if starIdx != -1 {
+			pIdx = starIdx + 1
+			sMatch++
+			sIdx = sMatch
+		} else {
 			return false
-		case '_':
-			if si >= len(str) {
-				return false
-			}
-			si++
-			pi++
-		default:
-			if si >= len(str) || !strings.EqualFold(string(str[si]), string(pattern[pi])) {
-				return false
-			}
-			si++
-			pi++
 		}
 	}
-	return si == len(str)
+
+	for pIdx < len(p) && p[pIdx] == '%' {
+		pIdx++
+	}
+
+	return pIdx == len(p)
 }
 
 // evalIsNull evaluates an IS [NOT] NULL predicate.

@@ -247,6 +247,18 @@ func TestEvalLike(t *testing.T) {
 		{nil, "h%o", false, false, false},
 		{"hello", nil, false, false, false},
 		{123, "1%", false, false, true}, // not a string
+		// Case sensitivity
+		{"Hello", "h%o", false, false, false},
+		{"Hello", "H%o", false, true, false},
+		{"hello", "HELLO", false, false, false},
+		{"hello", "hello", false, true, false},
+		// Unicode characters
+		{"世界", "世_", false, true, false},
+		{"世界", "_", false, false, false},
+		{"世界", "__", false, true, false},
+		{"世界你好", "世%好", false, true, false},
+		{"世界你好", "%界%", false, true, false},
+		{"世界你好", "%x%", false, false, false},
 	}
 
 	for i, tc := range tests {
