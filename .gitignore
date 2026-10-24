@@ -10,6 +10,9 @@
 
 # Code coverage profiles and other test artifacts
 *.out
+*.pengout
+*.diff
+*.norm
 coverage.*
 *.coverprofile
 profile.cov
