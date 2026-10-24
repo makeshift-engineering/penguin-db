@@ -89,15 +89,15 @@ func main() {
 		cfg.StorageAddr = *storageAddrFlag
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	log.Printf("Connecting Gateway to storage gRPC server at %s...", cfg.StorageAddr)
 	conn, err := grpc.NewClient(cfg.StorageAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Fatalf("Failed to connect to storage node at %s: %v", cfg.StorageAddr, err)
 	}
 	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	grpcClient := storagepb.NewStorageServiceClient(conn)
 	store := kv.NewRemoteKV(grpcClient)

@@ -98,12 +98,18 @@ func (c *PGClient) Connect() error {
 	var ver [4]byte
 	binary.BigEndian.PutUint32(ver[:], ProtocolVersion3)
 	payload.Write(ver[:])
-	payload.WriteString(fmt.Sprintf("user\x00%s\x00database\x00%s\x00\x00", c.user, c.activeDb))
+	fmt.Fprintf(&payload, "user\x00%s\x00database\x00%s\x00\x00", c.user, c.activeDb)
 
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(payload.Len()+4))
-	c.conn.Write(lenBuf[:])
-	c.conn.Write(payload.Bytes())
+	if _, err := c.conn.Write(lenBuf[:]); err != nil {
+		c.Close()
+		return err
+	}
+	if _, err := c.conn.Write(payload.Bytes()); err != nil {
+		c.Close()
+		return err
+	}
 
 	// Read Authentication & ReadyForQuery packet stream
 	for {
@@ -208,7 +214,7 @@ func (c *PGClient) ExecuteQuery(sql string) (*QueryResult, error) {
 		case MsgRowDescription:
 			r := bytes.NewReader(pData)
 			var fieldCount int16
-			binary.Read(r, binary.BigEndian, &fieldCount)
+			_ = binary.Read(r, binary.BigEndian, &fieldCount)
 			res.Columns = make([]ColumnHeader, fieldCount)
 			for i := 0; i < int(fieldCount); i++ {
 				name, _ := c.readCString(r)
@@ -218,12 +224,12 @@ func (c *PGClient) ExecuteQuery(sql string) (*QueryResult, error) {
 				var typeSize int16
 				var typeMod int32
 				var formatCode int16
-				binary.Read(r, binary.BigEndian, &tableOID)
-				binary.Read(r, binary.BigEndian, &attrNum)
-				binary.Read(r, binary.BigEndian, &typeOID)
-				binary.Read(r, binary.BigEndian, &typeSize)
-				binary.Read(r, binary.BigEndian, &typeMod)
-				binary.Read(r, binary.BigEndian, &formatCode)
+				_ = binary.Read(r, binary.BigEndian, &tableOID)
+				_ = binary.Read(r, binary.BigEndian, &attrNum)
+				_ = binary.Read(r, binary.BigEndian, &typeOID)
+				_ = binary.Read(r, binary.BigEndian, &typeSize)
+				_ = binary.Read(r, binary.BigEndian, &typeMod)
+				_ = binary.Read(r, binary.BigEndian, &formatCode)
 				res.Columns[i] = ColumnHeader{
 					Name:    name,
 					TypeOID: typeOID,
@@ -234,16 +240,16 @@ func (c *PGClient) ExecuteQuery(sql string) (*QueryResult, error) {
 		case MsgDataRow:
 			r := bytes.NewReader(pData)
 			var colCount int16
-			binary.Read(r, binary.BigEndian, &colCount)
+			_ = binary.Read(r, binary.BigEndian, &colCount)
 			row := make([]string, colCount)
 			for i := 0; i < int(colCount); i++ {
 				var valLen int32
-				binary.Read(r, binary.BigEndian, &valLen)
+				_ = binary.Read(r, binary.BigEndian, &valLen)
 				if valLen == -1 {
 					row[i] = ""
 				} else {
 					valBytes := make([]byte, valLen)
-					r.Read(valBytes)
+					_, _ = io.ReadFull(r, valBytes)
 					row[i] = string(valBytes)
 				}
 			}
@@ -352,6 +358,13 @@ func SplitSQLStatements(content string) []string {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	fileFlag := flag.String("file", "", "Path to input .sql file")
 	outFlag := flag.String("out", "", "Path to output .pengout file")
 	hostFlag := flag.String("host", "127.0.0.1", "PenguinDB Gateway host")
@@ -362,29 +375,25 @@ func main() {
 	flag.Parse()
 
 	if *fileFlag == "" || *outFlag == "" {
-		fmt.Println("Usage: main -file <path.sql> -out <path.pengout> [-host <ip>] [-port <port>]")
-		os.Exit(1)
+		return fmt.Errorf("Usage: main -file <path.sql> -out <path.pengout> [-host <ip>] [-port <port>]")
 	}
 
 	contentBytes, err := os.ReadFile(*fileFlag)
 	if err != nil {
-		fmt.Printf("Error reading SQL file %s: %v\n", *fileFlag, err)
-		os.Exit(1)
+		return fmt.Errorf("Error reading SQL file %s: %w", *fileFlag, err)
 	}
 
 	stmts := SplitSQLStatements(string(contentBytes))
 
 	client := NewPGClient(*hostFlag, *portFlag, *userFlag, *dbFlag)
 	if err := client.Connect(); err != nil {
-		fmt.Printf("Error connecting to PenguinDB on %s:%d: %v\n", *hostFlag, *portFlag, err)
-		os.Exit(1)
+		return fmt.Errorf("Error connecting to PenguinDB on %s:%d: %w", *hostFlag, *portFlag, err)
 	}
 	defer client.Close()
 
 	outFile, err := os.Create(*outFlag)
 	if err != nil {
-		fmt.Printf("Error creating output file %s: %v\n", *outFlag, err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating output file %s: %w", *outFlag, err)
 	}
 	defer outFile.Close()
 
@@ -423,4 +432,5 @@ func main() {
 			csvWriter.Flush()
 		}
 	}
+	return nil
 }

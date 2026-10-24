@@ -116,11 +116,25 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 			if err != nil {
 				return
 			}
-			io.CopyN(io.Discard, conn, int64(length-4))
-			conn.Write(encodeErrorResponse("ERROR", "08004", "unsupported frontend message type"))
-			conn.Write(encodeReadyForQuery('I'))
+			if _, err := io.CopyN(io.Discard, conn, int64(length-4)); err != nil {
+				return
+			}
+			_ = sendResponse(conn,
+				encodeErrorResponse("ERROR", "08004", "unsupported frontend message type"),
+				encodeReadyForQuery('I'),
+			)
 		}
 	}
+}
+
+// sendResponse writes one or more encoded packets to the connection.
+func sendResponse(conn net.Conn, msgs ...[]byte) error {
+	for _, msg := range msgs {
+		if _, err := conn.Write(msg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // performHandshake negotiates SSL decline and processes frontend startup parameters.
@@ -168,21 +182,24 @@ func (s *Server) performHandshake(conn net.Conn, session *Session) error {
 				}
 			}
 
-			conn.Write(encodeAuthOk())
-			conn.Write(encodeParameterStatus("server_version", "15.0 (PenguinDB)"))
-			conn.Write(encodeParameterStatus("client_encoding", "UTF8"))
-			conn.Write(encodeParameterStatus("server_encoding", "UTF8"))
-			conn.Write(encodeParameterStatus("DateStyle", "ISO, MDY"))
-			conn.Write(encodeParameterStatus("integer_datetimes", "on"))
-			conn.Write(encodeParameterStatus("is_superuser", "on"))
+			var msgs [][]byte
+			msgs = append(msgs,
+				encodeAuthOk(),
+				encodeParameterStatus("server_version", "15.0 (PenguinDB)"),
+				encodeParameterStatus("client_encoding", "UTF8"),
+				encodeParameterStatus("server_encoding", "UTF8"),
+				encodeParameterStatus("DateStyle", "ISO, MDY"),
+				encodeParameterStatus("integer_datetimes", "on"),
+				encodeParameterStatus("is_superuser", "on"),
+			)
 			if session.User != "" {
-				conn.Write(encodeParameterStatus("session_authorization", session.User))
+				msgs = append(msgs, encodeParameterStatus("session_authorization", session.User))
 			}
-			conn.Write(encodeReadyForQuery('I'))
-			return nil
+			msgs = append(msgs, encodeReadyForQuery('I'))
+			return sendResponse(conn, msgs...)
 		}
 
-		conn.Write(encodeErrorResponse("FATAL", "08004", "unsupported protocol version"))
+		_ = sendResponse(conn, encodeErrorResponse("FATAL", "08004", "unsupported protocol version"))
 		return fmt.Errorf("unsupported protocol version: %d", versionOrCode)
 	}
 }
@@ -192,8 +209,10 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	lex := lexer.NewLexer("query", query)
 	tokens := lex.Tokenize()
 	if lex.Diagnostics().HasErrors() {
-		conn.Write(encodeErrorResponse("ERROR", "42601", fmt.Sprintf("lexical error: %v", lex.Diagnostics().AsError())))
-		conn.Write(encodeReadyForQuery('I'))
+		_ = sendResponse(conn,
+			encodeErrorResponse("ERROR", "42601", fmt.Sprintf("lexical error: %v", lex.Diagnostics().AsError())),
+			encodeReadyForQuery('I'),
+		)
 		return
 	}
 
@@ -201,8 +220,10 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	p := parser.New(tokens, source)
 	prog, err := p.Parse()
 	if err != nil || prog == nil || len(prog.Statements) == 0 {
-		conn.Write(encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)))
-		conn.Write(encodeReadyForQuery('I'))
+		_ = sendResponse(conn,
+			encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)),
+			encodeReadyForQuery('I'),
+		)
 		return
 	}
 
@@ -211,19 +232,23 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase}
 		plan, diagList, err := pl.Plan(ctx, statement, pSess, source)
 		if err != nil || diagList.HasErrors() {
-			var errDetail interface{} = err
+			var errDetail any = err
 			if err == nil {
 				errDetail = diagList.AsError()
 			}
-			conn.Write(encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)))
-			conn.Write(encodeReadyForQuery('I'))
+			_ = sendResponse(conn,
+				encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)),
+				encodeReadyForQuery('I'),
+		)
 			return
 		}
 
 		result, err := s.exec.Execute(ctx, plan)
 		if err != nil {
-			conn.Write(encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)))
-			conn.Write(encodeReadyForQuery('I'))
+			_ = sendResponse(conn,
+				encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)),
+				encodeReadyForQuery('I'),
+			)
 			return
 		}
 
@@ -244,7 +269,9 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 				descBuff.writeInt32(-1)
 				descBuff.writeInt16(0)
 			}
-			conn.Write(descBuff.finish(MessageRowDescription))
+			if err := sendResponse(conn, descBuff.finish(MessageRowDescription)); err != nil {
+				return
+			}
 
 			for _, r := range result.Rows {
 				dataBuf := newMessageBuffer()
@@ -258,7 +285,9 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 						dataBuf.writeBytes(valBytes)
 					}
 				}
-				conn.Write(dataBuf.finish(MessageDataRow))
+				if err := sendResponse(conn, dataBuf.finish(MessageDataRow)); err != nil {
+					return
+				}
 			}
 		}
 
@@ -297,8 +326,10 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 				}
 			}
 		}
-		conn.Write(encodeCommandComplete(tag))
+		if err := sendResponse(conn, encodeCommandComplete(tag)); err != nil {
+			return
+		}
 	}
 
-	conn.Write(encodeReadyForQuery('I'))
+	_ = sendResponse(conn, encodeReadyForQuery('I'))
 }

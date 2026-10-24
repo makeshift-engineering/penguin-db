@@ -95,14 +95,6 @@ func readInt32(r io.Reader) (int32, error) {
 	return int32(binary.BigEndian.Uint32(buf[:])), nil
 }
 
-func readInt16(r io.Reader) (int16, error) {
-	var buf [2]byte
-	if _, err := io.ReadFull(r, buf[:]); err != nil {
-		return 0, err
-	}
-	return int16(binary.BigEndian.Uint16(buf[:])), nil
-}
-
 func readCString(r io.Reader) (string, error) {
 	var buf bytes.Buffer
 	var oneByte [1]byte
