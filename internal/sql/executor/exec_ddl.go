@@ -207,6 +207,9 @@ func (e *Executor) execRenameTable(ctx context.Context, plan *planner.RenameTabl
 	newMu.Lock()
 	defer newMu.Unlock()
 
+	e.sequenceMu.Lock()
+	defer e.sequenceMu.Unlock()
+
 	// Read the current sequence counter value, if any.
 	seqKey, err := encoding.EncodeCatalogSeqKey(plan.Database, plan.OldName)
 	if err != nil {

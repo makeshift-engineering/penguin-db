@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -439,7 +441,19 @@ func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema
 
 	for i := range colValues {
 		if colValues[i].Type == 0 && colValues[i].Raw == nil && !colValues[i].IsNull {
-			colValues[i] = codec.NullValue(activeColumns[i].Type)
+			if activeColumns[i].DefaultValue != nil {
+				val, err := parseDefaultValue(*activeColumns[i].DefaultValue, activeColumns[i].Type)
+				if err != nil {
+					return kv.Op{}, fmt.Errorf("executor: parsing default value for column %q: %w", activeColumns[i].Name, err)
+				}
+				cv, err := anyToColumnValue(val, activeColumns[i].Type)
+				if err != nil {
+					return kv.Op{}, fmt.Errorf("executor: converting default value for column %q: %w", activeColumns[i].Name, err)
+				}
+				colValues[i] = cv
+			} else {
+				colValues[i] = codec.NullValue(activeColumns[i].Type)
+			}
 		}
 		if schema.HasSnowflakeID && i == 0 {
 			continue
@@ -530,4 +544,40 @@ func (e *Executor) readSequence(ctx context.Context, db, table string) (uint64, 
 		return 0, fmt.Errorf("executor: reading seq counter: %w", err)
 	}
 	return decodeSequenceValue(seqBytes)
+}
+
+// parseDefaultValue parses the string representation of a column default value into its typed Go value.
+func parseDefaultValue(raw string, typ ast.DataTypeKind) (any, error) {
+	switch typ {
+	case ast.TypeInt:
+		v, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		return int32(v), nil
+	case ast.TypeBigInt:
+		return strconv.ParseInt(raw, 10, 64)
+	case ast.TypeFloat:
+		v, err := strconv.ParseFloat(raw, 32)
+		if err != nil {
+			return nil, err
+		}
+		return float32(v), nil
+	case ast.TypeDouble:
+		return strconv.ParseFloat(raw, 64)
+	case ast.TypeDecimal:
+		return decimalValue(raw), nil
+	case ast.TypeVarchar, ast.TypeText:
+		return raw, nil
+	case ast.TypeBoolean:
+		return strconv.ParseBool(raw)
+	case ast.TypeTimestamp:
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err == nil {
+			return t, nil
+		}
+		return time.Parse("2006-01-02 15:04:05", raw)
+	default:
+		return nil, fmt.Errorf("unsupported default value type %d", typ)
+	}
 }

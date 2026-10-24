@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -269,6 +270,21 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		if left == nil || right == nil {
 			return nil, nil
 		}
+		if isDecimalAny(left) || isDecimalAny(right) || e.ResolvedType() == ast.TypeDecimal {
+			lr, err := toRat(left)
+			if err != nil {
+				return nil, err
+			}
+			rr, err := toRat(right)
+			if err != nil {
+				return nil, err
+			}
+			result, err := computeDecimalArithmetic(e.Op, lr, rr)
+			if err != nil {
+				return nil, err
+			}
+			return coerceRatResult(result, e.ResolvedType())
+		}
 		if isIntegerAny(left) && isIntegerAny(right) && e.Op != planner.OpDiv {
 			li, _ := toInt64(left)
 			ri, _ := toInt64(right)
@@ -301,6 +317,14 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		}
 		if e.Op == planner.OpAdd {
 			return operand, nil
+		}
+		if isDecimalAny(operand) || e.ResolvedType() == ast.TypeDecimal {
+			rat, err := toRat(operand)
+			if err != nil {
+				return nil, err
+			}
+			neg := new(big.Rat).Neg(rat)
+			return coerceRatResult(neg, e.ResolvedType())
 		}
 		if isIntegerAny(operand) {
 			value, _ := toInt64(operand)
@@ -383,6 +407,14 @@ func evalSum(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 		return nil, nil // SUM of empty set is NULL
 	}
 
+	argType := fn.Args[0].ResolvedType()
+	if argType == ast.TypeDecimal || fn.ResolvedType() == ast.TypeDecimal {
+		return accumulateDecimalSum(fn, groupRows)
+	}
+	if argType == ast.TypeInt || argType == ast.TypeBigInt {
+		return accumulateIntegerSum(fn, groupRows)
+	}
+
 	sum, count, err := accumulateNumericGroup(fn, groupRows)
 	if err != nil {
 		return nil, err
@@ -393,10 +425,96 @@ func evalSum(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 	return coerceResultByKind(sum, fn.ResolvedType())
 }
 
+// accumulateDecimalSum evaluates a DECIMAL SUM expression using big.Rat arithmetic,
+// preserving precision.
+func accumulateDecimalSum(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
+	sum := new(big.Rat)
+	var count int64
+	var seen map[string]struct{}
+	if fn.Distinct {
+		seen = make(map[string]struct{})
+	}
+
+	for _, r := range groupRows {
+		v, err := evalExpr(fn.Args[0], r)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil {
+			continue
+		}
+		val, err := toRat(v)
+		if err != nil {
+			return nil, err
+		}
+		if fn.Distinct {
+			key := val.RatString()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		sum.Add(sum, val)
+		count++
+	}
+
+	if count == 0 {
+		return nil, nil
+	}
+	return coerceRatResult(sum, fn.ResolvedType())
+}
+
+// accumulateIntegerSum evaluates an integer SUM expression using int64 arithmetic,
+// detecting overflow and preserving precision above 2^53.
+func accumulateIntegerSum(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
+	var sum int64
+	var count int64
+	var seen map[any]struct{}
+	if fn.Distinct {
+		seen = make(map[any]struct{})
+	}
+
+	for _, r := range groupRows {
+		v, err := evalExpr(fn.Args[0], r)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil {
+			continue
+		}
+		if fn.Distinct {
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+		}
+		val, err := toInt64(v)
+		if err != nil {
+			return nil, err
+		}
+		newSum, err := computeIntegerArithmetic(planner.OpAdd, sum, val)
+		if err != nil {
+			return nil, err
+		}
+		sum = newSum
+		count++
+	}
+
+	if count == 0 {
+		return nil, nil
+	}
+	return coerceIntegerResult(sum, fn.ResolvedType())
+}
+
 // evalAvg implements AVG([DISTINCT] expr).
 func evalAvg(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 	if len(groupRows) == 0 {
 		return nil, nil
+	}
+
+	argType := fn.Args[0].ResolvedType()
+	if argType == ast.TypeDecimal || fn.ResolvedType() == ast.TypeDecimal {
+		return accumulateDecimalAvg(fn, groupRows)
 	}
 
 	sum, count, err := accumulateNumericGroup(fn, groupRows)
@@ -407,6 +525,46 @@ func evalAvg(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
 		return nil, nil
 	}
 	return sum / float64(count), nil
+}
+
+// accumulateDecimalAvg evaluates a DECIMAL AVG expression using big.Rat arithmetic,
+// preserving precision.
+func accumulateDecimalAvg(fn *planner.ResolvedFunctionCall, groupRows []row) (any, error) {
+	sum := new(big.Rat)
+	var count int64
+	var seen map[string]struct{}
+	if fn.Distinct {
+		seen = make(map[string]struct{})
+	}
+
+	for _, r := range groupRows {
+		v, err := evalExpr(fn.Args[0], r)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil {
+			continue
+		}
+		val, err := toRat(v)
+		if err != nil {
+			return nil, err
+		}
+		if fn.Distinct {
+			key := val.RatString()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		sum.Add(sum, val)
+		count++
+	}
+
+	if count == 0 {
+		return nil, nil
+	}
+	avg := new(big.Rat).Quo(sum, new(big.Rat).SetInt64(count))
+	return coerceRatResult(avg, fn.ResolvedType())
 }
 
 // evalMinMax implements MIN(expr) and MAX(expr).
@@ -509,12 +667,12 @@ func (e *Executor) execLimit(ctx context.Context, node *planner.LimitNode) ([]ro
 		rows = rows[node.Offset:]
 	}
 
-	if node.Count == 0 {
+	if node.Count == 0 && node.Offset == 0 {
 		return nil, nil
 	}
 
 	// Apply limit.
-	if int(node.Count) < len(rows) {
+	if node.Count > 0 && int(node.Count) < len(rows) {
 		rows = rows[:node.Count]
 	}
 

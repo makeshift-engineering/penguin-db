@@ -115,6 +115,35 @@ func computeIntegerArithmetic(op planner.Op, left, right int64) (int64, error) {
 	return result.Int64(), nil
 }
 
+// computeDecimalArithmetic evaluates binary arithmetic on big.Rat values.
+func computeDecimalArithmetic(op planner.Op, lr, rr *big.Rat) (*big.Rat, error) {
+	switch op {
+	case planner.OpAdd:
+		return new(big.Rat).Add(lr, rr), nil
+	case planner.OpSub:
+		return new(big.Rat).Sub(lr, rr), nil
+	case planner.OpMul:
+		return new(big.Rat).Mul(lr, rr), nil
+	case planner.OpDiv:
+		if rr.Sign() == 0 {
+			return nil, ErrDivisionByZero
+		}
+		return new(big.Rat).Quo(lr, rr), nil
+	case planner.OpMod:
+		if rr.Sign() == 0 {
+			return nil, ErrDivisionByZero
+		}
+		quo := new(big.Rat).Quo(lr, rr)
+		trunc := new(big.Int).Quo(quo.Num(), quo.Denom())
+		truncRat := new(big.Rat).SetInt(trunc)
+		sub := new(big.Rat).Mul(rr, truncRat)
+		mod := new(big.Rat).Sub(lr, sub)
+		return mod, nil
+	default:
+		return nil, fmt.Errorf("%w: unknown decimal operator %d", ErrUnsupportedExpr, op)
+	}
+}
+
 // evalBinaryExpr evaluates a binary arithmetic expression.
 func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 	left, err := evalExpr(e.Left, r)
@@ -128,6 +157,21 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 	// NULL propagation: any operand NULL → result NULL.
 	if left == nil || right == nil {
 		return nil, nil
+	}
+	if isDecimalAny(left) || isDecimalAny(right) || e.ResolvedType() == ast.TypeDecimal {
+		lr, err := toRat(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := toRat(right)
+		if err != nil {
+			return nil, err
+		}
+		result, err := computeDecimalArithmetic(e.Op, lr, rr)
+		if err != nil {
+			return nil, err
+		}
+		return coerceRatResult(result, e.ResolvedType())
 	}
 	if isIntegerAny(left) && isIntegerAny(right) && e.Op != planner.OpDiv {
 		li, _ := toInt64(left)
@@ -169,6 +213,14 @@ func evalUnaryExpr(e *planner.ResolvedUnaryExpr, r row) (any, error) {
 		return operand, nil
 	}
 	// TOKEN_MINUS: negate.
+	if isDecimalAny(operand) || e.ResolvedType() == ast.TypeDecimal {
+		rat, err := toRat(operand)
+		if err != nil {
+			return nil, err
+		}
+		neg := new(big.Rat).Neg(rat)
+		return coerceRatResult(neg, e.ResolvedType())
+	}
 	if isIntegerAny(operand) {
 		value, _ := toInt64(operand)
 		result, err := computeIntegerArithmetic(planner.OpSub, 0, value)
@@ -346,12 +398,12 @@ func matchLike(str, pattern string) bool {
 
 	for sIdx < len(s) {
 		switch {
-		case pIdx < len(p) && (p[pIdx] == '_' || p[pIdx] == s[sIdx]):
-			sIdx++
-			pIdx++
 		case pIdx < len(p) && p[pIdx] == '%':
 			starIdx = pIdx
 			sMatch = sIdx
+			pIdx++
+		case pIdx < len(p) && (p[pIdx] == '_' || p[pIdx] == s[sIdx]):
+			sIdx++
 			pIdx++
 		case starIdx != -1:
 			pIdx = starIdx + 1
@@ -474,6 +526,8 @@ func coerceIntegerResult(value int64, kind ast.DataTypeKind) (any, error) {
 		return int32(value), nil
 	case ast.TypeBigInt:
 		return value, nil
+	case ast.TypeDecimal:
+		return ratToDecimal(new(big.Rat).SetInt64(value)), nil
 	default:
 		return coerceResultByKind(float64(value), kind)
 	}

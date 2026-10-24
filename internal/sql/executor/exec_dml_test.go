@@ -834,3 +834,79 @@ func TestUpdateIntegerArithmeticOverflow(t *testing.T) {
 		t.Fatalf("expected ErrNumericOverflow on int32 negation overflow, got %v", err)
 	}
 }
+
+func TestInsertOmittedColumnDefault(t *testing.T) {
+	exec, _, _ := setupExecutor(t)
+	mustExec(t, exec, &planner.CreateDatabasePlan{Name: "testdb"})
+
+	defaultAge := "25"
+	defaultRole := "member"
+	schema := &catalog.TableMeta{
+		Database: "testdb",
+		Name:     "default_test",
+		Columns: []catalog.ColumnMeta{
+			{Name: "id", Type: ast.TypeInt, PrimaryKey: true},
+			{Name: "name", Type: ast.TypeVarchar},
+			{Name: "age", Type: ast.TypeInt, NotNull: true, DefaultValue: &defaultAge},
+			{Name: "role", Type: ast.TypeVarchar, DefaultValue: &defaultRole},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	mustExec(t, exec, &planner.CreateTablePlan{Database: "testdb", Table: "default_test", Schema: schema})
+
+	cols := []planner.ResolvedColumn{
+		{Name: "id", Type: ast.TypeInt, Index: 0},
+		{Name: "name", Type: ast.TypeVarchar, Index: 1},
+	}
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "default_test",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+			},
+		},
+	})
+
+	resolvedTable := &planner.ResolvedTable{
+		Database: "testdb",
+		Table:    "default_test",
+		Binding:  "default_test",
+		Schema:   schema,
+	}
+	allCols := []planner.ResolvedColumn{
+		{Name: "id", Type: ast.TypeInt, Index: 0},
+		{Name: "name", Type: ast.TypeVarchar, Index: 1},
+		{Name: "age", Type: ast.TypeInt, Index: 2},
+		{Name: "role", Type: ast.TypeVarchar, Index: 3},
+	}
+	res := mustExec(t, exec, &planner.QueryPlan{
+		Root: &planner.ProjectNode{
+			Input: &planner.ScanNode{Table: resolvedTable},
+			Items: []planner.ProjectItem{
+				{Expr: &planner.ResolvedColumnRef{Column: allCols[0]}, Alias: "id"},
+				{Expr: &planner.ResolvedColumnRef{Column: allCols[1]}, Alias: "name"},
+				{Expr: &planner.ResolvedColumnRef{Column: allCols[2]}, Alias: "age"},
+				{Expr: &planner.ResolvedColumnRef{Column: allCols[3]}, Alias: "role"},
+			},
+		},
+		Columns: []planner.OutputColumn{
+			{Name: "id", Type: ast.TypeInt},
+			{Name: "name", Type: ast.TypeVarchar},
+			{Name: "age", Type: ast.TypeInt},
+			{Name: "role", Type: ast.TypeVarchar},
+		},
+	})
+	if len(res.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(res.Rows))
+	}
+	if res.Rows[0][2] != int32(25) {
+		t.Errorf("expected default age 25, got %v (%T)", res.Rows[0][2], res.Rows[0][2])
+	}
+	if res.Rows[0][3] != "member" {
+		t.Errorf("expected default role 'member', got %v (%T)", res.Rows[0][3], res.Rows[0][3])
+	}
+}

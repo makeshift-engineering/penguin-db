@@ -151,6 +151,69 @@ func TestIntegerArithmeticPreservesPrecision(t *testing.T) {
 	}
 }
 
+func TestDecimalArithmeticPreservesPrecision(t *testing.T) {
+	decA := decimalValue("9007199254740993.00000000000000000001")
+	decB := decimalValue("1.00000000000000000001")
+
+	colRef := func(idx int) *planner.ResolvedColumnRef {
+		return &planner.ResolvedColumnRef{
+			Column: planner.ResolvedColumn{Index: idx, Type: ast.TypeDecimal},
+		}
+	}
+	intLit := func(v int64) *planner.ResolvedIntLiteral {
+		return &planner.ResolvedIntLiteral{
+			ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBigInt},
+			Value:            v,
+		}
+	}
+
+	r := row{values: []any{decA, decB}}
+
+	addExpr := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeDecimal},
+		Left:             colRef(0),
+		Op:               planner.OpAdd,
+		Right:            colRef(1),
+	}
+	got, err := evalBinaryExpr(addExpr, r)
+	if err != nil {
+		t.Fatalf("evalBinaryExpr(decA + decB) failed: %v", err)
+	}
+	want := decimalValue("9007199254740994.00000000000000000002")
+	if got != want {
+		t.Errorf("evalBinaryExpr(decA + decB) = %v, want %v", got, want)
+	}
+
+	addIntExpr := &planner.ResolvedBinaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeDecimal},
+		Left:             colRef(0),
+		Op:               planner.OpAdd,
+		Right:            intLit(1),
+	}
+	gotInt, err := evalBinaryExpr(addIntExpr, r)
+	if err != nil {
+		t.Fatalf("evalBinaryExpr(decA + 1) failed: %v", err)
+	}
+	wantInt := decimalValue("9007199254740994.00000000000000000001")
+	if gotInt != wantInt {
+		t.Errorf("evalBinaryExpr(decA + 1) = %v, want %v", gotInt, wantInt)
+	}
+
+	negExpr := &planner.ResolvedUnaryExpr{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeDecimal},
+		Op:               planner.OpSub,
+		Operand:          colRef(0),
+	}
+	gotNeg, err := evalUnaryExpr(negExpr, r)
+	if err != nil {
+		t.Fatalf("evalUnaryExpr(-decA) failed: %v", err)
+	}
+	wantNeg := decimalValue("-9007199254740993.00000000000000000001")
+	if gotNeg != wantNeg {
+		t.Errorf("evalUnaryExpr(-decA) = %v, want %v", gotNeg, wantNeg)
+	}
+}
+
 func TestEvalComparison(t *testing.T) {
 	tests := []struct {
 		op    planner.Op
@@ -311,6 +374,15 @@ func TestEvalLike(t *testing.T) {
 		// Adversarial backtracking pattern - linear/polynomial time without timeout
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "%a%a%a%a%a%a%a%b", false, false, false},
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab", "%a%a%a%a%a%a%a%b", false, true, false},
+		// Input string containing '%'
+		{"%abc", "%", false, true, false},
+		{"50%", "%", false, true, false},
+		{"50%", "50%", false, true, false},
+		{"50%", "5%", false, true, false},
+		{"%50", "%50", false, true, false},
+		{"100% genuine", "%100% genuine", false, true, false},
+		{"100% genuine", "%g%", false, true, false},
+		{"100% genuine", "%g", false, false, false},
 	}
 
 	for i, tc := range tests {

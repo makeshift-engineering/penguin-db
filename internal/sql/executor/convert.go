@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -328,6 +329,8 @@ func compareAsRat(a, b any) (int, error) {
 // into a *big.Rat.
 func toRat(v any) (*big.Rat, error) {
 	switch val := v.(type) {
+	case *big.Rat:
+		return new(big.Rat).Set(val), nil
 	case decimalValue:
 		r := new(big.Rat)
 		if _, ok := r.SetString(string(val)); !ok {
@@ -350,7 +353,110 @@ func toRat(v any) (*big.Rat, error) {
 		}
 		return new(big.Rat).SetFloat64(val), nil
 	default:
-		return nil, fmt.Errorf("%w: cannot compare decimal with %T", ErrTypeMismatch, v)
+		return nil, fmt.Errorf("%w: cannot convert %T to big.Rat", ErrTypeMismatch, v)
+	}
+}
+
+// isDecimalAny reports whether v is a decimalValue runtime type.
+func isDecimalAny(v any) bool {
+	_, ok := v.(decimalValue)
+	return ok
+}
+
+// ratToDecimal converts a *big.Rat into a decimalValue string representation,
+// preserving exact precision for terminating decimals and formatting non-terminating
+// decimals up to 30 decimal places without trailing zeros.
+func ratToDecimal(r *big.Rat) decimalValue {
+	if r.Sign() == 0 {
+		return "0"
+	}
+
+	denom := new(big.Int).Set(r.Denom())
+	scale2 := int(denom.TrailingZeroBits())
+	denom.Rsh(denom, uint(scale2))
+
+	five := big.NewInt(5)
+	rem := new(big.Int)
+	scale5 := 0
+	for denom.Sign() > 0 {
+		d, m := new(big.Int).DivMod(denom, five, rem)
+		if m.Sign() != 0 {
+			break
+		}
+		denom = d
+		scale5++
+	}
+
+	prec := 0
+	if denom.Cmp(big.NewInt(1)) == 0 {
+		// Terminating decimal: exact scale is max(scale2, scale5).
+		prec = scale2
+		if scale5 > prec {
+			prec = scale5
+		}
+	} else {
+		// Non-terminating decimal: use default precision.
+		prec = 30
+		if scale2 > prec {
+			prec = scale2
+		}
+		if scale5 > prec {
+			prec = scale5
+		}
+	}
+
+	const maxDecimalPrec = 1000
+	if prec > maxDecimalPrec {
+		prec = maxDecimalPrec
+	}
+
+	s := r.FloatString(prec)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	if s == "-0" || s == "" {
+		s = "0"
+	}
+	return decimalValue(s)
+}
+
+// coerceRatResult converts a big.Rat result to the target DataTypeKind.
+// Returns ErrNumericOverflow if an integer or float target overflows.
+func coerceRatResult(r *big.Rat, kind ast.DataTypeKind) (any, error) {
+	switch kind {
+	case ast.TypeDecimal:
+		return ratToDecimal(r), nil
+	case ast.TypeInt:
+		intPart := new(big.Int).Quo(r.Num(), r.Denom())
+		if !intPart.IsInt64() {
+			return nil, ErrNumericOverflow
+		}
+		val := intPart.Int64()
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, ErrNumericOverflow
+		}
+		return int32(val), nil
+	case ast.TypeBigInt:
+		intPart := new(big.Int).Quo(r.Num(), r.Denom())
+		if !intPart.IsInt64() {
+			return nil, ErrNumericOverflow
+		}
+		return intPart.Int64(), nil
+	case ast.TypeFloat:
+		f, _ := r.Float64()
+		if math.IsInf(f, 0) || math.Abs(f) > math.MaxFloat32 {
+			return nil, ErrNumericOverflow
+		}
+		return float32(f), nil
+	case ast.TypeDouble:
+		f, _ := r.Float64()
+		if math.IsInf(f, 0) {
+			return nil, ErrNumericOverflow
+		}
+		return f, nil
+	default:
+		return ratToDecimal(r), nil
 	}
 }
 

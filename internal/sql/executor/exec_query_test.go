@@ -2,6 +2,8 @@ package executor
 
 import (
 	"context"
+	"errors"
+	"math"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
@@ -531,6 +533,138 @@ func TestLimitZero(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("LIMIT 0 returned %d rows, want 0", len(rows))
+	}
+}
+
+func TestLimitOffsetWithoutCount(t *testing.T) {
+	exec := setupUsersTable(t)
+	cols := buildResolvedColumns()
+	schema := testTableMeta()
+
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "a@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Bob"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "b@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 3},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Charlie"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "c@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: false},
+			},
+		},
+	})
+
+	resolvedTable := &planner.ResolvedTable{
+		Database: "testdb", Table: "users", Binding: "users", Schema: schema,
+	}
+
+	result := mustExec(t, exec, &planner.QueryPlan{
+		Root: &planner.LimitNode{
+			Input: &planner.ProjectNode{
+				Input: &planner.ScanNode{Table: resolvedTable},
+				Items: []planner.ProjectItem{
+					{Expr: &planner.ResolvedColumnRef{Column: cols[0]}, Alias: "id"},
+				},
+			},
+			Count:  0,
+			Offset: 1,
+		},
+		Columns: []planner.OutputColumn{
+			{Name: "id", Type: ast.TypeInt},
+		},
+	})
+
+	if len(result.Rows) != 2 {
+		t.Fatalf("expected 2 rows for OFFSET 1 without LIMIT, got %d", len(result.Rows))
+	}
+}
+
+func TestSumIntegerPrecisionAndOverflow(t *testing.T) {
+	groupRows := []row{
+		{values: []any{int64(1<<54 + 1)}},
+		{values: []any{int64(1 << 54)}},
+	}
+	fn := &planner.ResolvedFunctionCall{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBigInt},
+		Name:             "SUM",
+		Args: []planner.ResolvedExpr{
+			&planner.ResolvedColumnRef{
+				Column: planner.ResolvedColumn{Index: 0, Type: ast.TypeBigInt},
+			},
+		},
+	}
+	res, err := evalSum(fn, groupRows)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := int64(1<<54+1) + int64(1<<54)
+	if res != want {
+		t.Errorf("SUM(bigint) = %v, want %v", res, want)
+	}
+
+	overflowRows := []row{
+		{values: []any{int64(math.MaxInt64)}},
+		{values: []any{int64(1)}},
+	}
+	_, err = evalSum(fn, overflowRows)
+	if !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("expected ErrNumericOverflow on bigint SUM overflow, got %v", err)
+	}
+}
+
+func TestDecimalAggregatePrecision(t *testing.T) {
+	groupRows := []row{
+		{values: []any{decimalValue("9007199254740993.00000000000000000001")}},
+		{values: []any{decimalValue("1.00000000000000000001")}},
+	}
+	sumFn := &planner.ResolvedFunctionCall{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeDecimal},
+		Name:             "SUM",
+		Args: []planner.ResolvedExpr{
+			&planner.ResolvedColumnRef{
+				Column: planner.ResolvedColumn{Index: 0, Type: ast.TypeDecimal},
+			},
+		},
+	}
+	res, err := evalSum(sumFn, groupRows)
+	if err != nil {
+		t.Fatalf("evalSum(decimal) failed: %v", err)
+	}
+	wantSum := decimalValue("9007199254740994.00000000000000000002")
+	if res != wantSum {
+		t.Errorf("SUM(decimal) = %v, want %v", res, wantSum)
+	}
+
+	avgFn := &planner.ResolvedFunctionCall{
+		ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeDecimal},
+		Name:             "AVG",
+		Args: []planner.ResolvedExpr{
+			&planner.ResolvedColumnRef{
+				Column: planner.ResolvedColumn{Index: 0, Type: ast.TypeDecimal},
+			},
+		},
+	}
+	avgRes, err := evalAvg(avgFn, groupRows)
+	if err != nil {
+		t.Fatalf("evalAvg(decimal) failed: %v", err)
+	}
+	wantAvg := decimalValue("4503599627370497.00000000000000000001")
+	if avgRes != wantAvg {
+		t.Errorf("AVG(decimal) = %v, want %v", avgRes, wantAvg)
 	}
 }
 
