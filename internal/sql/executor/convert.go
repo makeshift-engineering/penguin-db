@@ -363,12 +363,18 @@ func isDecimalAny(v any) bool {
 	return ok
 }
 
+// maxDecimalPrec is the maximum scale allowed for decimal formatting to prevent
+// unbounded memory allocation.
+const maxDecimalPrec = 10000
+
 // ratToDecimal converts a *big.Rat into a decimalValue string representation,
 // preserving exact precision for terminating decimals and formatting non-terminating
-// decimals up to 30 decimal places without trailing zeros.
-func ratToDecimal(r *big.Rat) decimalValue {
+// decimals with at least 30 decimal places beyond leading zeros.
+// Returns ErrNumericOverflow if the required precision exceeds maxDecimalPrec
+// or if a non-zero value rounds to zero.
+func ratToDecimal(r *big.Rat) (decimalValue, error) {
 	if r.Sign() == 0 {
-		return "0"
+		return "0", nil
 	}
 
 	denom := new(big.Int).Set(r.Denom())
@@ -395,19 +401,19 @@ func ratToDecimal(r *big.Rat) decimalValue {
 			prec = scale5
 		}
 	} else {
-		// Non-terminating decimal: use default precision.
+		// Non-terminating decimal: format with at least 30 places beyond leading zeros.
 		prec = 30
-		if scale2 > prec {
-			prec = scale2
+		scale := scale2
+		if scale5 > scale {
+			scale = scale5
 		}
-		if scale5 > prec {
-			prec = scale5
+		if scale > 0 {
+			prec = scale + 30
 		}
 	}
 
-	const maxDecimalPrec = 1000
 	if prec > maxDecimalPrec {
-		prec = maxDecimalPrec
+		return "", ErrNumericOverflow
 	}
 
 	s := r.FloatString(prec)
@@ -418,7 +424,10 @@ func ratToDecimal(r *big.Rat) decimalValue {
 	if s == "-0" || s == "" {
 		s = "0"
 	}
-	return decimalValue(s)
+	if r.Sign() != 0 && s == "0" {
+		return "", ErrNumericOverflow
+	}
+	return decimalValue(s), nil
 }
 
 // coerceRatResult converts a big.Rat result to the target DataTypeKind.
@@ -426,7 +435,7 @@ func ratToDecimal(r *big.Rat) decimalValue {
 func coerceRatResult(r *big.Rat, kind ast.DataTypeKind) (any, error) {
 	switch kind {
 	case ast.TypeDecimal:
-		return ratToDecimal(r), nil
+		return ratToDecimal(r)
 	case ast.TypeInt:
 		intPart := new(big.Int).Quo(r.Num(), r.Denom())
 		if !intPart.IsInt64() {
@@ -456,7 +465,7 @@ func coerceRatResult(r *big.Rat, kind ast.DataTypeKind) (any, error) {
 		}
 		return f, nil
 	default:
-		return ratToDecimal(r), nil
+		return ratToDecimal(r)
 	}
 }
 

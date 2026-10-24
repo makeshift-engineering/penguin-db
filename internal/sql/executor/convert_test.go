@@ -1,7 +1,10 @@
 package executor
 
 import (
+	"errors"
 	"math"
+	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -335,5 +338,36 @@ func TestColumnValueToAny(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("columnValueToAny(%v) = %v (%T), want %v (%T)", tc.cv, got, got, tc.want, tc.want)
 		}
+	}
+}
+
+func TestCoerceRatResult_DecimalPrecision(t *testing.T) {
+	// 1 / 10^1001 terminating decimal should preserve required scale (1001 places) and not truncate to 0.
+	denom1001 := new(big.Int).Exp(big.NewInt(10), big.NewInt(1001), nil)
+	r1001 := new(big.Rat).SetFrac(big.NewInt(1), denom1001)
+	res, err := coerceRatResult(r1001, ast.TypeDecimal)
+	if err != nil {
+		t.Fatalf("coerceRatResult(1/10^1001) failed: %v", err)
+	}
+	want1001 := decimalValue("0." + strings.Repeat("0", 1000) + "1")
+	if res != want1001 {
+		t.Fatalf("coerceRatResult(1/10^1001) = %q, want %q", res, want1001)
+	}
+
+	// Precision exceeding maxDecimalPrec should return ErrNumericOverflow.
+	denomOversized := new(big.Int).Exp(big.NewInt(10), big.NewInt(10001), nil)
+	rOversized := new(big.Rat).SetFrac(big.NewInt(1), denomOversized)
+	_, err = coerceRatResult(rOversized, ast.TypeDecimal)
+	if !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("expected ErrNumericOverflow for precision exceeding max, got %v", err)
+	}
+
+	// Non-terminating decimal with large prime denominator rounding to zero should return ErrNumericOverflow.
+	denomPrime := new(big.Int).Exp(big.NewInt(10), big.NewInt(50), nil)
+	denomPrime.Add(denomPrime, big.NewInt(1)) // 10^50 + 1 (coprime to 2 and 5)
+	rUnderflow := new(big.Rat).SetFrac(big.NewInt(1), denomPrime)
+	_, err = coerceRatResult(rUnderflow, ast.TypeDecimal)
+	if !errors.Is(err, ErrNumericOverflow) {
+		t.Fatalf("expected ErrNumericOverflow for underflow to zero, got %v", err)
 	}
 }

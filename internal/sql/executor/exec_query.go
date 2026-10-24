@@ -667,7 +667,7 @@ func (e *Executor) execLimit(ctx context.Context, node *planner.LimitNode) ([]ro
 		rows = rows[node.Offset:]
 	}
 
-	if node.Count == 0 && node.Offset == 0 {
+	if node.Count == 0 {
 		return nil, nil
 	}
 

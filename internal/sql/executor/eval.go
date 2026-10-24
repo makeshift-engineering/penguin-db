@@ -527,7 +527,7 @@ func coerceIntegerResult(value int64, kind ast.DataTypeKind) (any, error) {
 	case ast.TypeBigInt:
 		return value, nil
 	case ast.TypeDecimal:
-		return ratToDecimal(new(big.Rat).SetInt64(value)), nil
+		return ratToDecimal(new(big.Rat).SetInt64(value))
 	default:
 		return coerceResultByKind(float64(value), kind)
 	}

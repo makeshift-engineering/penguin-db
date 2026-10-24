@@ -536,7 +536,7 @@ func TestLimitZero(t *testing.T) {
 	}
 }
 
-func TestLimitOffsetWithoutCount(t *testing.T) {
+func TestLimitZeroWithOffset(t *testing.T) {
 	exec := setupUsersTable(t)
 	cols := buildResolvedColumns()
 	schema := testTableMeta()
@@ -588,8 +588,71 @@ func TestLimitOffsetWithoutCount(t *testing.T) {
 		},
 	})
 
+	if len(result.Rows) != 0 {
+		t.Fatalf("expected 0 rows for LIMIT 0 OFFSET 1, got %d", len(result.Rows))
+	}
+}
+
+func TestLimitWithOffset(t *testing.T) {
+	exec := setupUsersTable(t)
+	cols := buildResolvedColumns()
+	schema := testTableMeta()
+
+	mustExec(t, exec, &planner.InsertPlan{
+		Database: "testdb",
+		Table:    "users",
+		Schema:   schema,
+		Columns:  cols,
+		Rows: [][]planner.ResolvedExpr{
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 1},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Alice"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "a@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 2},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Bob"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "b@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: true},
+			},
+			{
+				&planner.ResolvedIntLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeInt}, Value: 3},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeVarchar}, Value: "Charlie"},
+				&planner.ResolvedStringLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeText}, Value: "c@test.com"},
+				&planner.ResolvedBoolLiteral{ResolvedExprBase: planner.ResolvedExprBase{Type: ast.TypeBoolean}, Value: false},
+			},
+		},
+	})
+
+	resolvedTable := &planner.ResolvedTable{
+		Database: "testdb", Table: "users", Binding: "users", Schema: schema,
+	}
+
+	result := mustExec(t, exec, &planner.QueryPlan{
+		Root: &planner.LimitNode{
+			Input: &planner.ProjectNode{
+				Input: &planner.ScanNode{Table: resolvedTable},
+				Items: []planner.ProjectItem{
+					{Expr: &planner.ResolvedColumnRef{Column: cols[0]}, Alias: "id"},
+				},
+			},
+			Count:  2,
+			Offset: 1,
+		},
+		Columns: []planner.OutputColumn{
+			{Name: "id", Type: ast.TypeInt},
+		},
+	})
+
 	if len(result.Rows) != 2 {
-		t.Fatalf("expected 2 rows for OFFSET 1 without LIMIT, got %d", len(result.Rows))
+		t.Fatalf("expected 2 rows for LIMIT 2 OFFSET 1, got %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != int32(2) {
+		t.Fatalf("expected row 0 id 2, got %v", result.Rows[0][0])
+	}
+	if result.Rows[1][0] != int32(3) {
+		t.Fatalf("expected row 1 id 3, got %v", result.Rows[1][0])
 	}
 }
 
