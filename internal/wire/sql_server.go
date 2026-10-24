@@ -40,13 +40,8 @@ func NewServer(addr string, exec *executor.Executor, cat *catalog.Catalog) *Serv
 	}
 }
 
-// Start opens a TCP socket and accepts client connections until context cancellation.
-func (s *Server) Start(ctx context.Context) error {
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", s.addr)
-	if err != nil {
-		return fmt.Errorf("penguinwire: failed to listen on %s: %w", s.addr, err)
-	}
+// Serve accepts client connections on the provided listener until context cancellation.
+func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	s.listener = l
 
 	go func() {
@@ -64,6 +59,16 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		go s.handleConnection(ctx, conn)
 	}
+}
+
+// Start opens a TCP socket and accepts client connections until context cancellation.
+func (s *Server) Start(ctx context.Context) error {
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", s.addr)
+	if err != nil {
+		return fmt.Errorf("penguinwire: failed to listen on %s: %w", s.addr, err)
+	}
+	return s.Serve(ctx, l)
 }
 
 // Close gracefully terminates the underlying TCP network listener.
@@ -203,8 +208,8 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 
 	for _, statement := range prog.Statements {
 		pl := planner.New(s.catalog)
-		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase, Ctx: ctx}
-		plan, diagList, err := pl.Plan(statement, pSess, source)
+		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase}
+		plan, diagList, err := pl.Plan(ctx, statement, pSess, source)
 		if err != nil || diagList.HasErrors() {
 			var errDetail interface{} = err
 			if err == nil {
@@ -271,10 +276,25 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 				tag = fmt.Sprintf("UPDATE %d", result.RowsAffected)
 			}
 		case executor.ResultDDL:
-			if result.Message != "" {
-				tag = result.Message
-			} else {
-				tag = "OK"
+			switch statement.(type) {
+			case *ast.CreateDatabaseStmt:
+				tag = "CREATE DATABASE"
+			case *ast.DropDatabaseStmt:
+				tag = "DROP DATABASE"
+			case *ast.UseDatabaseStmt:
+				tag = "USE"
+			case *ast.CreateTableStmt:
+				tag = "CREATE TABLE"
+			case *ast.DropTableStmt:
+				tag = "DROP TABLE"
+			case *ast.AlterTableStmt:
+				tag = "ALTER TABLE"
+			default:
+				if result.Message != "" {
+					tag = result.Message
+				} else {
+					tag = "OK"
+				}
 			}
 		}
 		conn.Write(encodeCommandComplete(tag))

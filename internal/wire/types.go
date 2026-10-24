@@ -63,11 +63,11 @@ func FormatColumnValue(val any) ([]byte, bool) {
 		}
 		return []byte("f"), false
 	case int:
-		return []byte(fmt.Sprintf("%d", v)), false
+		return fmt.Appendf(nil, "%d", v), false
 	case int32:
-		return []byte(fmt.Sprintf("%d", v)), false
+		return fmt.Appendf(nil, "%d", v), false
 	case int64:
-		return []byte(fmt.Sprintf("%d", v)), false
+		return fmt.Appendf(nil, "%d", v), false
 	case float32:
 		return []byte(strconv.FormatFloat(float64(v), 'f', -1, 32)), false
 	case float64:

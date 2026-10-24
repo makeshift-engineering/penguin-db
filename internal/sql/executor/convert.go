@@ -243,6 +243,16 @@ func toFloat64(v any) (float64, error) {
 	}
 }
 
+// isNumericAny reports whether v is a numeric runtime type.
+func isNumericAny(v any) bool {
+	switch v.(type) {
+	case int32, int64, float32, float64, decimalValue:
+		return true
+	default:
+		return false
+	}
+}
+
 // compareValues compares two non-nil Go values of compatible types.
 // Returns -1, 0, or 1 like strings.Compare. Both values must be non-nil;
 // NULL handling is done by the caller.
@@ -252,6 +262,13 @@ func compareValues(a, b any) (int, error) {
 	}
 	if _, ok := b.(decimalValue); ok {
 		return compareAsRat(a, b)
+	}
+
+	if isNumericAny(a) && !isNumericAny(b) {
+		return 0, fmt.Errorf("%w: cannot compare %T with %T", ErrTypeMismatch, a, b)
+	}
+	if isNumericAny(b) && !isNumericAny(a) {
+		return 0, fmt.Errorf("%w: cannot compare %T with %T", ErrTypeMismatch, a, b)
 	}
 
 	switch av := a.(type) {
