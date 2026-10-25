@@ -79,6 +79,35 @@ func TestDiagToWireError(t *testing.T) {
 	if !strings.Contains(we.Detail, "^") {
 		t.Errorf("expected Detail to contain caret underline, got:\n%s", we.Detail)
 	}
+
+	// Test non-ASCII character offset conversion
+	// 'café' has 4 runes, but 'é' is 2 bytes (bytes 3 and 4).
+	// Query: "SELECT café + $;"
+	// "SELECT " = 7 bytes / 7 runes
+	// "café" = 5 bytes (c-a-f are 3 bytes, é is 2 bytes) / 4 runes
+	// " + " = 3 bytes / 3 runes
+	// Total byte offset before '$' is 7 + 5 + 3 = 15 bytes.
+	// But in runes: 7 + 4 + 3 = 14 runes.
+	// 1-based position for '$' should be 14 + 1 = 15, not 15 + 1 = 16.
+	unicodeSrc := &diagnostic.Source{
+		Name: "query",
+		Text: "SELECT café + $;",
+	}
+	unicodeDiag := &diagnostic.Diagnostic{
+		Severity: diagnostic.SeverityError,
+		Code:     lexer.CodeUnexpectedChar,
+		Category: "Syntax Error",
+		Span: diagnostic.Span{
+			Start: diagnostic.Pos{Line: 1, Col: 15, Offset: 15},
+			End:   diagnostic.Pos{Line: 1, Col: 16, Offset: 16},
+		},
+		Msg:    `unexpected character '$'`,
+		Source: unicodeSrc,
+	}
+	unicodeWE := diagToWireError(unicodeDiag)
+	if unicodeWE.Position != 15 {
+		t.Errorf("expected rune-based Position 15, got %d", unicodeWE.Position)
+	}
 }
 
 func TestDiagListToWireError_Multiple(t *testing.T) {
@@ -159,6 +188,20 @@ func TestExecErrToWireError(t *testing.T) {
 		}
 		if we.Message != "storage service error" {
 			t.Errorf("expected 'storage service error', got %q", we.Message)
+		}
+	})
+
+	t.Run("storage server unavailable safe fragment", func(t *testing.T) {
+		err := errors.New("executor: scanning for UPDATE: kv: storage server unavailable: connection refused to 10.0.0.1:50051")
+		we := execErrToWireError(err)
+		if we.Code != "XX000" {
+			t.Errorf("expected Code XX000, got %q", we.Code)
+		}
+		if we.Message != "storage server unavailable" {
+			t.Errorf("expected safe message 'storage server unavailable', got %q", we.Message)
+		}
+		if strings.Contains(we.Message, "10.0.0.1") || strings.Contains(we.Message, "connection refused") {
+			t.Errorf("internal details leaked in message: %q", we.Message)
 		}
 	})
 }

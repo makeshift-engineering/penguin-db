@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -49,14 +50,34 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		_ = l.Close()
 	}()
 
+	var tempDelay time.Duration
 	for {
 		conn, err := l.Accept()
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if maxDelay := 1 * time.Second; tempDelay > maxDelay {
+				tempDelay = maxDelay
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(tempDelay):
+			}
 			continue
 		}
+		tempDelay = 0
 		go s.handleConnection(ctx, conn)
 	}
 }

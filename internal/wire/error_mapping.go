@@ -169,10 +169,14 @@ func diagToWireError(d *diagnostic.Diagnostic) *WireError {
 		Message:  msg,
 	}
 
-	// PostgreSQL Position is a 1-based byte offset from the start of the
+	// PostgreSQL Position is a 1-based character offset from the start of the
 	// query string. psql uses it to render the caret on the correct line.
 	if d.Span.Start.Offset >= 0 && d.Span.Start.Line > 0 {
-		we.Position = d.Span.Start.Offset + 1
+		position := d.Span.Start.Offset
+		if d.Source != nil && position <= len(d.Source.Text) {
+			position = len([]rune(d.Source.Text[:position]))
+		}
+		we.Position = position + 1
 	}
 
 	// Include the source snippet as Detail for clients that display it.
@@ -345,7 +349,7 @@ func sanitiseInternalError(err error) string {
 		"internal storage error",
 	} {
 		if strings.Contains(msg, safe) {
-			return msg
+			return safe
 		}
 	}
 

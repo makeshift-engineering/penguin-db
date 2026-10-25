@@ -375,25 +375,25 @@ func run() error {
 	flag.Parse()
 
 	if *fileFlag == "" || *outFlag == "" {
-		return fmt.Errorf("Usage: main -file <path.sql> -out <path.pengout> [-host <ip>] [-port <port>]")
+		return fmt.Errorf("usage: main -file <path.sql> -out <path.pengout> [-host <ip>] [-port <port>]")
 	}
 
 	contentBytes, err := os.ReadFile(*fileFlag)
 	if err != nil {
-		return fmt.Errorf("Error reading SQL file %s: %w", *fileFlag, err)
+		return fmt.Errorf("reading SQL file %s: %w", *fileFlag, err)
 	}
 
 	stmts := SplitSQLStatements(string(contentBytes))
 
 	client := NewPGClient(*hostFlag, *portFlag, *userFlag, *dbFlag)
 	if err := client.Connect(); err != nil {
-		return fmt.Errorf("Error connecting to PenguinDB on %s:%d: %w", *hostFlag, *portFlag, err)
+		return fmt.Errorf("connecting to PenguinDB on %s:%d: %w", *hostFlag, *portFlag, err)
 	}
 	defer client.Close()
 
 	outFile, err := os.Create(*outFlag)
 	if err != nil {
-		return fmt.Errorf("Error creating output file %s: %w", *outFlag, err)
+		return fmt.Errorf("creating output file %s: %w", *outFlag, err)
 	}
 	defer outFile.Close()
 
