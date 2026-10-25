@@ -159,35 +159,3 @@ UPDATE projects SET status = 'COMPLETED' WHERE id = 1;
 DELETE FROM employees WHERE id = 119;
 
 DELETE FROM salaries WHERE emp_id = 119;
-
-SELECT id, dept_name, location, budget FROM departments ORDER BY id ASC;
-
-SELECT id, first_name, last_name, job_title FROM employees WHERE dept_id = 1 ORDER BY id ASC;
-
-SELECT emp_id, salary, bonus FROM salaries WHERE salary >= 100000.00 ORDER BY salary DESC;
-
-SELECT id, project_name, status FROM projects WHERE status = 'IN_PROGRESS' ORDER BY id ASC;
-
-SELECT count(*) FROM employees;
-
-SELECT dept_id, count(*) FROM employees GROUP BY dept_id ORDER BY dept_id ASC;
-
-SELECT min(salary), max(salary), avg(salary) FROM salaries;
-
-SELECT sum(budget) FROM departments;
-
-SELECT emp_id, salary + bonus FROM salaries ORDER BY emp_id ASC LIMIT 10;
-
-SELECT employees.id, employees.first_name, employees.last_name, departments.dept_name FROM employees INNER JOIN departments ON employees.dept_id = departments.id ORDER BY employees.id ASC;
-
-SELECT employees.id, employees.first_name, salaries.salary, salaries.bonus FROM employees INNER JOIN salaries ON employees.id = salaries.emp_id ORDER BY employees.id ASC;
-
-SELECT departments.dept_name, projects.project_name, projects.status FROM departments INNER JOIN projects ON departments.id = projects.dept_id ORDER BY departments.id ASC;
-
-SELECT employees.first_name, employees.last_name FROM employees WHERE job_title = 'Sales Rep' OR job_title = 'Account Executive' ORDER BY employees.id ASC;
-
-SELECT id, first_name, last_name FROM employees WHERE NOT (dept_id = 1) ORDER BY id ASC;
-
-SELECT id, first_name, hire_date FROM employees ORDER BY hire_date ASC LIMIT 5;
-
-SELECT id, first_name, hire_date FROM employees ORDER BY hire_date ASC LIMIT 5 OFFSET 5;

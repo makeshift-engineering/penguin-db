@@ -160,35 +160,3 @@ UPDATE alerts SET severity = 'RESOLVED' WHERE id = 901;
 DELETE FROM alerts WHERE id = 908;
 
 DELETE FROM devices WHERE id = 119;
-
-SELECT id, building, floor FROM locations ORDER BY id ASC;
-
-SELECT id, location_id, device_type, active FROM devices WHERE active = true ORDER BY id ASC;
-
-SELECT id, device_id, sensor_type, reading_val FROM readings WHERE sensor_type = 'TEMPERATURE' ORDER BY reading_val DESC;
-
-SELECT id, device_id, severity, message FROM alerts WHERE severity = 'HIGH' ORDER BY id ASC;
-
-SELECT count(*) FROM devices;
-
-SELECT count(*) FROM readings WHERE sensor_type = 'TEMPERATURE';
-
-SELECT min(reading_val), max(reading_val), avg(reading_val) FROM readings WHERE sensor_type = 'TEMPERATURE';
-
-SELECT sensor_type, count(*) FROM readings GROUP BY sensor_type ORDER BY sensor_type ASC;
-
-SELECT severity, count(*) FROM alerts GROUP BY severity ORDER BY severity ASC;
-
-SELECT devices.id, devices.device_type, locations.building, locations.floor FROM devices INNER JOIN locations ON devices.location_id = locations.id ORDER BY devices.id ASC;
-
-SELECT readings.id, devices.device_type, readings.sensor_type, readings.reading_val FROM readings INNER JOIN devices ON readings.device_id = devices.id ORDER BY readings.id ASC;
-
-SELECT alerts.id, devices.device_type, alerts.severity, alerts.message FROM alerts INNER JOIN devices ON alerts.device_id = devices.id ORDER BY alerts.id ASC;
-
-SELECT id, device_type, model FROM devices WHERE active = true AND location_id = 1 ORDER BY id ASC;
-
-SELECT id, device_type, model FROM devices WHERE location_id = 2 OR location_id = 3 ORDER BY id ASC;
-
-SELECT id, device_id, reading_val FROM readings ORDER BY reading_val DESC LIMIT 5;
-
-SELECT id, device_id, reading_val FROM readings ORDER BY reading_val DESC LIMIT 5 OFFSET 5;

@@ -148,37 +148,3 @@ UPDATE shipments SET status = 'DELIVERED' WHERE id = 902;
 DELETE FROM inventory WHERE id = 519;
 
 DELETE FROM shipments WHERE id = 916;
-
-SELECT id, location, capacity FROM warehouses ORDER BY capacity DESC;
-
-SELECT id, name, country FROM suppliers ORDER BY id ASC;
-
-SELECT id, item_name, quantity, unit_cost FROM inventory WHERE quantity >= 500 ORDER BY quantity DESC;
-
-SELECT id, inventory_id, origin, destination, status FROM shipments WHERE status = 'DELIVERED' ORDER BY id ASC;
-
-SELECT count(*) FROM inventory;
-
-SELECT count(*) FROM shipments WHERE status = 'IN_TRANSIT';
-
-SELECT min(unit_cost), max(unit_cost), avg(unit_cost) FROM inventory;
-
-SELECT sum(quantity) FROM inventory;
-
-SELECT warehouse_id, count(*) FROM inventory GROUP BY warehouse_id ORDER BY warehouse_id ASC;
-
-SELECT supplier_id, count(*) FROM inventory GROUP BY supplier_id ORDER BY supplier_id ASC;
-
-SELECT inventory.id, inventory.item_name, warehouses.location FROM inventory INNER JOIN warehouses ON inventory.warehouse_id = warehouses.id ORDER BY inventory.id ASC;
-
-SELECT inventory.id, inventory.item_name, suppliers.name FROM inventory INNER JOIN suppliers ON inventory.supplier_id = suppliers.id ORDER BY inventory.id ASC;
-
-SELECT shipments.id, inventory.item_name, shipments.destination, shipments.status FROM shipments INNER JOIN inventory ON shipments.inventory_id = inventory.id ORDER BY shipments.id ASC;
-
-SELECT id, item_name, unit_cost FROM inventory WHERE unit_cost > 20.00 AND quantity < 1000 ORDER BY id ASC;
-
-SELECT id, item_name, quantity FROM inventory WHERE quantity > 1000 OR unit_cost > 100.00 ORDER BY id ASC;
-
-SELECT id, item_name, quantity FROM inventory ORDER BY quantity DESC LIMIT 5;
-
-SELECT id, item_name, quantity FROM inventory ORDER BY quantity DESC LIMIT 5 OFFSET 5;
