@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -151,7 +152,7 @@ func (e *Executor) execProject(ctx context.Context, node *planner.ProjectNode) (
 		for i, item := range node.Items {
 			v, err := evalExpr(item.Expr, r)
 			if err != nil {
-				return nil, fmt.Errorf("executor: evaluating projection item %d: %w", i, err)
+				return nil, withSpan(fmt.Errorf("executor: evaluating projection item %d: %w", i, err), item.Expr.Span())
 			}
 			vals[i] = v
 		}
@@ -258,6 +259,17 @@ func (e *Executor) execAggregate(ctx context.Context, node *planner.AggregateNod
 // reference or a literal), it evaluates against the first row of the
 // group.
 func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) {
+	val, err := evalAggregateExprInternal(expr, groupRows)
+	if err != nil {
+		if expr != nil {
+			return nil, withSpan(err, expr.Span())
+		}
+		return nil, err
+	}
+	return val, nil
+}
+
+func evalAggregateExprInternal(expr planner.ResolvedExpr, groupRows []row) (any, error) {
 	switch e := expr.(type) {
 	case *planner.ResolvedFunctionCall:
 		return evalAggregateFunc(e, groupRows)
@@ -285,6 +297,9 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 			}
 			result, err := computeDecimalArithmetic(e.Op, lr, rr)
 			if err != nil {
+				if errors.Is(err, ErrDivisionByZero) && e.Right != nil && e.Right.Span().Start.Line > 0 {
+					return nil, withSpan(err, e.Right.Span())
+				}
 				return nil, err
 			}
 			return coerceRatResult(result, e.ResolvedType())
@@ -294,6 +309,9 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 			ri, _ := toInt64(right)
 			result, err := computeIntegerArithmetic(e.Op, li, ri)
 			if err != nil {
+				if errors.Is(err, ErrDivisionByZero) && e.Right != nil && e.Right.Span().Start.Line > 0 {
+					return nil, withSpan(err, e.Right.Span())
+				}
 				return nil, err
 			}
 			return coerceIntegerResult(result, e.ResolvedType())
@@ -308,6 +326,9 @@ func evalAggregateExpr(expr planner.ResolvedExpr, groupRows []row) (any, error) 
 		}
 		result, err := computeBinaryArithmetic(e.Op, lf, rf)
 		if err != nil {
+			if errors.Is(err, ErrDivisionByZero) && e.Right != nil && e.Right.Span().Start.Line > 0 {
+				return nil, withSpan(err, e.Right.Span())
+			}
 			return nil, err
 		}
 		return coerceResultByKind(result, e.ResolvedType())
@@ -636,7 +657,7 @@ func (e *Executor) execSort(ctx context.Context, node *planner.SortNode) ([]row,
 			}
 			cmp, err := compareValues(vi, vj)
 			if err != nil {
-				sortErr = err
+				sortErr = withSpan(err, item.Expr.Span())
 				return false
 			}
 			if cmp == 0 {

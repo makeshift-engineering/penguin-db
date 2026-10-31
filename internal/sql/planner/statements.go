@@ -5,19 +5,31 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
 // Plan is the sealed interface for every top-level plan node — the output
 // of planning a single ast.Statement.
 type Plan interface {
 	planNode()
+	PlanSource() *diagnostic.Source
+	SetPlanSource(src *diagnostic.Source)
+	PlanSpan() diagnostic.Span
+	SetPlanSpan(span diagnostic.Span)
 }
 
 // PlanBase is embedded in every Plan implementation to satisfy the
 // interface's marker method.
-type PlanBase struct{}
+type PlanBase struct {
+	Source *diagnostic.Source
+	Span   diagnostic.Span
+}
 
-func (*PlanBase) planNode() {}
+func (*PlanBase) planNode()                           {}
+func (b *PlanBase) PlanSource() *diagnostic.Source    { return b.Source }
+func (b *PlanBase) SetPlanSource(src *diagnostic.Source) { b.Source = src }
+func (b *PlanBase) PlanSpan() diagnostic.Span         { return b.Span }
+func (b *PlanBase) SetPlanSpan(span diagnostic.Span)  { b.Span = span }
 
 // CreateDatabasePlan plans a CREATE DATABASE statement. BuildCreateDatabaseOps
 // performs no existence check of its own (see its doc comment), so this

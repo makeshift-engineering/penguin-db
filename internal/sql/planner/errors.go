@@ -90,23 +90,26 @@ const (
 	// to a non-numeric DEFAULT value.
 	CodeInvalidDefaultValue diagnostic.Code = 3019
 
-	// CodeColumnNotFound is emitted when an ALTER TABLE MODIFY, RENAME
+	// CodeUnknownAlterColumn is emitted when an ALTER TABLE MODIFY, RENAME
 	// COLUMN, or DROP COLUMN names a column that does not exist on the
 	// table.
-	CodeColumnNotFound diagnostic.Code = 3020
+	CodeUnknownAlterColumn diagnostic.Code = 3020
+	CodeColumnNotFound     diagnostic.Code = 3020 // backward-compatibility alias
 
 	// CodeCannotDropPKColumn is emitted when ALTER TABLE DROP COLUMN
 	// targets a column that is part of the table's primary key.
 	CodeCannotDropPKColumn diagnostic.Code = 3021
 
-	// CodeDatabaseExists is emitted for CREATE DATABASE without IF NOT
+	// CodeDuplicateDatabase is emitted for CREATE DATABASE without IF NOT
 	// EXISTS when the database already exists.
-	CodeDatabaseExists diagnostic.Code = 3022
+	CodeDuplicateDatabase diagnostic.Code = 3022
+	CodeDatabaseExists    diagnostic.Code = 3022 // backward-compatibility alias
 
-	// CodeTableExists is emitted for CREATE TABLE without IF NOT EXISTS
+	// CodeDuplicateTable is emitted for CREATE TABLE without IF NOT EXISTS
 	// when the table already exists, and for ALTER TABLE RENAME TO when
 	// the target name is already taken.
-	CodeTableExists diagnostic.Code = 3023
+	CodeDuplicateTable diagnostic.Code = 3023
+	CodeTableExists    diagnostic.Code = 3023 // backward-compatibility alias
 
 	// CodeUnsupportedDataType is emitted for a data type the catalog
 	// schema cannot yet represent — currently DECIMAL with an explicit

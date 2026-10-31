@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/codec"
@@ -71,7 +74,7 @@ func (e *Executor) execInsertValues(ctx context.Context, plan *planner.InsertPla
 			exprValues[i] = v
 		}
 
-		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, exprValues, plan.Columns, &nextSeq, seenKeys)
+		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, exprValues, plan.Columns, rowExprs, &nextSeq, seenKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +134,7 @@ func (e *Executor) execInsertSelect(ctx context.Context, plan *planner.InsertPla
 				ErrColumnCountMismatch, len(srcRow), len(plan.Columns))
 		}
 
-		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, srcRow, plan.Columns, &nextSeq, seenKeys)
+		op, err := e.prepareInsertOp(ctx, plan.Database, plan.Table, schema, activeColumns, pkTypes, srcRow, plan.Columns, nil, &nextSeq, seenKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -223,12 +226,12 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 		for _, assign := range plan.Assignments {
 			v, err := evalExpr(assign.Value, r)
 			if err != nil {
-				return nil, fmt.Errorf("executor: evaluating SET value: %w", err)
+				return nil, withSpan(fmt.Errorf("executor: evaluating SET value: %w", err), assign.Value.Span())
 			}
 
 			col := assign.Column
 			if err := validateColumnValue(col.Name, col.Type, col.VarcharLen, col.Nullable, v); err != nil {
-				return nil, err
+				return nil, withSpan(err, assign.Value.Span())
 			}
 			newVals[col.Index] = v
 		}
@@ -264,16 +267,29 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 		}
 	}
 
+	var pkSpan diagnostic.Span
+	for _, assign := range plan.Assignments {
+		for _, pkName := range schema.PrimaryKey {
+			if strings.EqualFold(assign.Column.Name, pkName) {
+				pkSpan = assign.Value.Span()
+				break
+			}
+		}
+		if pkSpan.Start.Line > 0 {
+			break
+		}
+	}
+
 	seenNewKeys := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		newKeyString := string(candidate.newKey)
 		if _, exists := seenNewKeys[newKeyString]; exists {
-			return nil, fmt.Errorf("%w: UPDATE produces duplicate primary key in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
+			return nil, withSpan(fmt.Errorf("%w: UPDATE produces duplicate primary key in %q.%q", ErrDuplicateKey, plan.Database, plan.Table), pkSpan)
 		}
 		seenNewKeys[newKeyString] = struct{}{}
 		if _, exists := existingKeys[newKeyString]; exists && !bytes.Equal(candidate.oldKey, candidate.newKey) {
 			if _, deleted := deletedKeys[newKeyString]; !deleted {
-				return nil, fmt.Errorf("%w: UPDATE target key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
+				return nil, withSpan(fmt.Errorf("%w: UPDATE target key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table), pkSpan)
 			}
 		}
 	}
@@ -419,17 +435,21 @@ func (e *Executor) buildRowKey(db, table string, colValues []codec.ColumnValue, 
 }
 
 // prepareInsertOp validates column values, encodes a row, checks for duplicate primary keys, and returns a put Op.
-func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta, pkTypes []ast.DataTypeKind, rowValues []any, targetCols []planner.ResolvedColumn, nextSeq *uint64, seenKeys map[string]struct{}) (kv.Op, error) {
+func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema *catalog.TableMeta, activeColumns []catalog.ColumnMeta, pkTypes []ast.DataTypeKind, rowValues []any, targetCols []planner.ResolvedColumn, rowExprs []planner.ResolvedExpr, nextSeq *uint64, seenKeys map[string]struct{}) (kv.Op, error) {
 	colValues := make([]codec.ColumnValue, len(activeColumns))
 
 	for i, col := range targetCols {
 		val := rowValues[i]
+		var exprSpan diagnostic.Span
+		if i < len(rowExprs) && rowExprs[i] != nil {
+			exprSpan = rowExprs[i].Span()
+		}
 		if err := validateColumnValue(col.Name, col.Type, col.VarcharLen, col.Nullable, val); err != nil {
-			return kv.Op{}, err
+			return kv.Op{}, withSpan(err, exprSpan)
 		}
 		cv, err := anyToColumnValue(val, col.Type)
 		if err != nil {
-			return kv.Op{}, fmt.Errorf("executor: converting value for column %q: %w", col.Name, err)
+			return kv.Op{}, withSpan(fmt.Errorf("executor: converting value for column %q: %w", col.Name, err), exprSpan)
 		}
 		colValues[col.Index] = cv
 	}
@@ -478,12 +498,27 @@ func (e *Executor) prepareInsertOp(ctx context.Context, db, table string, schema
 		return kv.Op{}, err
 	}
 
+	dupErr := fmt.Errorf("%w: key already exists in %q.%q", ErrDuplicateKey, db, table)
+	var pkSpan diagnostic.Span
+	for i, col := range targetCols {
+		for _, pkName := range schema.PrimaryKey {
+			if strings.EqualFold(col.Name, pkName) && i < len(rowExprs) && rowExprs[i] != nil {
+				pkSpan = rowExprs[i].Span()
+				break
+			}
+		}
+		if pkSpan.Start.Line > 0 {
+			break
+		}
+	}
+
 	_, err = e.kv.Get(ctx, rowKey)
 	if err == nil {
-		return kv.Op{}, fmt.Errorf("%w: key already exists in %q.%q", ErrDuplicateKey, db, table)
+		return kv.Op{}, withSpan(dupErr, pkSpan)
 	}
 	if _, exists := seenKeys[string(rowKey)]; exists {
-		return kv.Op{}, fmt.Errorf("%w: key appears more than once in %q.%q", ErrDuplicateKey, db, table)
+		dupMultiErr := fmt.Errorf("%w: key appears more than once in %q.%q", ErrDuplicateKey, db, table)
+		return kv.Op{}, withSpan(dupMultiErr, pkSpan)
 	}
 	seenKeys[string(rowKey)] = struct{}{}
 	if !errors.Is(err, kv.ErrKeyNotFound) {

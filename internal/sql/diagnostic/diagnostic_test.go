@@ -214,6 +214,25 @@ func TestDiagnostic_Snippet(t *testing.T) {
 		}
 	})
 
+	t.Run("tab indented line", func(t *testing.T) {
+		tabSrc := &Source{
+			Name: "query",
+			Text: "\t\tSELECT * FROM users;",
+		}
+		d := &Diagnostic{
+			Span: Span{
+				Start: Pos{Line: 1, Col: 3, Offset: 2},
+				End:   Pos{Line: 1, Col: 9, Offset: 8},
+			},
+			Source: tabSrc,
+		}
+		expected := "  \t\tSELECT * FROM users;\n  \t\t^^^^^^"
+		got := d.Snippet()
+		if got != expected {
+			t.Errorf("Snippet() = %q, want %q", got, expected)
+		}
+	})
+
 	t.Run("empty string when source is nil", func(t *testing.T) {
 		d := &Diagnostic{
 			Span: Span{

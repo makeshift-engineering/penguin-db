@@ -180,35 +180,3 @@ UPDATE passengers SET nationality = 'USA' WHERE id = 102;
 DELETE FROM flights WHERE id = 508;
 
 DELETE FROM passengers WHERE id = 113;
-
-SELECT id, code, name, city FROM airports ORDER BY id ASC;
-
-SELECT id, flight_num, flight_date, status FROM flights WHERE status = 'ON_TIME' ORDER BY id ASC;
-
-SELECT id, name, passport, nationality FROM passengers WHERE nationality = 'USA' ORDER BY id ASC;
-
-SELECT id, flight_id, passenger_id, price FROM tickets WHERE price >= 500.00 ORDER BY price DESC;
-
-SELECT count(*) FROM passengers;
-
-SELECT count(*) FROM flights WHERE origin_id = 1;
-
-SELECT min(price), max(price), avg(price) FROM tickets;
-
-SELECT sum(price) FROM tickets;
-
-SELECT status, count(*) FROM flights GROUP BY status ORDER BY status ASC;
-
-SELECT nationality, count(*) FROM passengers GROUP BY nationality ORDER BY nationality ASC;
-
-SELECT flights.id, flights.flight_num, airports.code FROM flights INNER JOIN airports ON flights.origin_id = airports.id ORDER BY flights.id ASC;
-
-SELECT tickets.id, passengers.name, flights.flight_num, tickets.price FROM tickets INNER JOIN passengers ON tickets.passenger_id = passengers.id INNER JOIN flights ON tickets.flight_id = flights.id ORDER BY tickets.id ASC;
-
-SELECT id, flight_num FROM flights WHERE origin_id = 1 AND status = 'ON_TIME' ORDER BY id ASC;
-
-SELECT id, flight_num FROM flights WHERE origin_id = 2 OR dest_id = 2 ORDER BY id ASC;
-
-SELECT id, flight_num, flight_date FROM flights ORDER BY flight_date ASC LIMIT 5;
-
-SELECT id, flight_num, flight_date FROM flights ORDER BY flight_date ASC LIMIT 5 OFFSET 5;

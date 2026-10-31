@@ -26,7 +26,7 @@ func (pc *planContext) planCreateDatabase(stmt *ast.CreateDatabaseStmt) (Plan, e
 		return &CreateDatabasePlan{Name: stmt.Name, NoOp: true}, nil
 	}
 	if exists {
-		return nil, pc.errorf(stmt.Span(), CodeDatabaseExists, "database %q already exists", stmt.Name)
+		return nil, pc.errorf(stmt.Span(), CodeDuplicateDatabase, "database %q already exists", stmt.Name)
 	}
 	return &CreateDatabasePlan{Name: stmt.Name}, nil
 }
@@ -62,7 +62,7 @@ func (pc *planContext) planCreateTable(stmt *ast.CreateTableStmt) (Plan, error) 
 		if stmt.IfNotExists {
 			return &CreateTablePlan{Database: db, Table: stmt.Table.Name, NoOp: true}, nil
 		}
-		return nil, pc.errorf(stmt.Table.Span(), CodeTableExists, "table %q already exists in database %q", stmt.Table.Name, db)
+		return nil, pc.errorf(stmt.Table.Span(), CodeDuplicateTable, "table %q already exists in database %q", stmt.Table.Name, db)
 	}
 
 	schema, err := pc.buildTableMeta(db, stmt.Table.Name, stmt.Columns)
@@ -121,7 +121,7 @@ func (pc *planContext) planAlterTable(stmt *ast.AlterTableStmt) (Plan, error) {
 
 func (pc *planContext) planRenameTable(db string, oldMeta *catalog.TableMeta, action *ast.AlterAction) (Plan, error) {
 	if pc.tableExists(db, action.NewName) {
-		return nil, pc.errorf(action.Span(), CodeTableExists, "table %q already exists in database %q", action.NewName, db)
+		return nil, pc.errorf(action.Span(), CodeDuplicateTable, "table %q already exists in database %q", action.NewName, db)
 	}
 	return &RenameTablePlan{Database: db, OldName: oldMeta.Name, NewName: action.NewName, Schema: oldMeta}, nil
 }
@@ -155,7 +155,7 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 	case ast.AlterModify:
 		existing := oldMeta.FindColumn(action.Column.Name)
 		if existing == nil {
-			return nil, pc.errorf(action.Column.Span(), CodeColumnNotFound, "column %q does not exist", action.Column.Name)
+			return nil, pc.errorf(action.Column.Span(), CodeUnknownAlterColumn, "column %q does not exist", action.Column.Name)
 		}
 		col, err := pc.buildColumnMeta(oldMeta.Database, action.Column)
 		if err != nil {
@@ -171,7 +171,7 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 
 	case ast.AlterDropColumn:
 		if oldMeta.FindColumn(action.DropName) == nil {
-			return nil, pc.errorf(action.Span(), CodeColumnNotFound, "column %q does not exist", action.DropName)
+			return nil, pc.errorf(action.Span(), CodeUnknownAlterColumn, "column %q does not exist", action.DropName)
 		}
 		if slices.Contains(oldMeta.PrimaryKey, action.DropName) {
 			return nil, pc.errorf(action.Span(), CodeCannotDropPKColumn, "cannot drop primary key column %q", action.DropName)
@@ -186,7 +186,7 @@ func (pc *planContext) planAlterSchema(oldMeta *catalog.TableMeta, action *ast.A
 	case ast.AlterRenameColumn:
 
 		if oldMeta.FindColumn(action.OldName) == nil {
-			return nil, pc.errorf(action.Span(), CodeColumnNotFound, "column %q does not exist", action.OldName)
+			return nil, pc.errorf(action.Span(), CodeUnknownAlterColumn, "column %q does not exist", action.OldName)
 		}
 		if oldMeta.FindColumn(action.NewName) != nil {
 			return nil, pc.errorf(action.Span(), CodeDuplicateColumn, "column %q already exists", action.NewName)

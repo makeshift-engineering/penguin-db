@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -49,14 +50,34 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		_ = l.Close()
 	}()
 
+	var tempDelay time.Duration
 	for {
 		conn, err := l.Accept()
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if maxDelay := 1 * time.Second; tempDelay > maxDelay {
+				tempDelay = maxDelay
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(tempDelay):
+			}
 			continue
 		}
+		tempDelay = 0
 		go s.handleConnection(ctx, conn)
 	}
 }
@@ -209,8 +230,9 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	lex := lexer.NewLexer("query", query)
 	tokens := lex.Tokenize()
 	if lex.Diagnostics().HasErrors() {
+		we := diagListToWireError(lex.Diagnostics())
 		_ = sendResponse(conn,
-			encodeErrorResponse("ERROR", "42601", fmt.Sprintf("lexical error: %v", lex.Diagnostics().AsError())),
+			encodeRichErrorResponse(we),
 			encodeReadyForQuery('I'),
 		)
 		return
@@ -220,10 +242,32 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 	p := parser.New(tokens, source)
 	prog, err := p.Parse()
 	if err != nil || prog == nil || len(prog.Statements) == 0 {
-		_ = sendResponse(conn,
-			encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err)),
-			encodeReadyForQuery('I'),
-		)
+		var errPkt []byte
+		switch {
+		case p.Diagnostics().HasErrors():
+			we := diagListToWireError(p.Diagnostics())
+			errPkt = encodeRichErrorResponse(we)
+		case err != nil:
+			var d *diagnostic.Diagnostic
+			if errors.As(err, &d) && d != nil {
+				errPkt = encodeRichErrorResponse(diagToWireError(d))
+			} else {
+				we := &WireError{
+					Severity: "ERROR",
+					Code:     "42601",
+					Message:  fmt.Sprintf("[E2009] Syntax Error: %v", cleanExecMessage(err)),
+				}
+				errPkt = encodeRichErrorResponse(we)
+			}
+		default:
+			we := &WireError{
+				Severity: "ERROR",
+				Code:     "42601",
+				Message:  "[E2009] Syntax Error: empty query",
+			}
+			errPkt = encodeRichErrorResponse(we)
+		}
+		_ = sendResponse(conn, errPkt, encodeReadyForQuery('I'))
 		return
 	}
 
@@ -232,21 +276,23 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 		pSess := planner.Session{ActiveDatabase: session.ActiveDatabase}
 		plan, diagList, err := pl.Plan(ctx, statement, pSess, source)
 		if err != nil || diagList.HasErrors() {
-			var errDetail any = err
-			if err == nil {
-				errDetail = diagList.AsError()
+			var errPkt []byte
+			if diagList.HasErrors() {
+				we := diagListToWireError(diagList)
+				errPkt = encodeRichErrorResponse(we)
+			} else {
+				we := execErrToWireError(err)
+				errPkt = encodeRichErrorResponse(we)
 			}
-			_ = sendResponse(conn,
-				encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", errDetail)),
-				encodeReadyForQuery('I'),
-		)
+			_ = sendResponse(conn, errPkt, encodeReadyForQuery('I'))
 			return
 		}
 
 		result, err := s.exec.Execute(ctx, plan)
 		if err != nil {
+			we := execErrToWireError(err)
 			_ = sendResponse(conn,
-				encodeErrorResponse("ERROR", "XX000", fmt.Sprintf("execution error: %v", err)),
+				encodeRichErrorResponse(we),
 				encodeReadyForQuery('I'),
 			)
 			return

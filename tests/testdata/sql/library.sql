@@ -180,35 +180,3 @@ UPDATE loans SET returned = true WHERE id = 503;
 DELETE FROM books WHERE id = 120;
 
 DELETE FROM borrowers WHERE id = 18;
-
-SELECT id, name, country FROM authors ORDER BY id ASC;
-
-SELECT id, title, genre, pub_year FROM books WHERE genre = 'Fantasy' ORDER BY pub_year ASC;
-
-SELECT id, title, pub_year FROM books WHERE pub_year < 1950 ORDER BY pub_year ASC;
-
-SELECT id, name, card_number FROM borrowers WHERE active = true ORDER BY id ASC;
-
-SELECT id, book_id, borrower_id, returned FROM loans WHERE returned = false ORDER BY id ASC;
-
-SELECT count(*) FROM books;
-
-SELECT count(*) FROM books WHERE author_id = 5;
-
-SELECT min(pub_year), max(pub_year) FROM books;
-
-SELECT genre, count(*) FROM books GROUP BY genre ORDER BY genre ASC;
-
-SELECT author_id, count(*) FROM books GROUP BY author_id ORDER BY author_id ASC;
-
-SELECT books.id, books.title, authors.name FROM books INNER JOIN authors ON books.author_id = authors.id ORDER BY books.id ASC;
-
-SELECT loans.id, books.title, borrowers.name FROM loans INNER JOIN books ON loans.book_id = books.id INNER JOIN borrowers ON loans.borrower_id = borrowers.id ORDER BY loans.id ASC;
-
-SELECT id, title FROM books WHERE genre = 'Horror' AND pub_year > 1980 ORDER BY id ASC;
-
-SELECT id, title FROM books WHERE genre = 'Mystery' OR pub_year < 1940 ORDER BY id ASC;
-
-SELECT id, title, pub_year FROM books ORDER BY pub_year ASC LIMIT 5;
-
-SELECT id, title, pub_year FROM books ORDER BY pub_year ASC LIMIT 5 OFFSET 5;
