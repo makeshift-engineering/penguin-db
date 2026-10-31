@@ -267,16 +267,29 @@ func (e *Executor) execUpdate(ctx context.Context, plan *planner.UpdatePlan) (*R
 		}
 	}
 
+	var pkSpan diagnostic.Span
+	for _, assign := range plan.Assignments {
+		for _, pkName := range schema.PrimaryKey {
+			if strings.EqualFold(assign.Column.Name, pkName) {
+				pkSpan = assign.Value.Span()
+				break
+			}
+		}
+		if pkSpan.Start.Line > 0 {
+			break
+		}
+	}
+
 	seenNewKeys := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		newKeyString := string(candidate.newKey)
 		if _, exists := seenNewKeys[newKeyString]; exists {
-			return nil, fmt.Errorf("%w: UPDATE produces duplicate primary key in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
+			return nil, withSpan(fmt.Errorf("%w: UPDATE produces duplicate primary key in %q.%q", ErrDuplicateKey, plan.Database, plan.Table), pkSpan)
 		}
 		seenNewKeys[newKeyString] = struct{}{}
 		if _, exists := existingKeys[newKeyString]; exists && !bytes.Equal(candidate.oldKey, candidate.newKey) {
 			if _, deleted := deletedKeys[newKeyString]; !deleted {
-				return nil, fmt.Errorf("%w: UPDATE target key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table)
+				return nil, withSpan(fmt.Errorf("%w: UPDATE target key already exists in %q.%q", ErrDuplicateKey, plan.Database, plan.Table), pkSpan)
 			}
 		}
 	}

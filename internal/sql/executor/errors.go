@@ -6,6 +6,7 @@ import (
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/planner"
+	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 )
 
 // Executor diagnostic codes occupy the 4000–4999 range.
@@ -15,15 +16,19 @@ const (
 	CodeDuplicateKey        diagnostic.Code = 4003
 	CodeTypeMismatch        diagnostic.Code = 4004
 	CodeDivisionByZero      diagnostic.Code = 4005
-	CodeUnsupportedPlan     diagnostic.Code = 4006
-	CodeVarcharTooLong      diagnostic.Code = 4007
-	CodeUnsupportedExpr     diagnostic.Code = 4008
-	CodeUnsupportedCond     diagnostic.Code = 4009
-	CodeUnsupportedRelNode  diagnostic.Code = 4010
-	CodeUnsupportedAggFunc  diagnostic.Code = 4011
-	CodeColumnCountMismatch diagnostic.Code = 4012
-	CodeInvalidLikePattern  diagnostic.Code = 4013
-	CodeNumericOverflow     diagnostic.Code = 4014
+	CodeUnsupportedPlan              diagnostic.Code = 4006
+	CodeVarcharTooLong               diagnostic.Code = 4007
+	CodeUnsupportedExpression        diagnostic.Code = 4008
+	CodeUnsupportedExpr              diagnostic.Code = 4008 // backward-compatibility alias
+	CodeUnsupportedCondition         diagnostic.Code = 4009
+	CodeUnsupportedCond              diagnostic.Code = 4009 // backward-compatibility alias
+	CodeUnsupportedRelationalNode    diagnostic.Code = 4010
+	CodeUnsupportedRelNode           diagnostic.Code = 4010 // backward-compatibility alias
+	CodeUnsupportedAggregateFunction diagnostic.Code = 4011
+	CodeUnsupportedAggFunc           diagnostic.Code = 4011 // backward-compatibility alias
+	CodeColumnCountMismatch          diagnostic.Code = 4012
+	CodeInvalidLikePattern           diagnostic.Code = 4013
+	CodeNumericOverflow              diagnostic.Code = 4014
 )
 
 // Sentinel errors returned by the executor.
@@ -174,13 +179,29 @@ func errorCodeForExecutorError(err error) diagnostic.Code {
 	case errors.Is(err, ErrUnsupportedPlan):
 		return CodeUnsupportedPlan
 	case errors.Is(err, ErrUnsupportedExpr):
-		return CodeUnsupportedExpr
+		return CodeUnsupportedExpression
 	case errors.Is(err, ErrUnsupportedCond):
-		return CodeUnsupportedCond
+		return CodeUnsupportedCondition
 	case errors.Is(err, ErrUnsupportedRelNode):
 		return CodeUnsupportedRelNode
 	case errors.Is(err, ErrUnsupportedAggFunc):
-		return CodeUnsupportedAggFunc
+		return CodeUnsupportedAggregateFunction
+	case errors.Is(err, catalog.ErrDatabaseExists):
+		return planner.CodeDuplicateDatabase
+	case errors.Is(err, catalog.ErrTableExists):
+		return planner.CodeDuplicateTable
+	case errors.Is(err, catalog.ErrDatabaseNotFound), errors.Is(err, catalog.ErrCatalogDBMissing):
+		return planner.CodeUnknownDatabase
+	case errors.Is(err, catalog.ErrTableNotFound):
+		return planner.CodeUnknownTable
+	case errors.Is(err, catalog.ErrColumnNotFound), errors.Is(err, catalog.ErrPKColumnNotFound):
+		return planner.CodeUnknownAlterColumn
+	case errors.Is(err, catalog.ErrDuplicateColumn):
+		return planner.CodeDuplicateColumn
+	case errors.Is(err, catalog.ErrCannotDropPKColumn), errors.Is(err, catalog.ErrSchemaViolation):
+		return planner.CodeCannotDropPKColumn
+	case errors.Is(err, catalog.ErrUnsupportedAlter):
+		return planner.CodeUnsupportedAlter
 	default:
 		return diagnostic.Code(4999)
 	}
@@ -193,9 +214,18 @@ func cleanErrorMessage(err error) string {
 	msg := err.Error()
 	for {
 		trimmed := msg
+		if strings.HasPrefix(trimmed, "executor: evaluating projection item ") {
+			rem := trimmed[len("executor: evaluating projection item "):]
+			if idx := strings.Index(rem, ": "); idx != -1 {
+				trimmed = rem[idx+2:]
+			}
+		}
 		for _, prefix := range []string{
 			"executor: evaluating INSERT value: ",
 			"executor: evaluating SET value: ",
+			"executor: evaluating WHERE: ",
+			"executor: evaluating WHERE for UPDATE: ",
+			"executor: evaluating WHERE for DELETE: ",
 			"executor: converting value for column ",
 			"executor: converting updated value for column ",
 			"executor: writing INSERT ... SELECT: ",
@@ -203,7 +233,28 @@ func cleanErrorMessage(err error) string {
 			"executor: writing INSERT: ",
 			"executor: writing DELETE: ",
 			"executor: writing UPDATE: ",
+			"executor: writing CREATE DATABASE: ",
+			"executor: writing DROP DATABASE: ",
+			"executor: writing CREATE TABLE: ",
+			"executor: writing DROP TABLE: ",
+			"executor: writing ALTER TABLE: ",
+			"executor: writing RENAME TABLE: ",
+			"executor: building CREATE DATABASE ops: ",
+			"executor: building DROP DATABASE ops: ",
+			"executor: building CREATE TABLE ops: ",
+			"executor: building DROP TABLE ops: ",
+			"executor: building ALTER TABLE ops: ",
+			"executor: building RENAME TABLE ops: ",
+			"executor: checking PK existence: ",
+			"executor: getting PK types: ",
+			"executor: scanning for UPDATE: ",
+			"executor: scanning for DELETE: ",
+			"executor: encoding row: ",
+			"executor: decoding row: ",
 			"executor: ",
+			"catalog: ",
+			"kv: ",
+			"planner: ",
 		} {
 			trimmed = strings.TrimPrefix(trimmed, prefix)
 		}
@@ -226,14 +277,17 @@ func enrichExecutorError(err error, plan planner.Plan) error {
 		return err
 	}
 
+	var span diagnostic.Span
 	type spanned interface {
 		ErrorSpan() diagnostic.Span
 	}
 	var sp spanned
-	if !errors.As(err, &sp) {
-		return err
+	if errors.As(err, &sp) {
+		span = sp.ErrorSpan()
 	}
-	span := sp.ErrorSpan()
+	if span.Start.Line <= 0 && plan != nil {
+		span = plan.PlanSpan()
+	}
 	if span.Start.Line <= 0 {
 		return err
 	}

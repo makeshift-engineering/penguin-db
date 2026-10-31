@@ -248,9 +248,24 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 			we := diagListToWireError(p.Diagnostics())
 			errPkt = encodeRichErrorResponse(we)
 		case err != nil:
-			errPkt = encodeErrorResponse("ERROR", "42601", fmt.Sprintf("syntax error: %v", err))
+			var d *diagnostic.Diagnostic
+			if errors.As(err, &d) && d != nil {
+				errPkt = encodeRichErrorResponse(diagToWireError(d))
+			} else {
+				we := &WireError{
+					Severity: "ERROR",
+					Code:     "42601",
+					Message:  fmt.Sprintf("[E2009] Syntax Error: %v", cleanExecMessage(err)),
+				}
+				errPkt = encodeRichErrorResponse(we)
+			}
 		default:
-			errPkt = encodeErrorResponse("ERROR", "42601", "syntax error: empty query")
+			we := &WireError{
+				Severity: "ERROR",
+				Code:     "42601",
+				Message:  "[E2009] Syntax Error: empty query",
+			}
+			errPkt = encodeRichErrorResponse(we)
 		}
 		_ = sendResponse(conn, errPkt, encodeReadyForQuery('I'))
 		return
@@ -266,7 +281,8 @@ func (s *Server) executeQuery(ctx context.Context, conn net.Conn, session *Sessi
 				we := diagListToWireError(diagList)
 				errPkt = encodeRichErrorResponse(we)
 			} else {
-				errPkt = encodeErrorResponse("ERROR", "42P01", fmt.Sprintf("planning error: %v", err))
+				we := execErrToWireError(err)
+				errPkt = encodeRichErrorResponse(we)
 			}
 			_ = sendResponse(conn, errPkt, encodeReadyForQuery('I'))
 			return

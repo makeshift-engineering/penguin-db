@@ -78,13 +78,13 @@ func diagCodeToSQLSTATE(code diagnostic.Code) string {
 		return "42701" // duplicate_column
 	case planner.CodeInvalidDefaultValue:
 		return "22P02" // invalid_text_representation
-	case planner.CodeColumnNotFound:
+	case planner.CodeUnknownAlterColumn:
 		return "42703" // undefined_column
 	case planner.CodeCannotDropPKColumn:
 		return "42P16" // invalid_table_definition
-	case planner.CodeDatabaseExists:
+	case planner.CodeDuplicateDatabase:
 		return "42P04" // duplicate_database
-	case planner.CodeTableExists:
+	case planner.CodeDuplicateTable:
 		return "42P07" // duplicate_table
 	case planner.CodeUnsupportedDataType:
 		return "0A000" // feature_not_supported
@@ -146,13 +146,13 @@ func diagCodeToSQLSTATE(code diagnostic.Code) string {
 	case executor.CodeNumericOverflow:
 		return "22003" // numeric_value_out_of_range
 	case executor.CodeUnsupportedPlan,
-		executor.CodeUnsupportedExpr,
-		executor.CodeUnsupportedCond,
-		executor.CodeUnsupportedRelNode:
+		executor.CodeUnsupportedExpression,
+		executor.CodeUnsupportedCondition,
+		executor.CodeUnsupportedRelationalNode:
 		return "0A000" // feature_not_supported
 	case executor.CodeVarcharTooLong:
 		return "22001" // string_data_right_truncation
-	case executor.CodeUnsupportedAggFunc:
+	case executor.CodeUnsupportedAggregateFunction:
 		return "42883" // undefined_function
 	case executor.CodeColumnCountMismatch:
 		return "42611" // invalid_column_definition
@@ -282,46 +282,46 @@ func execErrToWireError(err error) *WireError {
 		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedPlan), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrUnsupportedExpr):
 		we.Code = "0A000" // feature_not_supported
-		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedExpr), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedExpression), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrUnsupportedCond):
 		we.Code = "0A000" // feature_not_supported
-		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedCond), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedCondition), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrUnsupportedRelNode):
 		we.Code = "0A000" // feature_not_supported
-		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedRelNode), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedRelationalNode), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrUnsupportedAggFunc):
 		we.Code = "42883" // undefined_function
-		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedAggFunc), cleanExecMessage(err))
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedAggregateFunction), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrInvalidLikePattern):
 		we.Code = "22025" // invalid_escape_sequence
 		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeInvalidLikePattern), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrDatabaseExists):
 		we.Code = "42P04" // duplicate_database
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeDuplicateDatabase), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrTableExists):
 		we.Code = "42P07" // duplicate_table
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeDuplicateTable), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrDatabaseNotFound),
 		errors.Is(err, catalog.ErrCatalogDBMissing):
 		we.Code = "3D000" // invalid_catalog_name
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeUnknownDatabase), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrTableNotFound):
 		we.Code = "42P01" // undefined_table
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeUnknownTable), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrColumnNotFound),
 		errors.Is(err, catalog.ErrPKColumnNotFound):
 		we.Code = "42703" // undefined_column
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeUnknownAlterColumn), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrDuplicateColumn):
 		we.Code = "42701" // duplicate_column
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeDuplicateColumn), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrCannotDropPKColumn),
 		errors.Is(err, catalog.ErrSchemaViolation):
 		we.Code = "42P16" // invalid_table_definition
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeCannotDropPKColumn), cleanExecMessage(err))
 	case errors.Is(err, catalog.ErrUnsupportedAlter):
 		we.Code = "0A000" // feature_not_supported
-		we.Message = cleanExecMessage(err)
+		we.Message = fmt.Sprintf("[E%d] %s", int(planner.CodeUnsupportedAlter), cleanExecMessage(err))
 	case errors.Is(err, context.DeadlineExceeded):
 		we.Code = "57014" // query_canceled
 		we.Message = "query execution timed out"
@@ -345,6 +345,12 @@ func cleanExecMessage(err error) string {
 	msg := err.Error()
 	for {
 		trimmed := msg
+		if strings.HasPrefix(trimmed, "executor: evaluating projection item ") {
+			rem := trimmed[len("executor: evaluating projection item "):]
+			if idx := strings.Index(rem, ": "); idx != -1 {
+				trimmed = rem[idx+2:]
+			}
+		}
 		for _, prefix := range []string{
 			"executor: evaluating INSERT value: ",
 			"executor: evaluating SET value: ",
@@ -376,6 +382,7 @@ func cleanExecMessage(err error) string {
 			"executor: ",
 			"catalog: ",
 			"kv: ",
+			"planner: ",
 		} {
 			trimmed = strings.TrimPrefix(trimmed, prefix)
 		}

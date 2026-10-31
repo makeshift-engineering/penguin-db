@@ -198,4 +198,72 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 	if strings.Contains(errMsg, "executor:") {
 		t.Errorf("internal executor prefix should not leak: %s", errMsg)
 	}
+
+	// 6. Execution Error: Omitted NOT NULL column (statement-level span fallback)
+	omitRes, err := sendQuery(conn, "INSERT INTO nn_test (id) VALUES (2);")
+	if err != nil {
+		t.Fatalf("unexpected network error: %v", err)
+	}
+	if len(omitRes) == 0 || omitRes[0].Err == nil {
+		t.Fatalf("expected error on omitted NOT NULL column, got %+v", omitRes)
+	}
+	omitMsg := omitRes[0].Err.Error()
+	t.Logf("\n[Omitted NOT NULL Column Response]:\n%s\n", omitMsg)
+	if !strings.Contains(omitMsg, "[E4002]") {
+		t.Errorf("expected [E4002] in omitted NOT NULL column error, got: %s", omitMsg)
+	}
+	if !strings.Contains(omitMsg, "23502") {
+		t.Errorf("expected SQLSTATE 23502 in omitted NOT NULL column error, got: %s", omitMsg)
+	}
+	if !strings.Contains(omitMsg, "^") {
+		t.Errorf("expected caret pointer in omitted NOT NULL column error, got: %s", omitMsg)
+	}
+
+	// 7. Execution Error: UPDATE duplicate primary key
+	_, err = sendQuery(conn, "INSERT INTO users VALUES (2);")
+	if err != nil {
+		t.Fatalf("setup user row failed: %v", err)
+	}
+	updRes, err := sendQuery(conn, "UPDATE users SET id = 1 WHERE id = 2;")
+	if err != nil {
+		t.Fatalf("unexpected network error: %v", err)
+	}
+	if len(updRes) == 0 || updRes[0].Err == nil {
+		t.Fatalf("expected error on UPDATE duplicate PK, got %+v", updRes)
+	}
+	updMsg := updRes[0].Err.Error()
+	t.Logf("\n[UPDATE Duplicate PK Response]:\n%s\n", updMsg)
+	if !strings.Contains(updMsg, "[E4003]") {
+		t.Errorf("expected [E4003] in UPDATE duplicate PK error, got: %s", updMsg)
+	}
+	if !strings.Contains(updMsg, "23505") {
+		t.Errorf("expected SQLSTATE 23505 in UPDATE duplicate PK error, got: %s", updMsg)
+	}
+	if !strings.Contains(updMsg, "^") {
+		t.Errorf("expected caret pointer in UPDATE duplicate PK error, got: %s", updMsg)
+	}
+
+	// 8. Execution Error: VARCHAR length exceeded
+	_, err = sendQuery(conn, "CREATE TABLE vc_test (id INT PRIMARY KEY, tag VARCHAR(4));")
+	if err != nil {
+		t.Fatalf("setup table failed: %v", err)
+	}
+	vcRes, err := sendQuery(conn, "INSERT INTO vc_test VALUES (1, 'TOO_LONG_STRING');")
+	if err != nil {
+		t.Fatalf("unexpected network error: %v", err)
+	}
+	if len(vcRes) == 0 || vcRes[0].Err == nil {
+		t.Fatalf("expected error on VARCHAR too long, got %+v", vcRes)
+	}
+	vcMsg := vcRes[0].Err.Error()
+	t.Logf("\n[VARCHAR Too Long Response]:\n%s\n", vcMsg)
+	if !strings.Contains(vcMsg, "[E4007]") {
+		t.Errorf("expected [E4007] in VARCHAR too long error, got: %s", vcMsg)
+	}
+	if !strings.Contains(vcMsg, "22001") {
+		t.Errorf("expected SQLSTATE 22001 in VARCHAR too long error, got: %s", vcMsg)
+	}
+	if !strings.Contains(vcMsg, "^") {
+		t.Errorf("expected caret pointer in VARCHAR too long error, got: %s", vcMsg)
+	}
 }
