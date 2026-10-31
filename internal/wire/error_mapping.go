@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/makeshift-engineering/penguin-db/internal/bridge/catalog"
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
@@ -131,6 +132,33 @@ func diagCodeToSQLSTATE(code diagnostic.Code) string {
 		return "01003"
 	case planner.CodeNullAggregate:
 		return "01003"
+
+	// ── Executor (4000–4999) ─────────────────────────────────────────────
+	case executor.CodeNullPrimaryKey,
+		executor.CodeNotNullViolation:
+		return "23502" // not_null_violation
+	case executor.CodeDuplicateKey:
+		return "23505" // unique_violation
+	case executor.CodeTypeMismatch:
+		return "42804" // datatype_mismatch
+	case executor.CodeDivisionByZero:
+		return "22012" // division_by_zero
+	case executor.CodeNumericOverflow:
+		return "22003" // numeric_value_out_of_range
+	case executor.CodeUnsupportedPlan,
+		executor.CodeUnsupportedExpr,
+		executor.CodeUnsupportedCond,
+		executor.CodeUnsupportedRelNode:
+		return "0A000" // feature_not_supported
+	case executor.CodeVarcharTooLong:
+		return "22001" // string_data_right_truncation
+	case executor.CodeUnsupportedAggFunc:
+		return "42883" // undefined_function
+	case executor.CodeColumnCountMismatch:
+		return "42611" // invalid_column_definition
+	case executor.CodeInvalidLikePattern:
+		return "22025" // invalid_escape_sequence
+
 	case planner.CodeMalformedAST:
 		return "XX000" // internal_error
 
@@ -172,11 +200,11 @@ func diagToWireError(d *diagnostic.Diagnostic) *WireError {
 	// PostgreSQL Position is a 1-based character offset from the start of the
 	// query string. psql uses it to render the caret on the correct line.
 	if d.Span.Start.Offset >= 0 && d.Span.Start.Line > 0 {
-		position := d.Span.Start.Offset
-		if d.Source != nil && position <= len(d.Source.Text) {
-			position = len([]rune(d.Source.Text[:position]))
+		if d.Source != nil && d.Span.Start.Offset <= len(d.Source.Text) {
+			we.Position = utf8.RuneCountInString(d.Source.Text[:d.Span.Start.Offset]) + 1
+		} else {
+			we.Position = d.Span.Start.Offset + 1
 		}
-		we.Position = position + 1
 	}
 
 	// Include the source snippet as Detail for clients that display it.
@@ -217,6 +245,11 @@ func diagListToWireError(dl diagnostic.List) *WireError {
 // with an appropriate SQLSTATE code. Internal details that are unsafe for
 // end-user display are sanitised.
 func execErrToWireError(err error) *WireError {
+	var d *diagnostic.Diagnostic
+	if errors.As(err, &d) && d != nil {
+		return diagToWireError(d)
+	}
+
 	we := &WireError{Severity: "ERROR"}
 
 	switch {
@@ -241,6 +274,24 @@ func execErrToWireError(err error) *WireError {
 	case errors.Is(err, executor.ErrColumnCountMismatch):
 		we.Code = "42611" // invalid_column_definition
 		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeColumnCountMismatch), cleanExecMessage(err))
+	case errors.Is(err, executor.ErrNumericOverflow):
+		we.Code = "22003" // numeric_value_out_of_range
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeNumericOverflow), cleanExecMessage(err))
+	case errors.Is(err, executor.ErrUnsupportedPlan):
+		we.Code = "0A000" // feature_not_supported
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedPlan), cleanExecMessage(err))
+	case errors.Is(err, executor.ErrUnsupportedExpr):
+		we.Code = "0A000" // feature_not_supported
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedExpr), cleanExecMessage(err))
+	case errors.Is(err, executor.ErrUnsupportedCond):
+		we.Code = "0A000" // feature_not_supported
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedCond), cleanExecMessage(err))
+	case errors.Is(err, executor.ErrUnsupportedRelNode):
+		we.Code = "0A000" // feature_not_supported
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedRelNode), cleanExecMessage(err))
+	case errors.Is(err, executor.ErrUnsupportedAggFunc):
+		we.Code = "42883" // undefined_function
+		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeUnsupportedAggFunc), cleanExecMessage(err))
 	case errors.Is(err, executor.ErrInvalidLikePattern):
 		we.Code = "22025" // invalid_escape_sequence
 		we.Message = fmt.Sprintf("[E%d] %s", int(executor.CodeInvalidLikePattern), cleanExecMessage(err))
@@ -302,6 +353,18 @@ func cleanExecMessage(err error) string {
 			"executor: writing INSERT: ",
 			"executor: writing DELETE: ",
 			"executor: writing UPDATE: ",
+			"executor: writing CREATE DATABASE: ",
+			"executor: writing DROP DATABASE: ",
+			"executor: writing CREATE TABLE: ",
+			"executor: writing DROP TABLE: ",
+			"executor: writing ALTER TABLE: ",
+			"executor: writing RENAME TABLE: ",
+			"executor: building CREATE DATABASE ops: ",
+			"executor: building DROP DATABASE ops: ",
+			"executor: building CREATE TABLE ops: ",
+			"executor: building DROP TABLE ops: ",
+			"executor: building ALTER TABLE ops: ",
+			"executor: building RENAME TABLE ops: ",
 			"executor: writing INSERT ... SELECT: ",
 			"executor: executing INSERT ... SELECT source: ",
 			"executor: checking PK existence: ",

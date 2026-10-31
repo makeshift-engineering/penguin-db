@@ -123,17 +123,25 @@ func (d *Diagnostic) Snippet() string {
 	if startCol < 1 {
 		startCol = 1
 	}
-	pad := strings.Repeat(" ", startCol-1)
+	lineRunes := []rune(line)
+	var pad strings.Builder
+	for i := 0; i < startCol-1; i++ {
+		if i < len(lineRunes) && lineRunes[i] == '\t' {
+			pad.WriteRune('\t')
+		} else {
+			pad.WriteRune(' ')
+		}
+	}
 	var width int
 	if d.Span.Start.Line != d.Span.End.Line {
-		width = len([]rune(line)) - startCol + 1
+		width = len(lineRunes) - startCol + 1
 	} else {
 		width = d.Span.End.Col - startCol
 	}
 	if width < 1 {
 		width = 1
 	}
-	return fmt.Sprintf("  %s\n  %s%s", line, pad, strings.Repeat("^", width))
+	return fmt.Sprintf("  %s\n  %s%s", line, pad.String(), strings.Repeat("^", width))
 }
 
 // FullString is the human display: error line + source snippet.

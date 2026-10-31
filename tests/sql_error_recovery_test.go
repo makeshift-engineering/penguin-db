@@ -142,7 +142,60 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 	if !strings.Contains(errMsg, "23505") {
 		t.Errorf("expected SQLSTATE 23505 in duplicate PK error, got: %s", errMsg)
 	}
+	if !strings.Contains(errMsg, "^") {
+		t.Errorf("expected caret pointer in duplicate PK error, got: %s", errMsg)
+	}
 	if strings.Contains(errMsg, "executor:") || strings.Contains(errMsg, "rpc error") {
 		t.Errorf("internal executor/gRPC prefixes should not leak: %s", errMsg)
+	}
+
+	// 4. Execution Error: division by zero
+	divRes, err := sendQuery(conn, "SELECT 10 / 0;")
+	if err != nil {
+		t.Fatalf("unexpected network error: %v", err)
+	}
+	if len(divRes) == 0 || divRes[0].Err == nil {
+		t.Fatalf("expected error on division by zero, got %+v", divRes)
+	}
+	errMsg = divRes[0].Err.Error()
+	t.Logf("\n[Division By Zero Error Response]:\n%s\n", errMsg)
+	if !strings.Contains(errMsg, "[E4005]") {
+		t.Errorf("expected [E4005] in division by zero error, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "22012") {
+		t.Errorf("expected SQLSTATE 22012 in division by zero error, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "^") {
+		t.Errorf("expected caret pointer in division by zero error, got: %s", errMsg)
+	}
+	if strings.Contains(errMsg, "executor:") {
+		t.Errorf("internal executor prefix should not leak: %s", errMsg)
+	}
+
+	// 5. Execution Error: NOT NULL violation
+	_, err = sendQuery(conn, "CREATE TABLE nn_test (id INT PRIMARY KEY, name TEXT NOT NULL);")
+	if err != nil {
+		t.Fatalf("setup table failed: %v", err)
+	}
+	nnRes, err := sendQuery(conn, "INSERT INTO nn_test VALUES (1, NULL);")
+	if err != nil {
+		t.Fatalf("unexpected network error: %v", err)
+	}
+	if len(nnRes) == 0 || nnRes[0].Err == nil {
+		t.Fatalf("expected error on NOT NULL violation, got %+v", nnRes)
+	}
+	errMsg = nnRes[0].Err.Error()
+	t.Logf("\n[NOT NULL Violation Response]:\n%s\n", errMsg)
+	if !strings.Contains(errMsg, "[E4002]") {
+		t.Errorf("expected [E4002] in NOT NULL violation error, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "23502") {
+		t.Errorf("expected SQLSTATE 23502 in NOT NULL violation error, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "^") {
+		t.Errorf("expected caret pointer in NOT NULL violation error, got: %s", errMsg)
+	}
+	if strings.Contains(errMsg, "executor:") {
+		t.Errorf("internal executor prefix should not leak: %s", errMsg)
 	}
 }

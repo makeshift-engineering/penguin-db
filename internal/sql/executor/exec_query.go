@@ -151,7 +151,7 @@ func (e *Executor) execProject(ctx context.Context, node *planner.ProjectNode) (
 		for i, item := range node.Items {
 			v, err := evalExpr(item.Expr, r)
 			if err != nil {
-				return nil, fmt.Errorf("executor: evaluating projection item %d: %w", i, err)
+				return nil, withSpan(fmt.Errorf("executor: evaluating projection item %d: %w", i, err), item.Expr.Span())
 			}
 			vals[i] = v
 		}

@@ -2,8 +2,10 @@ package executor
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/planner"
 )
 
 // Executor diagnostic codes occupy the 4000–4999 range.
@@ -21,6 +23,7 @@ const (
 	CodeUnsupportedAggFunc  diagnostic.Code = 4011
 	CodeColumnCountMismatch diagnostic.Code = 4012
 	CodeInvalidLikePattern  diagnostic.Code = 4013
+	CodeNumericOverflow     diagnostic.Code = 4014
 )
 
 // Sentinel errors returned by the executor.
@@ -81,3 +84,179 @@ var (
 	// not a string.
 	ErrInvalidLikePattern = errors.New("executor: LIKE pattern must be a string")
 )
+
+// SpannedError binds an execution error to a source diagnostic.Span.
+type SpannedError struct {
+	Err  error
+	Span diagnostic.Span
+}
+
+func (e *SpannedError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *SpannedError) Unwrap() error {
+	return e.Err
+}
+
+func (e *SpannedError) ErrorSpan() diagnostic.Span {
+	return e.Span
+}
+
+// withSpan attaches a span to err unless err already carries a valid span.
+func withSpan(err error, span diagnostic.Span) error {
+	if err == nil || span.Start.Line <= 0 {
+		return err
+	}
+	type spanned interface {
+		ErrorSpan() diagnostic.Span
+	}
+	var sp spanned
+	if errors.As(err, &sp) && sp.ErrorSpan().Start.Line > 0 {
+		return err
+	}
+	return &SpannedError{Err: err, Span: span}
+}
+
+// ExecutionDiagnosticError wraps an executor error with structured compiler diagnostics,
+// including line, column, source code snippet, and carets (^^^^).
+type ExecutionDiagnosticError struct {
+	Diagnostic *diagnostic.Diagnostic
+	Err        error
+}
+
+func (e *ExecutionDiagnosticError) Error() string {
+	if e.Diagnostic != nil {
+		return e.Diagnostic.FullString()
+	}
+	return e.Err.Error()
+}
+
+func (e *ExecutionDiagnosticError) Unwrap() error {
+	return e.Err
+}
+
+func (e *ExecutionDiagnosticError) As(target any) bool {
+	if d, ok := target.(**diagnostic.Diagnostic); ok {
+		*d = e.Diagnostic
+		return true
+	}
+	return errors.As(e.Err, target)
+}
+
+func (e *ExecutionDiagnosticError) ErrorSpan() diagnostic.Span {
+	if e.Diagnostic != nil {
+		return e.Diagnostic.Span
+	}
+	return diagnostic.Span{}
+}
+
+func errorCodeForExecutorError(err error) diagnostic.Code {
+	switch {
+	case errors.Is(err, ErrNullPrimaryKey):
+		return CodeNullPrimaryKey
+	case errors.Is(err, ErrNotNullViolation):
+		return CodeNotNullViolation
+	case errors.Is(err, ErrDuplicateKey):
+		return CodeDuplicateKey
+	case errors.Is(err, ErrDivisionByZero):
+		return CodeDivisionByZero
+	case errors.Is(err, ErrNumericOverflow):
+		return CodeNumericOverflow
+	case errors.Is(err, ErrVarcharTooLong):
+		return CodeVarcharTooLong
+	case errors.Is(err, ErrTypeMismatch):
+		return CodeTypeMismatch
+	case errors.Is(err, ErrColumnCountMismatch):
+		return CodeColumnCountMismatch
+	case errors.Is(err, ErrInvalidLikePattern):
+		return CodeInvalidLikePattern
+	case errors.Is(err, ErrUnsupportedPlan):
+		return CodeUnsupportedPlan
+	case errors.Is(err, ErrUnsupportedExpr):
+		return CodeUnsupportedExpr
+	case errors.Is(err, ErrUnsupportedCond):
+		return CodeUnsupportedCond
+	case errors.Is(err, ErrUnsupportedRelNode):
+		return CodeUnsupportedRelNode
+	case errors.Is(err, ErrUnsupportedAggFunc):
+		return CodeUnsupportedAggFunc
+	default:
+		return diagnostic.Code(4999)
+	}
+}
+
+func cleanErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	for {
+		trimmed := msg
+		for _, prefix := range []string{
+			"executor: evaluating INSERT value: ",
+			"executor: evaluating SET value: ",
+			"executor: converting value for column ",
+			"executor: converting updated value for column ",
+			"executor: writing INSERT ... SELECT: ",
+			"executor: executing INSERT ... SELECT source: ",
+			"executor: writing INSERT: ",
+			"executor: writing DELETE: ",
+			"executor: writing UPDATE: ",
+			"executor: ",
+		} {
+			trimmed = strings.TrimPrefix(trimmed, prefix)
+		}
+		if trimmed == msg {
+			break
+		}
+		msg = trimmed
+	}
+	msg = strings.ReplaceAll(msg, ": executor: ", ": ")
+	msg = strings.TrimPrefix(msg, "executor: ")
+	return msg
+}
+
+func enrichExecutorError(err error, plan planner.Plan) error {
+	if err == nil {
+		return nil
+	}
+	var existingDiag *diagnostic.Diagnostic
+	if errors.As(err, &existingDiag) && existingDiag != nil {
+		return err
+	}
+
+	type spanned interface {
+		ErrorSpan() diagnostic.Span
+	}
+	var sp spanned
+	if !errors.As(err, &sp) {
+		return err
+	}
+	span := sp.ErrorSpan()
+	if span.Start.Line <= 0 {
+		return err
+	}
+
+	var src *diagnostic.Source
+	if plan != nil {
+		src = plan.PlanSource()
+	}
+
+	code := errorCodeForExecutorError(err)
+	msg := cleanErrorMessage(err)
+
+	diag := &diagnostic.Diagnostic{
+		Severity: diagnostic.SeverityError,
+		Code:     code,
+		Category: "Runtime Error",
+		Span:     span,
+		Msg:      msg,
+		Source:   src,
+	}
+
+	return &ExecutionDiagnosticError{
+		Diagnostic: diag,
+		Err:        err,
+	}
+}
