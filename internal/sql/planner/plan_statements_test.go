@@ -37,8 +37,8 @@ func TestPlanCreateDatabase_Success(t *testing.T) {
 func TestPlanCreateDatabase_AlreadyExists(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{}, nil)
 	_, err := pc.planCreateDatabase(&ast.CreateDatabaseStmt{Name: "shop"})
-	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeDatabaseExists {
-		t.Errorf("expected CodeDatabaseExists, got err=%v diag=%+v", err, pc.diag)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeDuplicateDatabase {
+		t.Errorf("expected CodeDuplicateDatabase, got err=%v diag=%+v", err, pc.diag)
 	}
 }
 
@@ -159,8 +159,8 @@ func TestPlanCreateTable_AlreadyExists(t *testing.T) {
 	pc := newPlanContext(testCatalog(), Session{ActiveDatabase: "shop"}, nil)
 	stmt := &ast.CreateTableStmt{Table: ident("users"), Columns: []*ast.ColumnDef{colDef("id", ast.TypeInt)}}
 	_, err := pc.planCreateTable(stmt)
-	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeTableExists {
-		t.Errorf("expected CodeTableExists, got err=%v diag=%+v", err, pc.diag)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeDuplicateTable {
+		t.Errorf("expected CodeDuplicateTable, got err=%v diag=%+v", err, pc.diag)
 	}
 }
 
@@ -365,8 +365,8 @@ func TestPlanAlterTable_ModifyUnknownColumn_Errors(t *testing.T) {
 		Action: &ast.AlterAction{Kind: ast.AlterModify, Column: colDef("nope", ast.TypeInt)},
 	}
 	_, err := pc.planAlterTable(stmt)
-	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeColumnNotFound {
-		t.Errorf("expected CodeColumnNotFound, got err=%v diag=%+v", err, pc.diag)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeUnknownAlterColumn {
+		t.Errorf("expected CodeUnknownAlterColumn, got err=%v diag=%+v", err, pc.diag)
 	}
 }
 
@@ -449,8 +449,8 @@ func TestPlanAlterTable_RenameTable_TargetExists_Errors(t *testing.T) {
 		Action: &ast.AlterAction{Kind: ast.AlterRenameTable, NewName: "users"},
 	}
 	_, err := pc.planAlterTable(stmt)
-	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeTableExists {
-		t.Errorf("expected CodeTableExists, got err=%v diag=%+v", err, pc.diag)
+	if err == nil || pc.diag[len(pc.diag)-1].Code != CodeDuplicateTable {
+		t.Errorf("expected CodeDuplicateTable, got err=%v diag=%+v", err, pc.diag)
 	}
 }
 

@@ -72,6 +72,12 @@ func LoadFixedConfig() *GatewayConfig {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Gateway server error: %v", err)
+	}
+}
+
+func run() error {
 	portFlag := flag.Int("port", 0, "PenguinDB pgwire TCP server port (overrides config.json)")
 	pFlag := flag.Int("p", 0, "PenguinDB pgwire TCP server port short (overrides config.json)")
 	storageAddrFlag := flag.String("storage-addr", "", "Remote storage node gRPC address (overrides config.json)")
@@ -92,7 +98,7 @@ func main() {
 	log.Printf("Connecting Gateway to storage gRPC server at %s...", cfg.StorageAddr)
 	conn, err := grpc.NewClient(cfg.StorageAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Failed to connect to storage node at %s: %v", cfg.StorageAddr, err)
+		return fmt.Errorf("failed to connect to storage node at %s: %w", cfg.StorageAddr, err)
 	}
 	defer conn.Close()
 
@@ -120,6 +126,7 @@ func main() {
 
 	log.Printf("PenguinDB SQL Gateway Server listening on pgwire port %d (connected to storage node at %s)...", cfg.PGWirePort, cfg.StorageAddr)
 	if err := server.Start(ctx); err != nil {
-		log.Fatalf("Gateway server error: %v", err)
+		return fmt.Errorf("gateway server error: %w", err)
 	}
+	return nil
 }

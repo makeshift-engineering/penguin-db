@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -21,6 +22,17 @@ type row struct {
 // evalExpr evaluates a resolved expression against a concrete row,
 // returning the result as a Go any value. NULL is represented as nil.
 func evalExpr(expr planner.ResolvedExpr, r row) (any, error) {
+	val, err := evalExprInternal(expr, r)
+	if err != nil {
+		if expr != nil {
+			return nil, withSpan(err, expr.Span())
+		}
+		return nil, err
+	}
+	return val, nil
+}
+
+func evalExprInternal(expr planner.ResolvedExpr, r row) (any, error) {
 	switch e := expr.(type) {
 	case *planner.ResolvedIntLiteral:
 		return e.Value, nil
@@ -169,6 +181,9 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 		}
 		result, err := computeDecimalArithmetic(e.Op, lr, rr)
 		if err != nil {
+			if errors.Is(err, ErrDivisionByZero) && e.Right != nil && e.Right.Span().Start.Line > 0 {
+				return nil, withSpan(err, e.Right.Span())
+			}
 			return nil, err
 		}
 		return coerceRatResult(result, e.ResolvedType())
@@ -178,6 +193,9 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 		ri, _ := toInt64(right)
 		result, err := computeIntegerArithmetic(e.Op, li, ri)
 		if err != nil {
+			if errors.Is(err, ErrDivisionByZero) && e.Right != nil && e.Right.Span().Start.Line > 0 {
+				return nil, withSpan(err, e.Right.Span())
+			}
 			return nil, err
 		}
 		return coerceIntegerResult(result, e.ResolvedType())
@@ -194,6 +212,9 @@ func evalBinaryExpr(e *planner.ResolvedBinaryExpr, r row) (any, error) {
 
 	result, err := computeBinaryArithmetic(e.Op, lf, rf)
 	if err != nil {
+		if errors.Is(err, ErrDivisionByZero) && e.Right != nil && e.Right.Span().Start.Line > 0 {
+			return nil, withSpan(err, e.Right.Span())
+		}
 		return nil, err
 	}
 
@@ -246,6 +267,9 @@ type condResult struct {
 func evalCond(cond planner.ResolvedCond, r row) (bool, error) {
 	result, err := evalCondValue(cond, r)
 	if err != nil {
+		if cond != nil {
+			return false, withSpan(err, cond.Span())
+		}
 		return false, err
 	}
 	return result.value && !result.unknown, nil
@@ -253,6 +277,17 @@ func evalCond(cond planner.ResolvedCond, r row) (bool, error) {
 
 // evalCondValue evaluates a condition while preserving SQL UNKNOWN.
 func evalCondValue(cond planner.ResolvedCond, r row) (condResult, error) {
+	res, err := evalCondValueInternal(cond, r)
+	if err != nil {
+		if cond != nil {
+			return condResult{}, withSpan(err, cond.Span())
+		}
+		return condResult{}, err
+	}
+	return res, nil
+}
+
+func evalCondValueInternal(cond planner.ResolvedCond, r row) (condResult, error) {
 	switch c := cond.(type) {
 	case *planner.ResolvedComparison:
 		return evalComparisonValue(c, r)

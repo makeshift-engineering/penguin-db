@@ -20,20 +20,20 @@ func (pc *planContext) resolveExpr(scope *Scope, expr ast.Expression) (ResolvedE
 	case *ast.FloatLiteral:
 		return pc.resolveFloatLiteral(e)
 	case *ast.StringLiteral:
-		return &ResolvedStringLiteral{ResolvedExprBase: newExprBase(ast.TypeText), Value: e.Value}, nil
+		return &ResolvedStringLiteral{ResolvedExprBase: newExprBaseWithSpan(ast.TypeText, e.Span()), Value: e.Value}, nil
 	case *ast.BooleanLiteral:
 		return &ResolvedBoolLiteral{
-			ResolvedExprBase: newExprBase(ast.TypeBoolean),
+			ResolvedExprBase: newExprBaseWithSpan(ast.TypeBoolean, e.Span()),
 			Value:            strings.EqualFold(e.Value, "TRUE"),
 		}, nil
 	case *ast.NullLiteral:
-		return &ResolvedNullLiteral{}, nil
+		return &ResolvedNullLiteral{LiteralSpan: e.Span()}, nil
 	case *ast.Identifier:
 		col, err := pc.resolveColumn(scope, e)
 		if err != nil {
 			return nil, err
 		}
-		return &ResolvedColumnRef{Column: *col}, nil
+		return &ResolvedColumnRef{Column: *col, RefSpan: e.Span()}, nil
 	case *ast.ParenExpr:
 		return pc.resolveExpr(scope, e.Inner)
 	case *ast.BinaryExpr:
@@ -76,7 +76,7 @@ func (pc *planContext) parseIntLiteral(raw, displayVal string, span diagnostic.S
 	if v >= math.MinInt32 && v <= math.MaxInt32 {
 		t = ast.TypeInt
 	}
-	return &ResolvedIntLiteral{ResolvedExprBase: newExprBase(t), Value: v}, nil
+	return &ResolvedIntLiteral{ResolvedExprBase: newExprBaseWithSpan(t, span), Value: v}, nil
 }
 
 func (pc *planContext) resolveIntLiteral(lit *ast.IntegerLiteral) (ResolvedExpr, error) {
@@ -88,7 +88,7 @@ func (pc *planContext) resolveFloatLiteral(lit *ast.FloatLiteral) (ResolvedExpr,
 	if err != nil {
 		return nil, pc.errorf(lit.Span(), CodeLiteralOverflow, "float literal %q is invalid: %v", lit.Value, err)
 	}
-	return &ResolvedFloatLiteral{ResolvedExprBase: newExprBase(ast.TypeDouble), Value: v}, nil
+	return &ResolvedFloatLiteral{ResolvedExprBase: newExprBaseWithSpan(ast.TypeDouble, lit.Span()), Value: v}, nil
 }
 
 func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (ResolvedExpr, error) {
@@ -108,7 +108,7 @@ func (pc *planContext) resolveBinaryExpr(scope *Scope, be *ast.BinaryExpr) (Reso
 			be.Op, exprTypeName(left), exprTypeName(right),
 		)
 	}
-	return &ResolvedBinaryExpr{ResolvedExprBase: newExprBase(resultType), Left: left, Op: tokenToOp(be.Op), Right: right}, nil
+	return &ResolvedBinaryExpr{ResolvedExprBase: newExprBaseWithSpan(resultType, be.Span()), Left: left, Op: tokenToOp(be.Op), Right: right}, nil
 }
 
 func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (ResolvedExpr, error) {
@@ -128,7 +128,7 @@ func (pc *planContext) resolveUnaryExpr(scope *Scope, ue *ast.UnaryExpr) (Resolv
 			"unary %s requires a numeric operand, got %s", ue.Op, exprTypeName(operand),
 		)
 	}
-	return &ResolvedUnaryExpr{ResolvedExprBase: newExprBase(resultType), Op: tokenToOp(ue.Op), Operand: operand}, nil
+	return &ResolvedUnaryExpr{ResolvedExprBase: newExprBaseWithSpan(resultType, ue.Span()), Op: tokenToOp(ue.Op), Operand: operand}, nil
 }
 
 func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (ResolvedExpr, error) {
@@ -142,7 +142,7 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 			return nil, pc.errorf(fc.Span(), CodeInvalidFunctionArgs, "%s(*) is not supported; only COUNT(*) is", name)
 		}
 		return &ResolvedFunctionCall{
-			ResolvedExprBase: newExprBase(ast.TypeBigInt),
+			ResolvedExprBase: newExprBaseWithSpan(ast.TypeBigInt, fc.Span()),
 			Name:             name,
 			Distinct:         fc.Distinct,
 			Star:             true,
@@ -182,7 +182,7 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 			pc.warnf(fc.Span(), CodeNullAggregate, "%s(NULL) is always NULL", name)
 		}
 		return &ResolvedFunctionCall{
-			ResolvedExprBase: newExprBase(resultType),
+			ResolvedExprBase: newExprBaseWithSpan(resultType, fc.Span()),
 			Name:             name,
 			Distinct:         fc.Distinct,
 			Args:             []ResolvedExpr{arg},
@@ -198,7 +198,7 @@ func (pc *planContext) resolveFunctionCall(scope *Scope, fc *ast.FunctionCall) (
 	}
 
 	return &ResolvedFunctionCall{
-		ResolvedExprBase: newExprBase(resultType),
+		ResolvedExprBase: newExprBaseWithSpan(resultType, fc.Span()),
 		Name:             name,
 		Distinct:         fc.Distinct,
 		Args:             []ResolvedExpr{arg},

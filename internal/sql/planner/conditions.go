@@ -1,17 +1,23 @@
 package planner
 
+import "github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
+
 // ResolvedCond is the sealed interface for a fully resolved boolean
 // condition. Unlike ResolvedExpr, it carries no type field: every
 // ResolvedCond is boolean by definition.
 type ResolvedCond interface {
 	resolvedCondNode()
+	Span() diagnostic.Span
 }
 
 // ResolvedCondBase is embedded in every ResolvedCond implementation to
 // satisfy the interface's marker method.
-type ResolvedCondBase struct{}
+type ResolvedCondBase struct {
+	CondSpan diagnostic.Span
+}
 
-func (*ResolvedCondBase) resolvedCondNode() {}
+func (*ResolvedCondBase) resolvedCondNode()       {}
+func (b *ResolvedCondBase) Span() diagnostic.Span { return b.CondSpan }
 
 // ResolvedBinaryCond joins two conditions with AND or OR.
 type ResolvedBinaryCond struct {

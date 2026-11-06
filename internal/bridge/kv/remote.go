@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"google.golang.org/grpc/codes"
@@ -103,13 +104,35 @@ func (r *RemoteKV) WriteBatch(ctx context.Context, ops []Op) error {
 	return mapGRPCError(err)
 }
 
-// mapGRPCError translates gRPC status codes to standard kv sentinel errors.
+// mapGRPCError translates gRPC status codes to clean, user-safe kv errors.
+// It strips the "rpc error: code = ... desc = ..." framing so internal
+// details never leak to higher layers.
 func mapGRPCError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if status.Code(err) == codes.NotFound {
-		return ErrKeyNotFound
+
+	st, ok := status.FromError(err)
+	if !ok {
+		return err // not a gRPC error, pass through
 	}
-	return err
+
+	switch st.Code() {
+	case codes.NotFound:
+		return ErrKeyNotFound
+	case codes.Unavailable:
+		return fmt.Errorf("kv: storage server unavailable: %s", st.Message())
+	case codes.DeadlineExceeded:
+		return context.DeadlineExceeded
+	case codes.Canceled:
+		return context.Canceled
+	case codes.InvalidArgument:
+		return fmt.Errorf("kv: invalid argument: %s", st.Message())
+	case codes.FailedPrecondition:
+		return fmt.Errorf("kv: precondition failed: %s", st.Message())
+	case codes.Internal:
+		return errors.New("kv: internal storage error")
+	default:
+		return fmt.Errorf("kv: storage error: %s", st.Message())
+	}
 }

@@ -181,35 +181,3 @@ UPDATE appointments SET status = 'COMPLETED' WHERE id = 503;
 DELETE FROM patients WHERE id = 107;
 
 DELETE FROM prescriptions WHERE id = 819;
-
-SELECT id, name, specialty, years_exp FROM doctors ORDER BY years_exp DESC;
-
-SELECT id, name, age, blood_type FROM patients WHERE age >= 50 ORDER BY age DESC;
-
-SELECT id, patient_id, doctor_id, status FROM appointments WHERE status = 'COMPLETED' ORDER BY id ASC;
-
-SELECT id, patient_id, medication, dosage FROM prescriptions WHERE medication = 'Amoxicillin' ORDER BY id ASC;
-
-SELECT count(*) FROM patients;
-
-SELECT count(*) FROM appointments WHERE status = 'SCHEDULED';
-
-SELECT min(age), max(age), avg(age) FROM patients;
-
-SELECT doctor_id, count(*) FROM patients GROUP BY doctor_id ORDER BY doctor_id ASC;
-
-SELECT blood_type, count(*) FROM patients GROUP BY blood_type ORDER BY blood_type ASC;
-
-SELECT patients.id, patients.name, doctors.name FROM patients INNER JOIN doctors ON patients.doctor_id = doctors.id ORDER BY patients.id ASC;
-
-SELECT appointments.id, patients.name, doctors.name, appointments.status FROM appointments INNER JOIN patients ON appointments.patient_id = patients.id INNER JOIN doctors ON appointments.doctor_id = doctors.id ORDER BY appointments.id ASC;
-
-SELECT patients.id, patients.name, prescriptions.medication FROM patients INNER JOIN prescriptions ON patients.id = prescriptions.patient_id ORDER BY patients.id ASC;
-
-SELECT id, name, age FROM patients WHERE age > 30 AND blood_type = 'A+' ORDER BY id ASC;
-
-SELECT id, name, age FROM patients WHERE blood_type = 'O+' OR blood_type = 'O-' ORDER BY id ASC;
-
-SELECT id, name, age FROM patients ORDER BY age DESC LIMIT 5;
-
-SELECT id, name, age FROM patients ORDER BY age DESC LIMIT 5 OFFSET 5;

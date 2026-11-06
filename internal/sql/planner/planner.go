@@ -45,6 +45,14 @@ func (p *Planner) Plan(ctx context.Context, stmt ast.Statement, session Session,
 		pc.ctx = ctx
 	}
 	plan, err := pc.planStatement(stmt)
+	if err == nil && plan != nil {
+		if src != nil {
+			plan.SetPlanSource(src)
+		}
+		if stmt != nil {
+			plan.SetPlanSpan(stmt.Span())
+		}
+	}
 	return plan, pc.diag, err
 }
 

@@ -148,35 +148,3 @@ UPDATE enrollments SET score = 86.0 WHERE id = 503;
 DELETE FROM students WHERE id = 18;
 
 DELETE FROM enrollments WHERE student_id = 18;
-
-SELECT id, name, gpa FROM students ORDER BY id ASC;
-
-SELECT id, name, gpa FROM students WHERE gpa >= 3.50 ORDER BY gpa DESC;
-
-SELECT id, course_name, credits FROM courses WHERE credits = 4 ORDER BY id ASC;
-
-SELECT id, name, department FROM instructors ORDER BY id ASC;
-
-SELECT count(*) FROM students;
-
-SELECT count(*) FROM students WHERE enrollment_year = 2023;
-
-SELECT min(gpa), max(gpa), avg(gpa) FROM students;
-
-SELECT avg(score) FROM enrollments;
-
-SELECT course_id, count(*) FROM enrollments GROUP BY course_id ORDER BY course_id ASC;
-
-SELECT grade, count(*) FROM enrollments GROUP BY grade ORDER BY grade ASC;
-
-SELECT students.id, students.name, enrollments.course_id, enrollments.grade FROM students INNER JOIN enrollments ON students.id = enrollments.student_id ORDER BY students.id ASC;
-
-SELECT instructors.name, courses.course_name FROM instructors INNER JOIN courses ON instructors.id = courses.instructor_id ORDER BY instructors.id ASC;
-
-SELECT students.name, students.gpa FROM students WHERE gpa > 3.00 AND enrollment_year >= 2022 ORDER BY gpa DESC;
-
-SELECT id, name FROM students WHERE enrollment_year = 2021 OR enrollment_year = 2024 ORDER BY id ASC;
-
-SELECT id, name, gpa FROM students ORDER BY gpa DESC LIMIT 5;
-
-SELECT id, name, gpa FROM students ORDER BY gpa DESC LIMIT 5 OFFSET 5;

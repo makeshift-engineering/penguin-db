@@ -16,7 +16,7 @@ func (pc *planContext) resolveCond(scope *Scope, cond ast.Condition) (ResolvedCo
 		if err != nil {
 			return nil, err
 		}
-		return &ResolvedNotCond{Operand: operand}, nil
+		return &ResolvedNotCond{ResolvedCondBase: ResolvedCondBase{CondSpan: c.Span()}, Operand: operand}, nil
 	case *ast.ComparisonPredicate:
 		return pc.resolveComparison(scope, c)
 	case *ast.LikePredicate:
@@ -45,7 +45,7 @@ func (pc *planContext) resolveBinaryCond(scope *Scope, bc *ast.BinaryCondition) 
 	if err != nil {
 		return nil, err
 	}
-	return &ResolvedBinaryCond{Left: left, Op: tokenToOp(bc.Op), Right: right}, nil
+	return &ResolvedBinaryCond{ResolvedCondBase: ResolvedCondBase{CondSpan: bc.Span()}, Left: left, Op: tokenToOp(bc.Op), Right: right}, nil
 }
 
 func (pc *planContext) typeMismatchErr(span ast.Node, left, right ResolvedExpr) error {
@@ -111,7 +111,7 @@ func (pc *planContext) resolveComparison(scope *Scope, cp *ast.ComparisonPredica
 		}
 	}
 
-	return &ResolvedComparison{Left: left, Op: op, Right: right}, nil
+	return &ResolvedComparison{ResolvedCondBase: ResolvedCondBase{CondSpan: cp.Span()}, Left: left, Op: op, Right: right}, nil
 }
 
 func (pc *planContext) resolveLike(scope *Scope, lp *ast.LikePredicate) (ResolvedCond, error) {
@@ -129,7 +129,7 @@ func (pc *planContext) resolveLike(scope *Scope, lp *ast.LikePredicate) (Resolve
 	if !isNullExpr(pattern) && !isStringType(pattern.ResolvedType()) {
 		return nil, pc.errorf(lp.Span(), CodeNonStringOperand, "LIKE pattern must be a string, got %s", exprTypeName(pattern))
 	}
-	return &ResolvedLike{Left: left, Pattern: pattern, Negated: lp.Negated}, nil
+	return &ResolvedLike{ResolvedCondBase: ResolvedCondBase{CondSpan: lp.Span()}, Left: left, Pattern: pattern, Negated: lp.Negated}, nil
 }
 
 func (pc *planContext) resolveIsNull(scope *Scope, in *ast.IsNullPredicate) (ResolvedCond, error) {
@@ -137,7 +137,7 @@ func (pc *planContext) resolveIsNull(scope *Scope, in *ast.IsNullPredicate) (Res
 	if err != nil {
 		return nil, err
 	}
-	return &ResolvedIsNull{Expr: expr, Negated: in.Negated}, nil
+	return &ResolvedIsNull{ResolvedCondBase: ResolvedCondBase{CondSpan: in.Span()}, Expr: expr, Negated: in.Negated}, nil
 }
 
 // resolveIn resolves every value in an IN list even after one fails or
@@ -180,7 +180,7 @@ func (pc *planContext) resolveIn(scope *Scope, ip *ast.InPredicate) (ResolvedCon
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return &ResolvedIn{Expr: expr, Values: values, Negated: ip.Negated}, nil
+	return &ResolvedIn{ResolvedCondBase: ResolvedCondBase{CondSpan: ip.Span()}, Expr: expr, Values: values, Negated: ip.Negated}, nil
 }
 
 func (pc *planContext) resolveBetween(scope *Scope, bp *ast.BetweenPredicate) (ResolvedCond, error) {
@@ -210,7 +210,7 @@ func (pc *planContext) resolveBetween(scope *Scope, bp *ast.BetweenPredicate) (R
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return &ResolvedBetween{Expr: expr, Low: low, High: high, Negated: bp.Negated}, nil
+	return &ResolvedBetween{ResolvedCondBase: ResolvedCondBase{CondSpan: bp.Span()}, Expr: expr, Low: low, High: high, Negated: bp.Negated}, nil
 }
 
 func (pc *planContext) resolveExprCond(scope *Scope, ec *ast.ExprCondition) (ResolvedCond, error) {
@@ -224,5 +224,5 @@ func (pc *planContext) resolveExprCond(scope *Scope, ec *ast.ExprCondition) (Res
 			"expression used as a condition must be boolean, got %s", exprTypeName(expr),
 		)
 	}
-	return &ResolvedExprCond{Expr: expr}, nil
+	return &ResolvedExprCond{ResolvedCondBase: ResolvedCondBase{CondSpan: ec.Span()}, Expr: expr}, nil
 }

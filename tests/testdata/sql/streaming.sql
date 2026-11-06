@@ -182,35 +182,3 @@ UPDATE watch_history SET completed = true WHERE id = 906;
 DELETE FROM subscribers WHERE id = 520;
 
 DELETE FROM watch_history WHERE id = 920;
-
-SELECT id, title, genre, release_year FROM shows ORDER BY id ASC;
-
-SELECT id, show_id, title, duration_min FROM episodes WHERE duration_min >= 50 ORDER BY duration_min DESC;
-
-SELECT id, username, plan, monthly_fee FROM subscribers WHERE plan = 'PREMIUM' ORDER BY id ASC;
-
-SELECT id, subscriber_id, episode_id, completed FROM watch_history WHERE completed = true ORDER BY id ASC;
-
-SELECT count(*) FROM subscribers;
-
-SELECT count(*) FROM episodes WHERE show_id = 4;
-
-SELECT min(duration_min), max(duration_min), avg(duration_min) FROM episodes;
-
-SELECT sum(monthly_fee) FROM subscribers;
-
-SELECT plan, count(*) FROM subscribers GROUP BY plan ORDER BY plan ASC;
-
-SELECT genre, count(*) FROM shows GROUP BY genre ORDER BY genre ASC;
-
-SELECT episodes.id, episodes.title, shows.title FROM episodes INNER JOIN shows ON episodes.show_id = shows.id ORDER BY episodes.id ASC;
-
-SELECT watch_history.id, subscribers.username, episodes.title FROM watch_history INNER JOIN subscribers ON watch_history.subscriber_id = subscribers.id INNER JOIN episodes ON watch_history.episode_id = episodes.id ORDER BY watch_history.id ASC;
-
-SELECT id, username, monthly_fee FROM subscribers WHERE monthly_fee > 10.00 AND plan = 'STANDARD' ORDER BY id ASC;
-
-SELECT id, title, duration_min FROM episodes WHERE show_id = 1 OR show_id = 3 ORDER BY id ASC;
-
-SELECT id, username, monthly_fee FROM subscribers ORDER BY monthly_fee DESC LIMIT 5;
-
-SELECT id, username, monthly_fee FROM subscribers ORDER BY monthly_fee DESC LIMIT 5 OFFSET 5;

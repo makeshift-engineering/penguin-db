@@ -2,6 +2,7 @@ package planner
 
 import (
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
+	"github.com/makeshift-engineering/penguin-db/internal/sql/diagnostic"
 )
 
 // ResolvedExpr is the sealed interface for a fully resolved, type-annotated
@@ -15,6 +16,7 @@ import (
 type ResolvedExpr interface {
 	resolvedExprNode()
 	ResolvedType() ast.DataTypeKind
+	Span() diagnostic.Span
 }
 
 // ResolvedExprBase is embedded in every ResolvedExpr implementation whose
@@ -25,15 +27,21 @@ type ResolvedExpr interface {
 // ResolvedConditionExpr, a fixed constant) implement ResolvedExpr directly
 // instead of embedding this.
 type ResolvedExprBase struct {
-	Type ast.DataTypeKind
+	Type     ast.DataTypeKind
+	ExprSpan diagnostic.Span
 }
 
 func (*ResolvedExprBase) resolvedExprNode()                {}
 func (b *ResolvedExprBase) ResolvedType() ast.DataTypeKind { return b.Type }
+func (b *ResolvedExprBase) Span() diagnostic.Span          { return b.ExprSpan }
 
 // newExprBase is a shorthand for constructing a ResolvedExprBase with a
 // given type, reducing the verbose ResolvedExprBase{Type: t} pattern that
 // appears at every expression construction site.
+func newExprBaseWithSpan(t ast.DataTypeKind, span diagnostic.Span) ResolvedExprBase {
+	return ResolvedExprBase{Type: t, ExprSpan: span}
+}
+
 func newExprBase(t ast.DataTypeKind) ResolvedExprBase {
 	return ResolvedExprBase{Type: t}
 }
@@ -70,20 +78,25 @@ type ResolvedBoolLiteral struct {
 // every type and every operator; callers must check for this type (via
 // isNullExpr) before consulting ResolvedType, whose return value here is a
 // meaningless placeholder.
-type ResolvedNullLiteral struct{}
+type ResolvedNullLiteral struct {
+	LiteralSpan diagnostic.Span
+}
 
 func (*ResolvedNullLiteral) resolvedExprNode()              {}
 func (*ResolvedNullLiteral) ResolvedType() ast.DataTypeKind { return ast.TypeNull }
+func (n *ResolvedNullLiteral) Span() diagnostic.Span        { return n.LiteralSpan }
 
 // ResolvedColumnRef is a resolved reference to a table column, produced by
 // looking an ast.Identifier up in a Scope. The column is stored by value
 // so that plan nodes never share a mutable pointer to the same metadata.
 type ResolvedColumnRef struct {
-	Column ResolvedColumn
+	Column  ResolvedColumn
+	RefSpan diagnostic.Span
 }
 
 func (*ResolvedColumnRef) resolvedExprNode()                {}
 func (r *ResolvedColumnRef) ResolvedType() ast.DataTypeKind { return r.Column.Type }
+func (r *ResolvedColumnRef) Span() diagnostic.Span          { return r.RefSpan }
 
 // ResolvedBinaryExpr is a resolved infix arithmetic expression. Type is the
 // promoted result type of Left and Right — see arithmeticResultType.
@@ -131,3 +144,9 @@ type ResolvedConditionExpr struct {
 
 func (*ResolvedConditionExpr) resolvedExprNode()              {}
 func (*ResolvedConditionExpr) ResolvedType() ast.DataTypeKind { return ast.TypeBoolean }
+func (r *ResolvedConditionExpr) Span() diagnostic.Span {
+	if r.Cond != nil {
+		return r.Cond.Span()
+	}
+	return diagnostic.Span{}
+}

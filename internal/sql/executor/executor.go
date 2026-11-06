@@ -38,6 +38,14 @@ func New(store kv.KV, cat *catalog.Catalog) *Executor {
 // returns the result. The context is threaded through to all KV
 // operations for cancellation and deadline support.
 func (e *Executor) Execute(ctx context.Context, plan planner.Plan) (*Result, error) {
+	res, err := e.dispatchExecute(ctx, plan)
+	if err != nil {
+		return nil, enrichExecutorError(err, plan)
+	}
+	return res, nil
+}
+
+func (e *Executor) dispatchExecute(ctx context.Context, plan planner.Plan) (*Result, error) {
 	switch p := plan.(type) {
 	case *planner.CreateDatabasePlan:
 		return e.execCreateDatabase(ctx, p)

@@ -177,35 +177,3 @@ UPDATE accounts SET balance = 2000.00 WHERE id = 503;
 DELETE FROM customers WHERE id = 113;
 
 DELETE FROM accounts WHERE id = 514;
-
-SELECT id, branch_name, city FROM branches ORDER BY id ASC;
-
-SELECT id, name, credit_score FROM customers WHERE credit_score >= 750 ORDER BY credit_score DESC;
-
-SELECT id, customer_id, account_type, balance FROM accounts WHERE balance >= 10000.00 ORDER BY balance DESC;
-
-SELECT id, account_id, txn_type, amount FROM transactions WHERE txn_type = 'DEPOSIT' ORDER BY amount DESC;
-
-SELECT count(*) FROM customers;
-
-SELECT count(*) FROM accounts WHERE account_type = 'SAVINGS';
-
-SELECT min(balance), max(balance), avg(balance) FROM accounts;
-
-SELECT sum(amount) FROM transactions WHERE txn_type = 'DEPOSIT';
-
-SELECT account_type, count(*) FROM accounts GROUP BY account_type ORDER BY account_type ASC;
-
-SELECT branch_id, count(*) FROM customers GROUP BY branch_id ORDER BY branch_id ASC;
-
-SELECT customers.id, customers.name, accounts.account_type, accounts.balance FROM customers INNER JOIN accounts ON customers.id = accounts.customer_id ORDER BY customers.id ASC;
-
-SELECT accounts.id, customers.name, transactions.txn_type, transactions.amount FROM accounts INNER JOIN customers ON accounts.customer_id = customers.id INNER JOIN transactions ON accounts.id = transactions.account_id ORDER BY accounts.id ASC;
-
-SELECT id, name, credit_score FROM customers WHERE credit_score > 700 AND branch_id = 1 ORDER BY id ASC;
-
-SELECT id, customer_id, balance FROM accounts WHERE account_type = 'CHECKING' OR balance > 50000.00 ORDER BY id ASC;
-
-SELECT id, name, credit_score FROM customers ORDER BY credit_score DESC LIMIT 5;
-
-SELECT id, name, credit_score FROM customers ORDER BY credit_score DESC LIMIT 5 OFFSET 5;
