@@ -58,7 +58,9 @@ func TestSQLDifferential_Postgres(t *testing.T) {
 		t.Skip("skipping PostgreSQL differential testing: PGHOST or PENGUIN_PG_DIFFERENTIAL not configured")
 	}
 
-	t.Logf("PostgreSQL reference testing enabled against %s", pgHost)
+	// No comparison exists yet; skip explicitly so a configured environment
+	// is never reported as a passing differential check.
+	t.Skipf("PostgreSQL differential comparison not implemented yet (reference configured: PGHOST=%q)", pgHost)
 }
 
 func getSQLRegressionScenarios() []SQLScenario {

@@ -194,14 +194,36 @@ func TestExecErrToWireError(t *testing.T) {
 	t.Run("storage server unavailable safe fragment", func(t *testing.T) {
 		err := errors.New("executor: scanning for UPDATE: kv: storage server unavailable: connection refused to 10.0.0.1:50051")
 		we := execErrToWireError(err)
-		if we.Code != "XX000" {
-			t.Errorf("expected Code XX000, got %q", we.Code)
+		if we.Code != "08006" {
+			t.Errorf("expected Code 08006, got %q", we.Code)
 		}
 		if we.Message != "storage server unavailable" {
 			t.Errorf("expected safe message 'storage server unavailable', got %q", we.Message)
 		}
 		if strings.Contains(we.Message, "10.0.0.1") || strings.Contains(we.Message, "connection refused") {
 			t.Errorf("internal details leaked in message: %q", we.Message)
+		}
+	})
+
+	t.Run("grpc unavailable maps to connection_failure", func(t *testing.T) {
+		err := errors.New("executor: writing INSERT: rpc error: code = Unavailable desc = connection refused")
+		we := execErrToWireError(err)
+		if we.Code != "08006" {
+			t.Errorf("expected Code 08006, got %q", we.Code)
+		}
+		if we.Message != "storage server unavailable" {
+			t.Errorf("expected 'storage server unavailable', got %q", we.Message)
+		}
+	})
+
+	t.Run("invalid argument maps to invalid_parameter_value", func(t *testing.T) {
+		err := errors.New("executor: writing INSERT: kv: invalid argument: key too large")
+		we := execErrToWireError(err)
+		if we.Code != "22023" {
+			t.Errorf("expected Code 22023, got %q", we.Code)
+		}
+		if we.Message != "invalid argument" {
+			t.Errorf("expected 'invalid argument', got %q", we.Message)
 		}
 	})
 }

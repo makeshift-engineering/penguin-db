@@ -329,8 +329,16 @@ func execErrToWireError(err error) *WireError {
 		we.Code = "57014" // query_canceled
 		we.Message = "query execution canceled"
 	default:
-		we.Code = "XX000" // internal_error
 		we.Message = sanitiseInternalError(err)
+		switch we.Message {
+		case "storage server unavailable":
+			// Retryable outage of the backing store, distinct from a server bug.
+			we.Code = "08006" // connection_failure
+		case "invalid argument":
+			we.Code = "22023" // invalid_parameter_value
+		default:
+			we.Code = "XX000" // internal_error
+		}
 	}
 
 	return we
