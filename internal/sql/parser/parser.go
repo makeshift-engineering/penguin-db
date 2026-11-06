@@ -12,6 +12,10 @@ import (
 type Parser struct {
 	tokens  *utils.LookaheadIterator[utils.Token]
 	current utils.Token
+	// prevEnd is the end position of the most recently consumed token.
+	// spanFrom uses it so node spans stop at the node's last token rather
+	// than spilling over onto the following, not-yet-consumed token.
+	prevEnd diagnostic.Pos
 	diag    diagnostic.List
 	source  *diagnostic.Source
 }
@@ -47,6 +51,7 @@ func New(tokens []utils.Token, src *diagnostic.Source) *Parser {
 // advance consumes the next token from the iterator into p.current.
 // This is the only place in the parser that reads from the iterator.
 func (p *Parser) advance() {
+	p.prevEnd = p.current.Span.End
 	p.current = p.tokens.Next()
 }
 
@@ -105,7 +110,12 @@ func (p *Parser) currentStart() diagnostic.Pos {
 // spanFrom builds a [Start, End) Span covering from start through the end
 // of the last consumed token. Call after the final advance/expect in a rule.
 func (p *Parser) spanFrom(start diagnostic.Pos) diagnostic.Span {
-	return diagnostic.Span{Start: start, End: p.current.Span.End}
+	end := p.prevEnd
+	if end.Offset < start.Offset {
+		// Nothing consumed since start: produce an empty span at start.
+		end = start
+	}
+	return diagnostic.Span{Start: start, End: end}
 }
 
 func (p *Parser) nodeBase(start diagnostic.Pos) ast.NodeBase {

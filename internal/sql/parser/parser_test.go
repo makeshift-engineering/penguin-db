@@ -3,6 +3,7 @@ package parser
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/makeshift-engineering/penguin-db/internal/sql/ast"
@@ -1905,4 +1906,99 @@ func TestGrammar_MultiStatement(t *testing.T) {
 				},
 			})
 	})
+}
+
+// collectSpanTexts walks an AST value and returns the source text covered by
+// every diagnostic.Span it contains.
+func collectSpanTexts(t *testing.T, src string, v reflect.Value, out map[string]bool) {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			collectSpanTexts(t, src, v.Elem(), out)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			collectSpanTexts(t, src, v.Index(i), out)
+		}
+	case reflect.Struct:
+		if v.Type() == spanType {
+			sp := v.Interface().(diagnostic.Span)
+			if sp.Start.Line == 0 {
+				return
+			}
+			if sp.End.Offset < sp.Start.Offset || sp.End.Offset > len(src) {
+				t.Errorf("invalid span [%d,%d) for source of length %d", sp.Start.Offset, sp.End.Offset, len(src))
+				return
+			}
+			out[src[sp.Start.Offset:sp.End.Offset]] = true
+			return
+		}
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).IsExported() {
+				collectSpanTexts(t, src, v.Field(i), out)
+			}
+		}
+	}
+}
+
+// TestSpans_EndAtLastConsumedToken guards against node spans spilling over
+// onto the token that follows the node. Runtime and semantic diagnostics
+// render their caret underline from these spans, so an over-long span shows
+// up as carets under unrelated SQL (e.g. "a FROM" instead of "a").
+func TestSpans_EndAtLastConsumedToken(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    []string
+		notWant []string
+	}{
+		{
+			input:   "SELECT id, 10 / a FROM t WHERE b = 'x';",
+			want:    []string{"id", "10", "a", "10 / a", "'x'", "b = 'x'", "WHERE b = 'x'", "SELECT id, 10 / a FROM t WHERE b = 'x'"},
+			notWant: []string{"a FROM", "'x';", "id,"},
+		},
+		{
+			input:   "INSERT INTO t VALUES (1, 'toolong'), (2, NULL);",
+			want:    []string{"1", "'toolong'", "2", "NULL"},
+			notWant: []string{"1,", "'toolong')", "NULL)"},
+		},
+		{
+			input:   "UPDATE t SET tag = 'toolong' WHERE id = 1;",
+			want:    []string{"'toolong'", "tag = 'toolong'", "id = 1"},
+			notWant: []string{"'toolong' WHERE", "1;"},
+		},
+		{
+			input: "SELECT id,\n  100 / a\nFROM t;",
+			want:  []string{"a", "100 / a"},
+		},
+		{
+			input: "SELECT COUNT(*) FROM t ORDER BY 10 / a DESC;",
+			want:  []string{"COUNT(*)", "10 / a", "10 / a DESC"},
+		},
+	}
+
+	for _, tt := range tests {
+		prog, err := parseForTest(t, tt.input)
+		if err != nil {
+			t.Fatalf("%q: unexpected parse error: %v", tt.input, err)
+		}
+		texts := map[string]bool{}
+		collectSpanTexts(t, tt.input, reflect.ValueOf(prog), texts)
+
+		for _, w := range tt.want {
+			if !texts[w] {
+				t.Errorf("%q: no node span covers exactly %q", tt.input, w)
+			}
+		}
+		for _, nw := range tt.notWant {
+			if texts[nw] {
+				t.Errorf("%q: a node span covers %q, spilling past the node's last token", tt.input, nw)
+			}
+		}
+		for txt := range texts {
+			if txt != strings.TrimSpace(txt) {
+				t.Errorf("%q: span text %q has leading/trailing whitespace", tt.input, txt)
+			}
+		}
+	}
 }

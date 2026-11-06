@@ -171,6 +171,13 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 	if strings.Contains(errMsg, "executor:") {
 		t.Errorf("internal executor prefix should not leak: %s", errMsg)
 	}
+	// The caret must point at the zero divisor: column 13, a single caret.
+	if !strings.Contains(errMsg, "\x00P13\x00") {
+		t.Errorf("expected Position 13 (the divisor) in division by zero error, got: %q", errMsg)
+	}
+	if strings.Contains(errMsg, "^^") {
+		t.Errorf("caret should underline only the 1-character divisor, got: %s", errMsg)
+	}
 
 	// 5. Execution Error: NOT NULL violation
 	_, err = sendQuery(conn, "CREATE TABLE nn_test (id INT PRIMARY KEY, name TEXT NOT NULL);")
@@ -265,5 +272,9 @@ func TestSQLErrorReporting_DetailedDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(vcMsg, "^") {
 		t.Errorf("expected caret pointer in VARCHAR too long error, got: %s", vcMsg)
+	}
+	// The caret must underline exactly the 17-character string literal.
+	if !strings.Contains(vcMsg, " "+strings.Repeat("^", 17)+"\x00") {
+		t.Errorf("expected 17 carets under the string literal in VARCHAR too long error, got: %q", vcMsg)
 	}
 }
